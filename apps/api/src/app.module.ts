@@ -8,5 +8,6 @@ import { AuditService } from './audit.service';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { FinanceModule } from './finance/finance.module';
 import { InvoicesModule } from './invoices/invoices.module';
-@Module({ imports: [ConfigModule.forRoot({ isGlobal: true }), AuthModule, OrganizationsModule, LocationsModule, DashboardModule, FinanceModule, InvoicesModule], providers: [PrismaService, AuditService] })
+import { PriceIntelligenceModule } from './price-intelligence/price-intelligence.module';
+@Module({ imports: [ConfigModule.forRoot({ isGlobal: true }), AuthModule, OrganizationsModule, LocationsModule, DashboardModule, FinanceModule, InvoicesModule, PriceIntelligenceModule], providers: [PrismaService, AuditService] })
 export class AppModule {}

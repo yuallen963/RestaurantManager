@@ -1,9 +1,12 @@
 import {
   ExpenseClassification,
   ExpenseSource,
+  ExtractionStatus,
+  InvoiceStatus,
   OrganizationRole,
   Prisma,
   PrismaClient,
+  ReviewStatus,
   RevenueSource,
 } from '@prisma/client';
 import * as argon2 from 'argon2';
@@ -319,6 +322,116 @@ async function main() {
   ]);
   await prisma.revenueEntry.createMany({ data: revenueRows });
   await prisma.expense.createMany({ data: expenseRows });
+
+  // Deterministic, reviewed invoice history for the demo organization only.
+  // These records are synthetic and are never mixed with another tenant.
+  const syntheticInvoices = [
+    {
+      id: '10000000-0000-4000-8000-000000000001',
+      vendor: 'sysco',
+      daysAgo: 80,
+      lines: [
+        { rawDescription: 'CHKN BRST BNLS SKLS 4/10 LB', sku: '384920', quantity: 12, unit: 'CASE', packSize: '4 x 10 lb', unitPrice: 91 },
+        { rawDescription: 'FRY OIL CANOLA 35 LB', sku: '220410', quantity: 4, unit: 'JUG', packSize: '35 lb', unitPrice: 42 },
+      ],
+    },
+    {
+      id: '10000000-0000-4000-8000-000000000002',
+      vendor: 'sysco',
+      daysAgo: 40,
+      lines: [
+        { rawDescription: 'CHKN BRST BNLS  SKLS 4/10 LB', sku: '384920', quantity: 12, unit: 'CASE', packSize: '4 x 10 lb', unitPrice: 98 },
+        { rawDescription: 'FRY OIL CANOLA 35 LB', sku: '220410', quantity: 4, unit: 'JUG', packSize: '35 lb', unitPrice: 42 },
+      ],
+    },
+    {
+      id: '10000000-0000-4000-8000-000000000003',
+      vendor: 'sysco',
+      daysAgo: 5,
+      lines: [
+        { rawDescription: 'CHKN BRST BNLS SKLS 4/10 LB', sku: '384920', quantity: 12, unit: 'CASE', packSize: '4 x 10 lb', unitPrice: 106.5 },
+        { rawDescription: 'FRY OIL CANOLA 35 LB', sku: '220410', quantity: 4, unit: 'JUG', packSize: '35 lb', unitPrice: 42 },
+      ],
+    },
+    {
+      id: '10000000-0000-4000-8000-000000000004',
+      vendor: 'us foods',
+      daysAgo: 60,
+      lines: [{ rawDescription: 'COLA SYRUP 5 GAL BIB', sku: 'COLA-5', quantity: 9, unit: 'BIB', packSize: '5 gal', unitPrice: 55 }],
+    },
+    {
+      id: '10000000-0000-4000-8000-000000000005',
+      vendor: 'us foods',
+      daysAgo: 10,
+      lines: [{ rawDescription: 'COLA SYRUP 5 GAL BIB', sku: 'COLA-5', quantity: 9, unit: 'BIB', packSize: '5 gal', unitPrice: 49 }],
+    },
+    {
+      id: '10000000-0000-4000-8000-000000000006',
+      vendor: 'restaurant depot',
+      daysAgo: 50,
+      lines: [{ rawDescription: 'NITRILE GLOVES LARGE', sku: 'GLOVE-L', quantity: 2, unit: 'CASE', packSize: '10 x 100', unitPrice: 64 }],
+    },
+    {
+      id: '10000000-0000-4000-8000-000000000007',
+      vendor: 'restaurant depot',
+      daysAgo: 5,
+      lines: [{ rawDescription: 'NITRILE GLOVES LARGE', sku: 'GLOVE-L', quantity: 2, unit: 'CASE', packSize: '5 x 100', unitPrice: 38 }],
+    },
+  ] as const;
+
+  for (const seeded of syntheticInvoices) {
+    const invoiceDate = new Date(seedToday);
+    invoiceDate.setUTCDate(seedToday.getUTCDate() - seeded.daysAgo);
+    const selectedVendorId = vendorId(seeded.vendor)!;
+    await prisma.invoice.upsert({
+      where: { id: seeded.id },
+      update: {
+        restaurantLocationId: downtownId,
+        vendorId: selectedVendorId,
+        invoiceDate,
+        status: InvoiceStatus.COMPLETED,
+        extractionStatus: ExtractionStatus.COMPLETED,
+        reviewStatus: ReviewStatus.REVIEWED,
+        reviewedAt: invoiceDate,
+        reviewedByUserId: user.id,
+      },
+      create: {
+        id: seeded.id,
+        organizationId: demoOrgId,
+        restaurantLocationId: downtownId,
+        vendorId: selectedVendorId,
+        fileName: `synthetic-${seeded.id}.pdf`,
+        originalFileName: 'Synthetic demo invoice.pdf',
+        fileType: 'application/pdf',
+        fileSize: 1,
+        storageKey: `synthetic-price-history/${seeded.id}.pdf`,
+        invoiceDate,
+        status: InvoiceStatus.COMPLETED,
+        extractionStatus: ExtractionStatus.COMPLETED,
+        reviewStatus: ReviewStatus.REVIEWED,
+        reviewedAt: invoiceDate,
+        reviewedByUserId: user.id,
+        createdByUserId: user.id,
+      },
+    });
+    await prisma.invoiceLineItem.deleteMany({ where: { invoiceId: seeded.id } });
+    await prisma.invoiceLineItem.createMany({
+      data: seeded.lines.map((line, index) => ({
+        invoiceId: seeded.id,
+        organizationId: demoOrgId,
+        restaurantLocationId: downtownId,
+        lineNumber: index + 1,
+        rawDescription: line.rawDescription,
+        sku: line.sku,
+        quantity: new Prisma.Decimal(line.quantity),
+        unit: line.unit,
+        packSize: line.packSize,
+        unitPrice: new Prisma.Decimal(line.unitPrice),
+        extendedPrice: new Prisma.Decimal(line.quantity * line.unitPrice),
+        confidence: new Prisma.Decimal(1),
+      })),
+    });
+  }
 
   console.log(
     `Demo seeded through ${seedToday.toISOString().slice(0, 10)}: ${demoEmail} / DemoProfit2026!`,

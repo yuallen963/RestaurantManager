@@ -71,6 +71,16 @@ Extraction endpoints are `POST /api/v1/invoices/:id/extract`,
 `PATCH /api/v1/invoices/:invoiceId/line-items/:lineItemId`, and
 `PATCH /api/v1/invoices/:id/review`.
 
+Same-vendor price intelligence is available at
+`GET /api/v1/price-intelligence/changes` and
+`GET /api/v1/price-intelligence/items/:itemKey/history`. Analytics use only
+reviewed invoices from the requested organization/location. Items match by SKU,
+then exact normalized name, then a conservatively canonicalized raw description;
+unit and pack size must match. The baseline is the immediately previous trusted
+purchase. Defaults are a 90-day lookback, a 5% change, and a $0.50 absolute
+change, configurable through `PRICE_CHANGE_PERCENT_THRESHOLD` and
+`PRICE_CHANGE_ABSOLUTE_THRESHOLD`.
+
 ## Data architecture
 
 `User → OrganizationMember → Organization → RestaurantLocation` is the access hierarchy. Financial/domain models are already created with UUIDs, `organizationId`, location keys where applicable, timestamps, money as PostgreSQL `Decimal(14,2)`, and lookup indexes. System expense categories are seeded. Refresh tokens are hashed, persisted, rotated, and revocable; an audit log records organization/location/member mutations.

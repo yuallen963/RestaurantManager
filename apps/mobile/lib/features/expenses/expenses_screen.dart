@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../dashboard/foundation.dart';
 import '../dashboard/home_screen.dart';
 import '../invoices/invoice_screens.dart';
+import '../price_intelligence/price_changes_screen.dart';
 import 'foundation.dart';
 
 class ExpensesScreen extends ConsumerStatefulWidget {
@@ -212,14 +213,29 @@ class _ExpenseHeader extends ConsumerWidget {
         const SizedBox(height: 12),
         Align(
           alignment: Alignment.centerRight,
-          child: OutlinedButton.icon(
-            key: const Key('open-invoices'),
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const InvoiceListScreen()),
-            ),
-            icon: const Icon(Icons.receipt_long),
-            label: const Text('Invoices'),
+          child: Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              OutlinedButton.icon(
+                key: const Key('open-price-changes'),
+                onPressed: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const PriceChangesScreen()),
+                ),
+                icon: const Icon(Icons.trending_up),
+                label: const Text('Price Changes'),
+              ),
+              OutlinedButton.icon(
+                key: const Key('open-invoices'),
+                onPressed: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const InvoiceListScreen()),
+                ),
+                icon: const Icon(Icons.receipt_long),
+                label: const Text('Invoices'),
+              ),
+            ],
           ),
         ),
         const SizedBox(height: 16),
