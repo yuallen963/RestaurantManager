@@ -1,4 +1,4 @@
-import { Type } from 'class-transformer'; import { IsDateString, IsEmail, IsEnum, IsInt, IsOptional, IsPositive, IsString, IsUUID, Max, Min, MinLength } from 'class-validator';
+import { RevenueSource } from '@prisma/client'; import { Type } from 'class-transformer'; import { IsDateString, IsEmail, IsEnum, IsInt, IsOptional, IsPositive, IsString, IsUUID, Max, Min, MinLength } from 'class-validator';
 export class CreateRevenueDto { @IsUUID() restaurantLocationId!: string; @IsDateString() date!: string; @Type(() => Number) @IsPositive() amount!: number; @IsOptional() @IsString() notes?: string; }
 export class UpdateRevenueDto { @IsOptional() @IsDateString() date?: string; @IsOptional() @Type(() => Number) @IsPositive() amount?: number; @IsOptional() @IsString() notes?: string; }
 export class CreateExpenseDto { @IsUUID() restaurantLocationId!: string; @IsUUID() expenseCategoryId!: string; @IsOptional() @IsUUID() vendorId?: string; @IsDateString() date!: string; @Type(() => Number) @IsPositive() amount!: number; @IsOptional() @IsString() description?: string; @IsOptional() @IsString() notes?: string; }
@@ -8,3 +8,5 @@ export class UpdateVendorDto { @IsOptional() @IsString() @MinLength(1) name?: st
 export class PageQuery { @IsOptional() @Type(() => Number) @IsInt() @Min(1) page?: number; @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(100) limit?: number; }
 export enum ExpenseSort { NEWEST = 'newest', OLDEST = 'oldest', HIGHEST_AMOUNT = 'highestAmount', LOWEST_AMOUNT = 'lowestAmount' }
 export class ExpenseListQuery extends PageQuery { @IsUUID() restaurantLocationId!: string; @IsOptional() @IsUUID() categoryId?: string; @IsOptional() @IsUUID() vendorId?: string; @IsOptional() @IsDateString() startDate?: string; @IsOptional() @IsDateString() endDate?: string; @IsOptional() @IsString() search?: string; @IsOptional() @IsEnum(ExpenseSort) sort?: ExpenseSort; }
+export enum RevenueSort { NEWEST = 'newest', OLDEST = 'oldest', HIGHEST_REVENUE = 'highestRevenue', LOWEST_REVENUE = 'lowestRevenue' }
+export class RevenueListQuery extends PageQuery { @IsUUID() restaurantLocationId!: string; @IsOptional() @IsDateString() startDate?: string; @IsOptional() @IsDateString() endDate?: string; @IsOptional() @IsEnum(RevenueSource) source?: RevenueSource; @IsOptional() @IsEnum(RevenueSort) sort?: RevenueSort; }

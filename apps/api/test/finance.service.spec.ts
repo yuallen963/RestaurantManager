@@ -83,4 +83,32 @@ describe('FinanceService tenant enforcement', () => {
     await expect(new FinanceService(prisma, access, audit).expenses('user-a', { restaurantLocationId: 'loc-b' })).rejects.toBeInstanceOf(ForbiddenException);
     expect(prisma.expense.findMany).not.toHaveBeenCalled();
   });
+  it('returns authoritative revenue summary, trend, sorting, and pagination', async () => {
+    const dayOne = new Date('2026-10-01T12:00:00.000Z');
+    const dayTwo = new Date('2026-10-02T12:00:00.000Z');
+    const items = [{ id: 'revenue-2', amount: new Prisma.Decimal(500), date: dayTwo }];
+    const prisma: any = {
+      restaurantLocation: { findUnique: jest.fn().mockResolvedValue({ id: 'loc-a', organizationId: 'org-a' }) },
+      revenueEntry: {
+        findMany: jest.fn().mockResolvedValue(items),
+        count: jest.fn().mockResolvedValue(3),
+        aggregate: jest.fn().mockResolvedValueOnce({ _sum: { amount: new Prisma.Decimal(900) } }).mockResolvedValueOnce({ _sum: { amount: new Prisma.Decimal(600) } }),
+        groupBy: jest.fn().mockResolvedValue([
+          { date: dayOne, _sum: { amount: new Prisma.Decimal(400) } },
+          { date: dayTwo, _sum: { amount: new Prisma.Decimal(500) } },
+        ]),
+      },
+    };
+    const access = { requireMember: jest.fn().mockResolvedValue({}) } as any;
+    const result = await new FinanceService(prisma, access, audit).revenues('user-a', { restaurantLocationId: 'loc-a', startDate: '2026-10-01', endDate: '2026-10-02', page: 2, limit: 2, sort: 'highestRevenue' });
+    expect(result.pagination).toEqual({ page: 2, limit: 2, totalItems: 3, totalPages: 2, hasMore: false });
+    expect(result.summary).toEqual({ totalRevenue: 900, previousTotalRevenue: 600, averageDailyRevenue: 450, highestDay: { date: dayTwo, amount: 500 }, lowestDay: { date: dayOne, amount: 400 }, dailyTrend: [{ date: dayOne, amount: 400 }, { date: dayTwo, amount: 500 }] });
+    expect(prisma.revenueEntry.findMany).toHaveBeenCalledWith(expect.objectContaining({ skip: 2, take: 2, orderBy: [{ amount: 'desc' }, { date: 'desc' }, { id: 'asc' }], where: expect.objectContaining({ organizationId: 'org-a', restaurantLocationId: 'loc-a' }) }));
+  });
+  it('does not query revenue when location membership is denied', async () => {
+    const prisma: any = { restaurantLocation: { findUnique: jest.fn().mockResolvedValue({ id: 'loc-b', organizationId: 'org-b' }) }, revenueEntry: { findMany: jest.fn(), count: jest.fn(), aggregate: jest.fn(), groupBy: jest.fn() } };
+    const access = { requireMember: jest.fn().mockRejectedValue(new ForbiddenException()) } as any;
+    await expect(new FinanceService(prisma, access, audit).revenues('user-a', { restaurantLocationId: 'loc-b' })).rejects.toBeInstanceOf(ForbiddenException);
+    expect(prisma.revenueEntry.findMany).not.toHaveBeenCalled();
+  });
 });

@@ -2,17 +2,7 @@ import 'package:flutter/material.dart';
 
 export 'dashboard/home_screen.dart';
 export 'expenses/expenses_screen.dart';
-
-class RevenueScreen extends StatelessWidget {
-  const RevenueScreen({super.key});
-  @override
-  Widget build(BuildContext context) => const Center(
-    child: Text(
-      'Revenue\n\nRevenue history will appear here.',
-      textAlign: TextAlign.center,
-    ),
-  );
-}
+export 'revenue/revenue_screen.dart';
 
 class VendorsScreen extends StatelessWidget {
   const VendorsScreen({super.key});
