@@ -7,5 +7,6 @@ import { PrismaService } from './prisma.service';
 import { AuditService } from './audit.service';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { FinanceModule } from './finance/finance.module';
-@Module({ imports: [ConfigModule.forRoot({ isGlobal: true }), AuthModule, OrganizationsModule, LocationsModule, DashboardModule, FinanceModule], providers: [PrismaService, AuditService] })
+import { InvoicesModule } from './invoices/invoices.module';
+@Module({ imports: [ConfigModule.forRoot({ isGlobal: true }), AuthModule, OrganizationsModule, LocationsModule, DashboardModule, FinanceModule, InvoicesModule], providers: [PrismaService, AuditService] })
 export class AppModule {}

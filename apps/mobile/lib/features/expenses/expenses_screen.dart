@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../dashboard/foundation.dart';
 import '../dashboard/home_screen.dart';
+import '../invoices/invoice_screens.dart';
 import 'foundation.dart';
 
 class ExpensesScreen extends ConsumerStatefulWidget {
@@ -207,6 +208,19 @@ class _ExpenseHeader extends ConsumerWidget {
           onSelected: (selected) => ref
               .read(activeLocationControllerProvider.notifier)
               .select(selected),
+        ),
+        const SizedBox(height: 12),
+        Align(
+          alignment: Alignment.centerRight,
+          child: OutlinedButton.icon(
+            key: const Key('open-invoices'),
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const InvoiceListScreen()),
+            ),
+            icon: const Icon(Icons.receipt_long),
+            label: const Text('Invoices'),
+          ),
         ),
         const SizedBox(height: 16),
         Card(

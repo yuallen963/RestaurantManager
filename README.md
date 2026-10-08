@@ -43,8 +43,20 @@ For an iOS simulator use `--dart-define=API_URL=http://localhost:3000/api/v1`. A
 - `GET|POST /api/v1/revenue` and `GET|POST /api/v1/expenses` require a permitted `restaurantLocationId`.
 - `GET /api/v1/expense-categories?organizationId=…`; `GET|POST /api/v1/vendors`
 - `GET /api/v1/dashboard?restaurantLocationId=…&startDate=…&endDate=…` returns Decimal-safe revenue, expenses, estimated profit, food/labor percentages, and an expense breakdown.
+- `POST /api/v1/invoices/upload-intent`, `POST /api/v1/invoices/:id/upload-complete`, and `GET|PATCH|DELETE /api/v1/invoices/:id` support tenant-safe manual invoice management.
 
 All organization and location endpoints require a Bearer token. The server looks up membership using the authenticated user ID before any tenant data is returned or changed.
+
+## Invoice storage
+
+Invoice PDFs and images use private S3-compatible object storage with 15-minute
+presigned upload URLs. Configure the API with `S3_ENDPOINT`, `S3_REGION`,
+`S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, and
+`S3_FORCE_PATH_STYLE`. Keep the bucket private; Flutter receives only a
+short-lived URL scoped to a single tenant/location invoice object.
+
+Supported uploads are PDF, JPEG, and PNG files up to 15 MB. Invoice metadata is
+entered manually in this phase; no OCR or automatic expense creation occurs.
 
 ## Data architecture
 

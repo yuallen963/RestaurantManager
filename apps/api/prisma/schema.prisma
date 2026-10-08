@@ -67,6 +67,12 @@ enum InsightSeverity {
  HIGH
  CRITICAL
 }
+enum InvoiceStatus {
+ UPLOADED
+ PROCESSING
+ COMPLETED
+ FAILED
+}
 model User {
  id String @id @default(uuid())
  email String @unique
@@ -199,9 +205,23 @@ model Invoice {
  organizationId String
  restaurantLocationId String
  vendorId String?
+ fileName String
+ originalFileName String
+ fileType String
+ fileSize Int
+ storageKey String
+ invoiceNumber String?
+ invoiceDate DateTime?
+ subtotal Decimal? @db.Decimal(14,2)
+ tax Decimal? @db.Decimal(14,2)
+ total Decimal? @db.Decimal(14,2)
+ notes String?
+ status InvoiceStatus @default(UPLOADED)
+ createdByUserId String
  createdAt DateTime @default(now())
  updatedAt DateTime @updatedAt
  @@index([organizationId,restaurantLocationId])
+ @@index([restaurantLocationId,invoiceDate])
 }
 model InvoiceLineItem {
  id String @id @default(uuid())
