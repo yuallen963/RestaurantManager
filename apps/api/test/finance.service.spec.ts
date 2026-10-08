@@ -86,6 +86,8 @@ describe('FinanceService tenant enforcement', () => {
   it('returns authoritative revenue summary, trend, sorting, and pagination', async () => {
     const dayOne = new Date('2026-10-01T12:00:00.000Z');
     const dayTwo = new Date('2026-10-02T12:00:00.000Z');
+    const normalizedDayOne = new Date('2026-10-01T00:00:00.000Z');
+    const normalizedDayTwo = new Date('2026-10-02T00:00:00.000Z');
     const items = [{ id: 'revenue-2', amount: new Prisma.Decimal(500), date: dayTwo }];
     const prisma: any = {
       restaurantLocation: { findUnique: jest.fn().mockResolvedValue({ id: 'loc-a', organizationId: 'org-a' }) },
@@ -94,7 +96,8 @@ describe('FinanceService tenant enforcement', () => {
         count: jest.fn().mockResolvedValue(3),
         aggregate: jest.fn().mockResolvedValueOnce({ _sum: { amount: new Prisma.Decimal(900) } }).mockResolvedValueOnce({ _sum: { amount: new Prisma.Decimal(600) } }),
         groupBy: jest.fn().mockResolvedValue([
-          { date: dayOne, _sum: { amount: new Prisma.Decimal(400) } },
+          { date: dayOne, _sum: { amount: new Prisma.Decimal(300) } },
+          { date: new Date('2026-10-01T18:00:00.000Z'), _sum: { amount: new Prisma.Decimal(100) } },
           { date: dayTwo, _sum: { amount: new Prisma.Decimal(500) } },
         ]),
       },
@@ -102,7 +105,7 @@ describe('FinanceService tenant enforcement', () => {
     const access = { requireMember: jest.fn().mockResolvedValue({}) } as any;
     const result = await new FinanceService(prisma, access, audit).revenues('user-a', { restaurantLocationId: 'loc-a', startDate: '2026-10-01', endDate: '2026-10-02', page: 2, limit: 2, sort: 'highestRevenue' });
     expect(result.pagination).toEqual({ page: 2, limit: 2, totalItems: 3, totalPages: 2, hasMore: false });
-    expect(result.summary).toEqual({ totalRevenue: 900, previousTotalRevenue: 600, averageDailyRevenue: 450, highestDay: { date: dayTwo, amount: 500 }, lowestDay: { date: dayOne, amount: 400 }, dailyTrend: [{ date: dayOne, amount: 400 }, { date: dayTwo, amount: 500 }] });
+    expect(result.summary).toEqual({ totalRevenue: 900, previousTotalRevenue: 600, averageDailyRevenue: 450, highestDay: { date: normalizedDayTwo, amount: 500 }, lowestDay: { date: normalizedDayOne, amount: 400 }, dailyTrend: [{ date: normalizedDayOne, amount: 400 }, { date: normalizedDayTwo, amount: 500 }] });
     expect(prisma.revenueEntry.findMany).toHaveBeenCalledWith(expect.objectContaining({ skip: 2, take: 2, orderBy: [{ amount: 'desc' }, { date: 'desc' }, { id: 'asc' }], where: expect.objectContaining({ organizationId: 'org-a', restaurantLocationId: 'loc-a' }) }));
   });
   it('does not query revenue when location membership is denied', async () => {
