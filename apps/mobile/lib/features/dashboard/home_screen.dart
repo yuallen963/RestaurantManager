@@ -226,28 +226,28 @@ class _DashboardHeader extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) => Column(
     crossAxisAlignment: CrossAxisAlignment.start,
     children: [
-      Text(
-        'Restaurant performance',
-        style: Theme.of(context).textTheme.labelLarge?.copyWith(
-          color: Theme.of(context).colorScheme.onSurfaceVariant,
-        ),
-      ),
-      const SizedBox(height: 8),
       Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Expanded(
-            child: LocationSelector(
-              active: location,
-              locations: locations.isEmpty ? [location] : locations,
-              onSelected: (selected) => ref
-                  .read(activeLocationControllerProvider.notifier)
-                  .select(selected),
+            child: Text(
+              'Restaurant performance',
+              style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
             ),
           ),
-          const SizedBox(width: 10),
-          const Flexible(child: DateRangeSelector()),
+          const DateRangeSelector(),
         ],
+      ),
+      const SizedBox(height: 8),
+      LocationSelector(
+        active: location,
+        locations: locations.isEmpty ? [location] : locations,
+        onSelected: (selected) => ref
+            .read(activeLocationControllerProvider.notifier)
+            .select(selected),
       ),
     ],
   );
@@ -390,13 +390,7 @@ class DateRangeSelector extends ConsumerWidget {
           children: [
             const Icon(Icons.calendar_today_outlined, size: 18),
             const SizedBox(width: 7),
-            Flexible(
-              child: Text(
-                datePresetLabel(range.preset),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
+            Text(datePresetLabel(range.preset), maxLines: 1),
           ],
         ),
       ),

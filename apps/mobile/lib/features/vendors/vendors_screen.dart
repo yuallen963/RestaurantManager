@@ -154,29 +154,28 @@ class VendorHeader extends ConsumerWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          'Vendors',
-          style: Theme.of(
-            context,
-          ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w700),
-        ),
-        const SizedBox(height: 12),
         Row(
           children: [
             Expanded(
-              child: LocationSelector(
-                active: location,
-                locations: ref.watch(availableLocationsProvider).isEmpty
-                    ? [location]
-                    : ref.watch(availableLocationsProvider),
-                onSelected: (selected) => ref
-                    .read(activeLocationControllerProvider.notifier)
-                    .select(selected),
+              child: Text(
+                'Vendors',
+                style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                  fontWeight: FontWeight.w700,
+                ),
               ),
             ),
-            const SizedBox(width: 10),
-            const Flexible(child: DateRangeSelector()),
+            const DateRangeSelector(),
           ],
+        ),
+        const SizedBox(height: 12),
+        LocationSelector(
+          active: location,
+          locations: ref.watch(availableLocationsProvider).isEmpty
+              ? [location]
+              : ref.watch(availableLocationsProvider),
+          onSelected: (selected) => ref
+              .read(activeLocationControllerProvider.notifier)
+              .select(selected),
         ),
         const SizedBox(height: 16),
         TextField(

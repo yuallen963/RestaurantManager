@@ -253,6 +253,10 @@ class ActiveLocationController extends AsyncNotifier<ActiveLocationState> {
         .write(key: _locationKey, value: location.id);
     state = AsyncData(ActiveLocationState(current.locations, location));
   }
+
+  void clear() {
+    state = const AsyncData(ActiveLocationState([], null));
+  }
 }
 
 final activeLocationControllerProvider =

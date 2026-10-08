@@ -26,7 +26,10 @@ void main() {
   runApp(const ProviderScope(child: ProfitApp()));
 }
 
-const _devAutoLoginRequested = bool.fromEnvironment('ENABLE_DEV_AUTO_LOGIN');
+const devAutoLoginRequested = bool.fromEnvironment('ENABLE_DEV_AUTO_LOGIN');
+final demoModeProvider = Provider<bool>(
+  (_) => !kReleaseMode && devAutoLoginRequested,
+);
 const _demoEmail = 'demo@profitlens.local';
 const _demoPassword = 'DemoProfit2026!';
 
@@ -48,7 +51,7 @@ class AuthBootstrap extends ConsumerStatefulWidget {
 
 class _AuthBootstrapState extends ConsumerState<AuthBootstrap> {
   String? error;
-  bool get devAutoLogin => !kReleaseMode && _devAutoLoginRequested;
+  bool get devAutoLogin => !kReleaseMode && devAutoLoginRequested;
   @override
   void initState() {
     super.initState();

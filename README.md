@@ -23,7 +23,7 @@ docker-compose.yml  PostgreSQL 16 and Redis 7 for local development
 
 ## Demo restaurant data
 
-`npm run prisma:seed` creates a deterministic 92-day demo dataset for **Demo Restaurant Group**. Sign in with `demo@profitlens.local` and `DemoProfit2026!`. It includes Downtown Grill (higher sales, rising food/labor/delivery costs) and Lakeside Grill (lower sales, steadier margin). Re-running the seed replaces only demo financial records, so screenshots and demos remain consistent.
+`npm run prisma:seed` creates a deterministic 92-day demo dataset for **Demo Restaurant Group**. Sign in with `demo@profitlens.local` and `DemoProfit2026!`. It includes Downtown Grill (higher sales, rising food/labor/delivery costs), Lakeside Grill (lower sales, steadier margin), and Bangkok Cuisine in Rochester, MI (a synthetic Thai-restaurant operating mix; not real business financial data). Re-running the seed replaces only demo financial records, so screenshots and demos remain consistent.
 
 For an iOS simulator, start the API first and then run:
 

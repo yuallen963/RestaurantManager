@@ -34,6 +34,7 @@ const demoEmail = 'demo@profitlens.local';
 const demoOrgId = '00000000-0000-4000-8000-000000000001';
 const downtownId = '00000000-0000-4000-8000-000000000002';
 const lakesideId = '00000000-0000-4000-8000-000000000003';
+const bangkokCuisineId = '00000000-0000-4000-8000-000000000004';
 
 const vendors = [
   ['Sysco', 'sysco'],
@@ -49,6 +50,9 @@ const vendors = [
   ['Main Street Properties', 'main street properties'],
   ['Harbor Insurance', 'harbor insurance'],
   ['Brightline Marketing', 'brightline marketing'],
+  ['Gordon Food Service', 'gordon food service'],
+  ['Thai Specialty Produce', 'thai specialty produce'],
+  ['Metro Asian Foods', 'metro asian foods'],
 ] as const;
 
 type ExpenseRecipe = readonly [
@@ -115,6 +119,28 @@ const lakesideStable: readonly ExpenseRecipe[] = [
   ['equipment', .006, 'restaurant depot', 'Small equipment'],
 ];
 
+// Synthetic Thai-restaurant operating mix for the Rochester demo location.
+// It is inspired by the restaurant's public menu categories, not actual sales,
+// purchases, vendors, or financial performance.
+const bangkokCuisineStable: readonly ExpenseRecipe[] = [
+  ['food', .31, 'thai specialty produce', 'Thai ingredients and fresh produce'],
+  ['labor', .31, 'adp', 'Front and back of house labor'],
+  ['beverage', .035, 'gordon food service', 'Beverage inventory'],
+  ['payroll-taxes', .03, 'adp', 'Payroll taxes'],
+  ['rent', .075, 'main street properties', 'Restaurant occupancy'],
+  ['utilities', .026, 'dte energy', 'Electric and gas service'],
+  ['delivery-fees', .045, 'doordash', 'Delivery marketplace fees'],
+  ['merchant-fees', .029, 'toast', 'Card processing'],
+  ['supplies', .014, 'gordon food service', 'Operating supplies'],
+  ['insurance', .008, 'harbor insurance', 'Business insurance'],
+  ['repairs-maintenance', .007, null, 'Repairs and maintenance'],
+  ['marketing', .006, 'brightline marketing', 'Local marketing'],
+  ['software-subscriptions', .004, 'toast', 'Restaurant software'],
+  ['taxes', .011, null, 'Local business taxes'],
+  ['professional-services', .004, null, 'Professional services'],
+  ['equipment', .006, 'metro asian foods', 'Kitchen equipment and smallwares'],
+];
+
 const money = (value: number) => Math.round(value * 100) / 100;
 
 async function main() {
@@ -170,14 +196,30 @@ async function main() {
       role: OrganizationRole.OWNER,
     },
   });
-  for (const [id, name] of [
-    [downtownId, 'Downtown Grill'],
-    [lakesideId, 'Lakeside Grill'],
+  for (const [id, name, addressLine1, city, state, postalCode] of [
+    [downtownId, 'Downtown Grill', null, null, null, null],
+    [lakesideId, 'Lakeside Grill', null, null, null, null],
+    [
+      bangkokCuisineId,
+      'Bangkok Cuisine',
+      '727 N Main St',
+      'Rochester',
+      'MI',
+      '48307',
+    ],
   ] as const) {
     await prisma.restaurantLocation.upsert({
       where: { id },
-      update: { name },
-      create: { id, name, organizationId: demoOrgId },
+      update: { name, addressLine1, city, state, postalCode },
+      create: {
+        id,
+        name,
+        organizationId: demoOrgId,
+        addressLine1,
+        city,
+        state,
+        postalCode,
+      },
     });
   }
 
@@ -213,6 +255,7 @@ async function main() {
   for (const [locationId, baseRevenue] of [
     [downtownId, 2600],
     [lakesideId, 1900],
+    [bangkokCuisineId, 2250],
   ] as const) {
     for (let index = 0; index < 92; index += 1) {
       const daysAgo = 91 - index;
@@ -225,13 +268,15 @@ async function main() {
       const isPrevious = daysAgo >= 30 && daysAgo < 60;
       const trend = locationId === downtownId
         ? (isRecent ? 1.04 : isPrevious ? 1 : .98)
+        : locationId === bangkokCuisineId
+        ? (isRecent ? 1.02 : 1)
         : (isRecent ? 1.01 : 1);
       const dailyVariation = (index * 37) % 240;
       const revenue = money(
         (baseRevenue +
           dailyVariation +
-          (isWeekendPeak ? (locationId === downtownId ? 850 : 600) : 0) -
-          (isEarlyWeek ? (locationId === downtownId ? 260 : 180) : 0)) *
+          (isWeekendPeak ? (locationId === downtownId ? 850 : 650) : 0) -
+          (isEarlyWeek ? (locationId === downtownId ? 260 : 200) : 0)) *
           trend,
       );
 
@@ -245,7 +290,9 @@ async function main() {
         createdByUserId: user.id,
       });
 
-      const recipe = locationId === lakesideId
+      const recipe = locationId === bangkokCuisineId
+        ? bangkokCuisineStable
+        : locationId === lakesideId
         ? lakesideStable
         : isRecent
         ? downtownRecent
