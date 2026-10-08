@@ -1,0 +1,8 @@
+{
+  "name": "restaurant-profit-app",
+  "private": true,
+  "scripts": {
+    "api:dev": "npm --prefix apps/api run start:dev",
+    "api:test": "npm --prefix apps/api test"
+  }
+}

@@ -1,0 +1,2 @@
+import { AuthService } from '../src/auth/auth.service';
+describe('auth service', () => { it('rejects bad credentials without issuing tokens', async () => { const prisma: any = { user: { findUnique: jest.fn().mockResolvedValue(null) } }; const service = new AuthService(prisma, {} as any); await expect(service.login('nobody@example.com', 'wrong')).rejects.toThrow('Invalid email or password'); }); });

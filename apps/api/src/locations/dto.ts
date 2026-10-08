@@ -1,0 +1,1 @@
+import { IsOptional, IsString, MinLength } from 'class-validator'; export class CreateLocationDto { @IsString() @MinLength(2) name!: string; @IsOptional() @IsString() addressLine1?: string; @IsOptional() @IsString() city?: string; @IsOptional() @IsString() state?: string; @IsOptional() @IsString() postalCode?: string; }

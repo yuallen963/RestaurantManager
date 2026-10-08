@@ -1,0 +1,9 @@
+.env
+.dart_tool/
+.idea/
+node_modules/
+dist/
+build/
+.flutter-plugins*
+apps/mobile/android/.gradle/
+apps/mobile/ios/Pods/

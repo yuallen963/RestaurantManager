@@ -1,0 +1,298 @@
+generator client {
+ provider = "prisma-client-js"
+}
+datasource db {
+ provider = "postgresql"
+ url = env("DATABASE_URL")
+}
+enum OrganizationRole {
+ OWNER
+ ADMIN
+ MANAGER
+ VIEWER
+}
+enum ImportStatus {
+ PENDING
+ UPLOADING
+ PROCESSING
+ REVIEW_REQUIRED
+ COMPLETED
+ FAILED
+}
+enum RevenueSource {
+ MANUAL
+ CSV_IMPORT
+ POS_IMPORT
+ OTHER
+}
+enum ExpenseSource {
+ MANUAL
+ CSV_IMPORT
+ INVOICE
+ BANK_IMPORT
+ OTHER
+}
+enum ExpenseClassification {
+ FOOD
+ BEVERAGE
+ LABOR
+ PAYROLL_TAX
+ OCCUPANCY
+ UTILITIES
+ DELIVERY
+ FEES
+ OPERATING
+ OTHER
+}
+enum ImportType {
+ REVENUE_CSV
+ EXPENSE_CSV
+}
+enum ImportRowStatus {
+ PENDING
+ VALID
+ INVALID
+ IMPORTED
+ SKIPPED
+}
+enum InsightStatus {
+ ACTIVE
+ DISMISSED
+ RESOLVED
+}
+enum InsightSeverity {
+ INFO
+ LOW
+ MEDIUM
+ HIGH
+ CRITICAL
+}
+model User {
+ id String @id @default(uuid())
+ email String @unique
+ passwordHash String
+ firstName String?
+ lastName String?
+ createdAt DateTime @default(now())
+ updatedAt DateTime @updatedAt
+ memberships OrganizationMember[]
+ refreshTokens RefreshToken[]
+ auditLogs AuditLog[]
+}
+model Organization {
+ id String @id @default(uuid())
+ name String
+ createdAt DateTime @default(now())
+ updatedAt DateTime @updatedAt
+ memberships OrganizationMember[]
+ locations RestaurantLocation[]
+ categories ExpenseCategory[]
+}
+model OrganizationMember {
+ id String @id @default(uuid())
+ userId String
+ organizationId String
+ role OrganizationRole @default(VIEWER)
+ createdAt DateTime @default(now())
+ user User @relation(fields:[userId],references:[id],onDelete:Cascade)
+ organization Organization @relation(fields:[organizationId],references:[id],onDelete:Cascade)
+ @@unique([userId,organizationId])
+ @@index([organizationId,role])
+}
+model RestaurantLocation {
+ id String @id @default(uuid())
+ organizationId String
+ name String
+ addressLine1 String?
+ city String?
+ state String?
+ postalCode String?
+ createdAt DateTime @default(now())
+ updatedAt DateTime @updatedAt
+ organization Organization @relation(fields:[organizationId],references:[id],onDelete:Cascade)
+ @@index([organizationId])
+}
+model ExpenseCategory {
+ id String @id @default(uuid())
+ organizationId String?
+ name String
+ slug String
+ classification ExpenseClassification @default(OTHER)
+ isSystem Boolean @default(false)
+ createdAt DateTime @default(now())
+ updatedAt DateTime @updatedAt
+ organization Organization? @relation(fields:[organizationId],references:[id],onDelete:Cascade)
+ @@index([organizationId,slug])
+}
+model RefreshToken {
+ id String @id @default(uuid())
+ userId String
+ tokenHash String @unique
+ expiresAt DateTime
+ revokedAt DateTime?
+ replacedByTokenId String?
+ createdAt DateTime @default(now())
+ user User @relation(fields:[userId],references:[id],onDelete:Cascade)
+ @@index([userId,expiresAt])
+}
+model AuditLog {
+ id String @id @default(uuid())
+ userId String?
+ organizationId String?
+ action String
+ entityType String
+ entityId String?
+ metadata Json?
+ createdAt DateTime @default(now())
+ user User? @relation(fields:[userId],references:[id],onDelete:SetNull)
+ @@index([organizationId,createdAt])
+}
+model RevenueEntry {
+ id String @id @default(uuid())
+ organizationId String
+ restaurantLocationId String
+ amount Decimal @db.Decimal(14,2)
+ date DateTime
+ source RevenueSource @default(MANUAL)
+ notes String?
+ importId String?
+ createdByUserId String?
+ createdAt DateTime @default(now())
+ updatedAt DateTime @updatedAt
+ @@index([organizationId,restaurantLocationId,date])
+ @@index([importId])
+}
+model Expense {
+ id String @id @default(uuid())
+ organizationId String
+ restaurantLocationId String
+ vendorId String?
+ expenseCategoryId String
+ amount Decimal @db.Decimal(14,2)
+ date DateTime
+ description String?
+ notes String?
+ source ExpenseSource @default(MANUAL)
+ importId String?
+ createdByUserId String?
+ createdAt DateTime @default(now())
+ updatedAt DateTime @updatedAt
+ @@index([organizationId,restaurantLocationId,date])
+ @@index([vendorId])
+ @@index([expenseCategoryId])
+ @@index([importId])
+}
+model Vendor {
+ id String @id @default(uuid())
+ organizationId String
+ name String
+ normalizedName String
+ email String?
+ phone String?
+ notes String?
+ createdAt DateTime @default(now())
+ updatedAt DateTime @updatedAt
+ @@unique([organizationId,normalizedName])
+}
+model Invoice {
+ id String @id @default(uuid())
+ organizationId String
+ restaurantLocationId String
+ vendorId String?
+ createdAt DateTime @default(now())
+ updatedAt DateTime @updatedAt
+ @@index([organizationId,restaurantLocationId])
+}
+model InvoiceLineItem {
+ id String @id @default(uuid())
+ invoiceId String
+ description String
+ quantity Decimal @db.Decimal(14,3)
+ unitPrice Decimal @db.Decimal(14,2)
+ createdAt DateTime @default(now())
+ updatedAt DateTime @updatedAt
+}
+model PayrollPeriod {
+ id String @id @default(uuid())
+ organizationId String
+ restaurantLocationId String
+ totalLabor Decimal @db.Decimal(14,2)
+ startsOn DateTime
+ endsOn DateTime
+ createdAt DateTime @default(now())
+ updatedAt DateTime @updatedAt
+}
+model Import {
+ id String @id @default(uuid())
+ organizationId String
+ restaurantLocationId String
+ type ImportType
+ status ImportStatus @default(PENDING)
+ originalFileName String
+ rowCount Int?
+ processedRowCount Int @default(0)
+ failedRowCount Int @default(0)
+ errorMessage String?
+ metadata Json?
+ createdByUserId String
+ completedAt DateTime?
+ createdAt DateTime @default(now())
+ updatedAt DateTime @updatedAt
+ @@index([organizationId,restaurantLocationId,status])
+}
+model ImportRow {
+ id String @id @default(uuid())
+ importId String
+ rowNumber Int
+ rawData Json
+ parsedData Json?
+ status ImportRowStatus @default(PENDING)
+ errorMessage String?
+ createdAt DateTime @default(now())
+ updatedAt DateTime @updatedAt
+ @@unique([importId,rowNumber])
+ @@index([importId,status])
+}
+model ImportFile {
+ id String @id @default(uuid())
+ importId String
+ fileName String
+ mimeType String
+ fileSize Int
+ storageKey String
+ source String
+ status ImportStatus @default(PENDING)
+ processingError String?
+ createdAt DateTime @default(now())
+ updatedAt DateTime @updatedAt
+}
+model Insight {
+ id String @id @default(uuid())
+ organizationId String
+ restaurantLocationId String
+ type String
+ severity InsightSeverity
+ status InsightStatus @default(ACTIVE)
+ title String
+ description String
+ metadata Json?
+ generatedAt DateTime @default(now())
+ createdAt DateTime @default(now())
+ updatedAt DateTime @updatedAt
+}
+model InsightAction {
+ id String @id @default(uuid())
+ insightId String
+ action String
+ createdAt DateTime @default(now())
+ updatedAt DateTime @updatedAt
+}
+model Notification {
+ id String @id @default(uuid())
+ userId String
+ title String
+ body String
+ readAt DateTime?
+ createdAt DateTime @default(now())
+ updatedAt DateTime @updatedAt
+}

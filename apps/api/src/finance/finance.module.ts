@@ -1,0 +1,2 @@
+import { Module } from '@nestjs/common'; import { AuthModule } from '../auth/auth.module'; import { OrganizationsModule } from '../organizations/organizations.module'; import { PrismaService } from '../prisma.service'; import { AuditService } from '../audit.service'; import { FinanceController } from './finance.controller'; import { FinanceService } from './finance.service';
+@Module({ imports: [AuthModule, OrganizationsModule], controllers: [FinanceController], providers: [PrismaService, AuditService, FinanceService] }) export class FinanceModule {}

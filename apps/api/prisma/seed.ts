@@ -1,0 +1,281 @@
+import {
+  ExpenseClassification,
+  ExpenseSource,
+  OrganizationRole,
+  Prisma,
+  PrismaClient,
+  RevenueSource,
+} from '@prisma/client';
+import * as argon2 from 'argon2';
+
+const prisma = new PrismaClient();
+
+const categories = [
+  ['Food', 'food', ExpenseClassification.FOOD],
+  ['Beverage', 'beverage', ExpenseClassification.BEVERAGE],
+  ['Labor', 'labor', ExpenseClassification.LABOR],
+  ['Payroll Taxes', 'payroll-taxes', ExpenseClassification.PAYROLL_TAX],
+  ['Rent', 'rent', ExpenseClassification.OCCUPANCY],
+  ['Utilities', 'utilities', ExpenseClassification.UTILITIES],
+  ['Insurance', 'insurance', ExpenseClassification.OPERATING],
+  ['Delivery Fees', 'delivery-fees', ExpenseClassification.DELIVERY],
+  ['Merchant Fees', 'merchant-fees', ExpenseClassification.FEES],
+  ['Supplies', 'supplies', ExpenseClassification.OPERATING],
+  ['Repairs & Maintenance', 'repairs-maintenance', ExpenseClassification.OPERATING],
+  ['Marketing', 'marketing', ExpenseClassification.OPERATING],
+  ['Software & Subscriptions', 'software-subscriptions', ExpenseClassification.OPERATING],
+  ['Equipment', 'equipment', ExpenseClassification.OPERATING],
+  ['Professional Services', 'professional-services', ExpenseClassification.OPERATING],
+  ['Taxes', 'taxes', ExpenseClassification.OTHER],
+  ['Miscellaneous', 'miscellaneous', ExpenseClassification.OTHER],
+] as const;
+
+const demoEmail = 'demo@profitlens.local';
+const demoOrgId = '00000000-0000-4000-8000-000000000001';
+const downtownId = '00000000-0000-4000-8000-000000000002';
+const lakesideId = '00000000-0000-4000-8000-000000000003';
+
+const vendors = [
+  ['Sysco', 'sysco'],
+  ['US Foods', 'us foods'],
+  ['DTE Energy', 'dte energy'],
+  ['DoorDash', 'doordash'],
+  ['Uber Eats', 'uber eats'],
+  ['Toast', 'toast'],
+  ['ADP', 'adp'],
+  ['Comcast Business', 'comcast business'],
+  ['Restaurant Depot', 'restaurant depot'],
+  ['Local Produce Co.', 'local produce co.'],
+  ['Main Street Properties', 'main street properties'],
+  ['Harbor Insurance', 'harbor insurance'],
+  ['Brightline Marketing', 'brightline marketing'],
+] as const;
+
+type ExpenseRecipe = readonly [
+  slug: string,
+  ratio: number,
+  vendorName: string | null,
+  description: string,
+];
+
+const downtownPrevious: readonly ExpenseRecipe[] = [
+  ['food', .27, 'sysco', 'Food inventory'],
+  ['labor', .29, 'adp', 'Hourly and salaried labor'],
+  ['beverage', .035, 'us foods', 'Beverage inventory'],
+  ['payroll-taxes', .03, 'adp', 'Payroll taxes'],
+  ['rent', .085, 'main street properties', 'Restaurant occupancy'],
+  ['utilities', .025, 'dte energy', 'Electric and gas service'],
+  ['delivery-fees', .04, 'doordash', 'Delivery marketplace fees'],
+  ['merchant-fees', .028, 'toast', 'Card processing'],
+  ['supplies', .015, 'restaurant depot', 'Operating supplies'],
+  ['insurance', .008, 'harbor insurance', 'Business insurance'],
+  ['repairs-maintenance', .008, null, 'Repairs and maintenance'],
+  ['marketing', .012, 'brightline marketing', 'Local marketing'],
+  ['software-subscriptions', .004, 'toast', 'Restaurant software'],
+  ['taxes', .015, null, 'Local business taxes'],
+  ['professional-services', .005, null, 'Professional services'],
+  ['equipment', .01, 'restaurant depot', 'Small equipment'],
+];
+
+const downtownRecent: readonly ExpenseRecipe[] = [
+  ['food', .305, 'sysco', 'Food inventory'],
+  ['labor', .34, 'adp', 'Hourly and salaried labor'],
+  ['beverage', .03, 'us foods', 'Beverage inventory'],
+  ['payroll-taxes', .032, 'adp', 'Payroll taxes'],
+  ['rent', .06, 'main street properties', 'Restaurant occupancy'],
+  ['utilities', .022, 'dte energy', 'Electric and gas service'],
+  ['delivery-fees', .05, 'doordash', 'Delivery marketplace fees'],
+  ['merchant-fees', .028, 'toast', 'Card processing'],
+  ['supplies', .012, 'restaurant depot', 'Operating supplies'],
+  ['insurance', .007, 'harbor insurance', 'Business insurance'],
+  ['repairs-maintenance', .006, null, 'Repairs and maintenance'],
+  ['marketing', .004, 'brightline marketing', 'Local marketing'],
+  ['software-subscriptions', .004, 'toast', 'Restaurant software'],
+  ['taxes', .009, null, 'Local business taxes'],
+  ['professional-services', .003, null, 'Professional services'],
+  ['equipment', .003, 'restaurant depot', 'Small equipment'],
+];
+
+const lakesideStable: readonly ExpenseRecipe[] = [
+  ['food', .26, 'local produce co.', 'Food inventory'],
+  ['labor', .27, 'adp', 'Hourly and salaried labor'],
+  ['beverage', .03, 'us foods', 'Beverage inventory'],
+  ['payroll-taxes', .028, 'adp', 'Payroll taxes'],
+  ['rent', .09, 'main street properties', 'Restaurant occupancy'],
+  ['utilities', .025, 'dte energy', 'Electric and gas service'],
+  ['delivery-fees', .02, 'uber eats', 'Delivery marketplace fees'],
+  ['merchant-fees', .028, 'toast', 'Card processing'],
+  ['supplies', .015, 'restaurant depot', 'Operating supplies'],
+  ['insurance', .008, 'harbor insurance', 'Business insurance'],
+  ['repairs-maintenance', .008, null, 'Repairs and maintenance'],
+  ['marketing', .008, 'brightline marketing', 'Local marketing'],
+  ['software-subscriptions', .004, 'toast', 'Restaurant software'],
+  ['taxes', .012, null, 'Local business taxes'],
+  ['professional-services', .004, null, 'Professional services'],
+  ['equipment', .006, 'restaurant depot', 'Small equipment'],
+];
+
+const money = (value: number) => Math.round(value * 100) / 100;
+
+async function main() {
+  // Capture the clock once so every generated date in this seed run is based
+  // on the same deterministic UTC calendar day.
+  const seedNow = new Date();
+  const seedToday = new Date(
+    Date.UTC(
+      seedNow.getUTCFullYear(),
+      seedNow.getUTCMonth(),
+      seedNow.getUTCDate(),
+      12,
+    ),
+  );
+
+  for (const [name, slug, classification] of categories) {
+    const found = await prisma.expenseCategory.findFirst({
+      where: { organizationId: null, slug },
+    });
+    if (!found) {
+      await prisma.expenseCategory.create({
+        data: { name, slug, classification, isSystem: true },
+      });
+    }
+  }
+
+  const user = await prisma.user.upsert({
+    where: { email: demoEmail },
+    update: {},
+    create: {
+      email: demoEmail,
+      passwordHash: await argon2.hash('DemoProfit2026!'),
+      firstName: 'Demo',
+      lastName: 'Owner',
+    },
+  });
+  await prisma.organization.upsert({
+    where: { id: demoOrgId },
+    update: { name: 'Demo Restaurant Group' },
+    create: { id: demoOrgId, name: 'Demo Restaurant Group' },
+  });
+  await prisma.organizationMember.upsert({
+    where: {
+      userId_organizationId: {
+        userId: user.id,
+        organizationId: demoOrgId,
+      },
+    },
+    update: { role: OrganizationRole.OWNER },
+    create: {
+      userId: user.id,
+      organizationId: demoOrgId,
+      role: OrganizationRole.OWNER,
+    },
+  });
+  for (const [id, name] of [
+    [downtownId, 'Downtown Grill'],
+    [lakesideId, 'Lakeside Grill'],
+  ] as const) {
+    await prisma.restaurantLocation.upsert({
+      where: { id },
+      update: { name },
+      create: { id, name, organizationId: demoOrgId },
+    });
+  }
+
+  const seededVendors = await Promise.all(
+    vendors.map(([name, normalizedName]) =>
+      prisma.vendor.upsert({
+        where: {
+          organizationId_normalizedName: {
+            organizationId: demoOrgId,
+            normalizedName,
+          },
+        },
+        update: { name },
+        create: { organizationId: demoOrgId, name, normalizedName },
+      }),
+    ),
+  );
+  const categoryRows = await prisma.expenseCategory.findMany({
+    where: { organizationId: null },
+  });
+  const categoryId = (slug: string) =>
+    categoryRows.find((category) => category.slug === slug)!.id;
+  const vendorId = (normalizedName: string | null) =>
+    normalizedName == null
+      ? null
+      : seededVendors.find(
+          (vendor) => vendor.normalizedName === normalizedName,
+        )!.id;
+
+  const revenueRows: Prisma.RevenueEntryCreateManyInput[] = [];
+  const expenseRows: Prisma.ExpenseCreateManyInput[] = [];
+
+  for (const [locationId, baseRevenue] of [
+    [downtownId, 2600],
+    [lakesideId, 1900],
+  ] as const) {
+    for (let index = 0; index < 92; index += 1) {
+      const daysAgo = 91 - index;
+      const date = new Date(seedToday);
+      date.setUTCDate(seedToday.getUTCDate() - daysAgo);
+      const dayOfWeek = date.getUTCDay();
+      const isWeekendPeak = dayOfWeek === 5 || dayOfWeek === 6;
+      const isEarlyWeek = dayOfWeek === 1 || dayOfWeek === 2;
+      const isRecent = daysAgo < 30;
+      const isPrevious = daysAgo >= 30 && daysAgo < 60;
+      const trend = locationId === downtownId
+        ? (isRecent ? 1.04 : isPrevious ? 1 : .98)
+        : (isRecent ? 1.01 : 1);
+      const dailyVariation = (index * 37) % 240;
+      const revenue = money(
+        (baseRevenue +
+          dailyVariation +
+          (isWeekendPeak ? (locationId === downtownId ? 850 : 600) : 0) -
+          (isEarlyWeek ? (locationId === downtownId ? 260 : 180) : 0)) *
+          trend,
+      );
+
+      revenueRows.push({
+        organizationId: demoOrgId,
+        restaurantLocationId: locationId,
+        date,
+        amount: revenue,
+        source: RevenueSource.MANUAL,
+        notes: 'Daily sales',
+        createdByUserId: user.id,
+      });
+
+      const recipe = locationId === lakesideId
+        ? lakesideStable
+        : isRecent
+        ? downtownRecent
+        : downtownPrevious;
+      for (const [slug, ratio, normalizedVendor, description] of recipe) {
+        expenseRows.push({
+          organizationId: demoOrgId,
+          restaurantLocationId: locationId,
+          expenseCategoryId: categoryId(slug),
+          vendorId: vendorId(normalizedVendor),
+          date,
+          amount: money(revenue * ratio),
+          description,
+          source: ExpenseSource.MANUAL,
+          createdByUserId: user.id,
+        });
+      }
+    }
+  }
+
+  await prisma.$transaction([
+    prisma.revenueEntry.deleteMany({ where: { organizationId: demoOrgId } }),
+    prisma.expense.deleteMany({ where: { organizationId: demoOrgId } }),
+  ]);
+  await prisma.revenueEntry.createMany({ data: revenueRows });
+  await prisma.expense.createMany({ data: expenseRows });
+
+  console.log(
+    `Demo seeded through ${seedToday.toISOString().slice(0, 10)}: ${demoEmail} / DemoProfit2026!`,
+  );
+}
+
+main().finally(() => prisma.$disconnect());
