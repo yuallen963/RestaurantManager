@@ -55,8 +55,21 @@ presigned upload URLs. Configure the API with `S3_ENDPOINT`, `S3_REGION`,
 `S3_FORCE_PATH_STYLE`. Keep the bucket private; Flutter receives only a
 short-lived URL scoped to a single tenant/location invoice object.
 
-Supported uploads are PDF, JPEG, and PNG files up to 15 MB. Invoice metadata is
-entered manually in this phase; no OCR or automatic expense creation occurs.
+Supported uploads are PDF, JPEG, and PNG files up to 15 MB. Invoice metadata can
+always be entered manually, and no automatic expense creation occurs.
+
+Invoice extraction uses the server-side OpenAI Responses API with PDF/image
+inputs and strict Structured Outputs. Set `OPENAI_API_KEY` and optionally
+`OPENAI_INVOICE_MODEL` (default `gpt-4.1-mini`) on the API service. The original
+file and every raw line-item description are preserved. Extracted values remain
+untrusted until a user corrects them and selects **Mark Reviewed**; extraction
+never creates an expense automatically.
+
+Extraction endpoints are `POST /api/v1/invoices/:id/extract`,
+`GET /api/v1/invoices/:id/extraction-status`,
+`GET /api/v1/invoices/:id/line-items`,
+`PATCH /api/v1/invoices/:invoiceId/line-items/:lineItemId`, and
+`PATCH /api/v1/invoices/:id/review`.
 
 ## Data architecture
 

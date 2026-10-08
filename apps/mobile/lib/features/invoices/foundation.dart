@@ -29,6 +29,10 @@ class InvoiceRecord {
     this.tax,
     this.total,
     this.notes,
+    this.extractionStatus = 'NOT_STARTED',
+    this.extractionConfidence,
+    this.extractionError,
+    this.reviewStatus = 'NOT_REVIEWED',
   });
   final String id, restaurantLocationId, fileName, fileType, status;
   final int fileSize;
@@ -36,6 +40,9 @@ class InvoiceRecord {
   final DateTime? invoiceDate;
   final DateTime createdAt;
   final double? subtotal, tax, total;
+  final String extractionStatus, reviewStatus;
+  final double? extractionConfidence;
+  final String? extractionError;
   factory InvoiceRecord.fromJson(Map<String, dynamic> json) => InvoiceRecord(
     id: json['id'] as String,
     restaurantLocationId: json['restaurantLocationId'] as String,
@@ -54,7 +61,46 @@ class InvoiceRecord {
     tax: _money(json['tax']),
     total: _money(json['total']),
     notes: json['notes'] as String?,
+    extractionStatus: json['extractionStatus'] as String? ?? 'NOT_STARTED',
+    extractionConfidence: _money(json['extractionConfidence']),
+    extractionError: json['extractionError'] as String?,
+    reviewStatus: json['reviewStatus'] as String? ?? 'NOT_REVIEWED',
   );
+}
+
+class InvoiceLineItem {
+  const InvoiceLineItem({
+    required this.id,
+    required this.lineNumber,
+    required this.rawDescription,
+    this.sku,
+    this.quantity,
+    this.unit,
+    this.packSize,
+    this.unitPrice,
+    this.extendedPrice,
+    this.category,
+    this.confidence,
+  });
+  final String id, rawDescription;
+  final int lineNumber;
+  final String? sku, unit, packSize, category;
+  final double? quantity, unitPrice, extendedPrice, confidence;
+  bool get lowConfidence => (confidence ?? 0) < .75;
+  factory InvoiceLineItem.fromJson(Map<String, dynamic> json) =>
+      InvoiceLineItem(
+        id: json['id'] as String,
+        lineNumber: json['lineNumber'] as int,
+        rawDescription: json['rawDescription'] as String,
+        sku: json['sku'] as String?,
+        quantity: _money(json['quantity']),
+        unit: json['unit'] as String?,
+        packSize: json['packSize'] as String?,
+        unitPrice: _money(json['unitPrice']),
+        extendedPrice: _money(json['extendedPrice']),
+        category: json['category'] as String?,
+        confidence: _money(json['confidence']),
+      );
 }
 
 class InvoiceRepository {
@@ -133,6 +179,37 @@ class InvoiceRepository {
   }
 
   Future<void> delete(String id) => dio.delete('/invoices/$id');
+  Future<List<InvoiceLineItem>> lineItems(String id) async {
+    final response = await dio.get('/invoices/$id/line-items');
+    return (response.data as List)
+        .map(
+          (item) =>
+              InvoiceLineItem.fromJson(Map<String, dynamic>.from(item as Map)),
+        )
+        .toList();
+  }
+
+  Future<void> extract(String id) => dio.post('/invoices/$id/extract');
+  Future<InvoiceRecord> review(String id, Map<String, dynamic> data) async {
+    final response = await dio.patch('/invoices/$id/review', data: data);
+    return InvoiceRecord.fromJson(
+      Map<String, dynamic>.from(response.data as Map),
+    );
+  }
+
+  Future<InvoiceLineItem> updateLineItem(
+    String invoiceId,
+    String lineItemId,
+    Map<String, dynamic> data,
+  ) async {
+    final response = await dio.patch(
+      '/invoices/$invoiceId/line-items/$lineItemId',
+      data: data,
+    );
+    return InvoiceLineItem.fromJson(
+      Map<String, dynamic>.from(response.data as Map),
+    );
+  }
 }
 
 final invoiceRepositoryProvider = Provider(
@@ -148,6 +225,38 @@ final invoiceListProvider = FutureProvider<List<InvoiceRecord>>((ref) async {
 final invoiceDetailProvider = FutureProvider.family<InvoiceRecord, String>(
   (ref, id) => ref.watch(invoiceRepositoryProvider).detail(id),
 );
+final invoiceLineItemsProvider =
+    FutureProvider.family<List<InvoiceLineItem>, String>(
+      (ref, id) => ref.watch(invoiceRepositoryProvider).lineItems(id),
+    );
+
+class InvoiceExtractionController extends StateNotifier<AsyncValue<void>> {
+  InvoiceExtractionController(this.ref) : super(const AsyncData(null));
+  final Ref ref;
+  Future<void> extract(String id) async {
+    state = const AsyncLoading();
+    try {
+      await ref.read(invoiceRepositoryProvider).extract(id);
+      for (var attempt = 0; attempt < 30; attempt++) {
+        await Future<void>.delayed(const Duration(seconds: 2));
+        final invoice = await ref.read(invoiceRepositoryProvider).detail(id);
+        ref.invalidate(invoiceDetailProvider(id));
+        if (invoice.extractionStatus != 'PROCESSING') {
+          ref.invalidate(invoiceLineItemsProvider(id));
+          break;
+        }
+      }
+      state = const AsyncData(null);
+    } catch (error, stack) {
+      state = AsyncError(error, stack);
+    }
+  }
+}
+
+final invoiceExtractionProvider =
+    StateNotifierProvider<InvoiceExtractionController, AsyncValue<void>>(
+      (ref) => InvoiceExtractionController(ref),
+    );
 
 enum InvoiceUploadPhase { idle, selecting, uploading, complete, failed }
 

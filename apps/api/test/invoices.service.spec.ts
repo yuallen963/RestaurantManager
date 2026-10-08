@@ -19,7 +19,8 @@ function setup() {
   const access: any = { requireMember: jest.fn().mockResolvedValue({ role: 'OWNER' }) };
   const audit: any = { log: jest.fn().mockResolvedValue({}) };
   const storage: any = { putUrl: jest.fn().mockResolvedValue('https://storage/upload'), exists: jest.fn().mockResolvedValue(undefined), remove: jest.fn().mockResolvedValue(undefined) };
-  return { prisma, access, audit, storage, service: new InvoicesService(prisma, access, audit, storage) };
+  const extraction: any = { isConfigured: jest.fn().mockReturnValue(false), process: jest.fn() };
+  return { prisma, access, audit, storage, extraction, service: new InvoicesService(prisma, access, audit, storage, extraction) };
 }
 
 describe('InvoicesService', () => {

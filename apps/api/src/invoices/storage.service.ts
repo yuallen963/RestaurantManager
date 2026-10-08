@@ -1,6 +1,6 @@
 import { Injectable, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { DeleteObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { DeleteObjectCommand, GetObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 @Injectable()
 export class InvoiceStorageService {
@@ -10,4 +10,5 @@ export class InvoiceStorageService {
   async putUrl(key: string, mimeType: string) { return getSignedUrl(this.client, new PutObjectCommand({ Bucket: this.bucket(), Key: key, ContentType: mimeType }), { expiresIn: 900 }); }
   async remove(key: string) { await this.client.send(new DeleteObjectCommand({ Bucket: this.bucket(), Key: key })); }
   async exists(key: string) { await this.client.send(new HeadObjectCommand({ Bucket: this.bucket(), Key: key })); }
+  async get(key: string) { const result = await this.client.send(new GetObjectCommand({ Bucket: this.bucket(), Key: key })); if (!result.Body) throw new Error('Invoice source file is missing'); return Buffer.from(await result.Body.transformToByteArray()); }
 }

@@ -32,6 +32,8 @@ class FakeInvoiceRepository extends InvoiceRepository {
   FakeInvoiceRepository({this.failUpload = false}) : super(Dio());
   final bool failUpload;
   bool deleted = false;
+  bool reviewed = false;
+  Map<String, dynamic>? correctedLine;
   @override
   Future<InvoiceRecord> upload({
     required String locationId,
@@ -47,7 +49,55 @@ class FakeInvoiceRepository extends InvoiceRepository {
 
   @override
   Future<void> delete(String id) async => deleted = true;
+
+  @override
+  Future<InvoiceRecord> review(String id, Map<String, dynamic> data) async {
+    reviewed = data['markReviewed'] == true;
+    return invoice;
+  }
+
+  @override
+  Future<InvoiceLineItem> updateLineItem(
+    String invoiceId,
+    String lineItemId,
+    Map<String, dynamic> data,
+  ) async {
+    correctedLine = data;
+    return lineItem;
+  }
 }
+
+final extractedInvoice = InvoiceRecord(
+  id: 'invoice-a',
+  restaurantLocationId: 'loc-a',
+  fileName: 'sysco.pdf',
+  fileType: 'application/pdf',
+  fileSize: 2048,
+  status: 'UPLOADED',
+  createdAt: DateTime(2026, 10, 4),
+  vendorName: 'Sysco',
+  invoiceNumber: 'INV-1001',
+  invoiceDate: DateTime(2026, 10, 4),
+  subtotal: 100,
+  tax: 6,
+  total: 106,
+  extractionStatus: 'COMPLETED',
+  extractionConfidence: .72,
+  reviewStatus: 'NEEDS_REVIEW',
+);
+const lineItem = InvoiceLineItem(
+  id: 'line-a',
+  lineNumber: 1,
+  rawDescription: 'CHKN BRST BNLS SKLS 4/10 LB',
+  sku: '384920',
+  quantity: 2,
+  unit: 'CASE',
+  packSize: '4 x 10 lb',
+  unitPrice: 50,
+  extendedPrice: 100,
+  category: 'Food',
+  confidence: .62,
+);
 
 Widget app(List<Override> overrides, Widget child) => ProviderScope(
   overrides: [
@@ -131,6 +181,129 @@ void main() {
     expect(find.text('Delete Invoice'), findsOneWidget);
   });
 
+  testWidgets('detail shows processing extraction state', (tester) async {
+    final processing = InvoiceRecord(
+      id: 'invoice-a',
+      restaurantLocationId: 'loc-a',
+      fileName: 'invoice.pdf',
+      fileType: 'application/pdf',
+      fileSize: 100,
+      status: 'UPLOADED',
+      createdAt: DateTime(2026),
+      extractionStatus: 'PROCESSING',
+    );
+    await tester.pumpWidget(
+      app([
+        invoiceDetailProvider(
+          'invoice-a',
+        ).overrideWith((_) async => processing),
+      ], const InvoiceDetailScreen(invoiceId: 'invoice-a')),
+    );
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.text('Processing invoice extraction...'),
+      300,
+      scrollable: find.byType(Scrollable).first,
+    );
+    expect(find.text('Processing invoice extraction...'), findsOneWidget);
+  });
+
+  testWidgets('detail shows failed extraction and retry', (tester) async {
+    final failed = InvoiceRecord(
+      id: 'invoice-a',
+      restaurantLocationId: 'loc-a',
+      fileName: 'invoice.pdf',
+      fileType: 'application/pdf',
+      fileSize: 100,
+      status: 'UPLOADED',
+      createdAt: DateTime(2026),
+      extractionStatus: 'FAILED',
+      extractionError: 'Unable to read document',
+    );
+    await tester.pumpWidget(
+      app([
+        invoiceDetailProvider('invoice-a').overrideWith((_) async => failed),
+      ], const InvoiceDetailScreen(invoiceId: 'invoice-a')),
+    );
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.text('Retry Extraction'),
+      300,
+      scrollable: find.byType(Scrollable).first,
+    );
+    expect(find.text('Unable to read document'), findsOneWidget);
+    expect(find.text('Retry Extraction'), findsOneWidget);
+  });
+
+  testWidgets('review highlights low confidence and marks reviewed', (
+    tester,
+  ) async {
+    final repository = FakeInvoiceRepository();
+    await tester.pumpWidget(
+      app([
+        invoiceRepositoryProvider.overrideWithValue(repository),
+        invoiceDetailProvider(
+          'invoice-a',
+        ).overrideWith((_) async => extractedInvoice),
+        invoiceLineItemsProvider(
+          'invoice-a',
+        ).overrideWith((_) async => [lineItem]),
+      ], const InvoiceReviewScreen(invoiceId: 'invoice-a')),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Needs review'), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.text('CHKN BRST BNLS SKLS 4/10 LB'),
+      300,
+      scrollable: find.byType(Scrollable).first,
+    );
+    expect(find.text('CHKN BRST BNLS SKLS 4/10 LB'), findsOneWidget);
+    expect(find.textContaining('Confidence: Low'), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.text('Mark Reviewed'),
+      300,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.tap(find.text('Mark Reviewed'));
+    await tester.pump();
+    expect(repository.reviewed, isTrue);
+  });
+
+  testWidgets('line item correction persists raw description edit', (
+    tester,
+  ) async {
+    final repository = FakeInvoiceRepository();
+    await tester.pumpWidget(
+      app([
+        invoiceRepositoryProvider.overrideWithValue(repository),
+        invoiceDetailProvider(
+          'invoice-a',
+        ).overrideWith((_) async => extractedInvoice),
+        invoiceLineItemsProvider(
+          'invoice-a',
+        ).overrideWith((_) async => [lineItem]),
+      ], const InvoiceReviewScreen(invoiceId: 'invoice-a')),
+    );
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.text('CHKN BRST BNLS SKLS 4/10 LB'),
+      300,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.tap(find.text('CHKN BRST BNLS SKLS 4/10 LB'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Description'),
+      'Corrected chicken breast',
+    );
+    await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+    await tester.pumpAndSettle();
+    expect(
+      repository.correctedLine?['rawDescription'],
+      'Corrected chicken breast',
+    );
+  });
+
   testWidgets('metadata form rejects negative currency', (tester) async {
     await tester.pumpWidget(
       app([
@@ -211,6 +384,8 @@ void main() {
       300,
       scrollable: find.byType(Scrollable).first,
     );
+    await tester.ensureVisible(find.text('Delete Invoice'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Delete Invoice'));
     await tester.pumpAndSettle();
     await tester.tap(find.widgetWithText(FilledButton, 'Delete'));

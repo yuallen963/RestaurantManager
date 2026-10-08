@@ -1,5 +1,6 @@
 import 'dart:typed_data';
 
+import 'package:dio/dio.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -294,6 +295,8 @@ class InvoiceDetailScreen extends ConsumerWidget {
               MapEntry('File size', _size(invoice.fileSize)),
               MapEntry('Uploaded', _date(invoice.createdAt)),
               MapEntry('Status', _status(invoice.status)),
+              MapEntry('Extraction', _status(invoice.extractionStatus)),
+              MapEntry('Review', _status(invoice.reviewStatus)),
               MapEntry('Notes', invoice.notes ?? 'None'),
             ];
             return ListView(
@@ -301,6 +304,56 @@ class InvoiceDetailScreen extends ConsumerWidget {
               children: [
                 for (final row in rows)
                   ListTile(title: Text(row.key), subtitle: Text(row.value)),
+                if (invoice.extractionStatus == 'PROCESSING') ...[
+                  const LinearProgressIndicator(),
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 12),
+                    child: Text('Processing invoice extraction...'),
+                  ),
+                ],
+                if (invoice.extractionStatus == 'FAILED') ...[
+                  Text(
+                    invoice.extractionError ?? 'Extraction failed',
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.error,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                ],
+                if (invoice.extractionStatus == 'NOT_STARTED' ||
+                    invoice.extractionStatus == 'FAILED')
+                  FilledButton.icon(
+                    onPressed: ref.watch(invoiceExtractionProvider).isLoading
+                        ? null
+                        : () => ref
+                              .read(invoiceExtractionProvider.notifier)
+                              .extract(invoice.id),
+                    icon: const Icon(Icons.document_scanner_outlined),
+                    label: Text(
+                      invoice.extractionStatus == 'FAILED'
+                          ? 'Retry Extraction'
+                          : 'Extract Invoice',
+                    ),
+                  ),
+                if (invoice.extractionStatus == 'COMPLETED')
+                  FilledButton.icon(
+                    onPressed: () async {
+                      await Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) =>
+                              InvoiceReviewScreen(invoiceId: invoice.id),
+                        ),
+                      );
+                      ref.invalidate(invoiceDetailProvider(invoiceId));
+                    },
+                    icon: const Icon(Icons.fact_check_outlined),
+                    label: Text(
+                      invoice.reviewStatus == 'REVIEWED'
+                          ? 'View Reviewed Invoice'
+                          : 'Review Extracted Invoice',
+                    ),
+                  ),
                 const SizedBox(height: 16),
                 FilledButton(
                   onPressed: () async {
@@ -354,9 +407,325 @@ class InvoiceDetailScreen extends ConsumerWidget {
   }
 }
 
+class InvoiceReviewScreen extends ConsumerWidget {
+  const InvoiceReviewScreen({required this.invoiceId, super.key});
+  final String invoiceId;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final invoice = ref.watch(invoiceDetailProvider(invoiceId));
+    final lineItems = ref.watch(invoiceLineItemsProvider(invoiceId));
+    return Scaffold(
+      appBar: AppBar(title: const Text('Review Invoice')),
+      body: invoice.when(
+        loading: () => const Center(child: CircularProgressIndicator()),
+        error: (_, _) => const Center(child: Text('Unable to load invoice')),
+        data: (data) => lineItems.when(
+          loading: () => const Center(child: CircularProgressIndicator()),
+          error: (_, _) =>
+              const Center(child: Text('Unable to load line items')),
+          data: (items) {
+            final issueCount = [
+              if (data.vendorName == null) 'vendor',
+              if (data.invoiceDate == null) 'date',
+              if (data.total == null) 'total',
+              ...items
+                  .where((item) => item.lowConfidence)
+                  .map((item) => item.id),
+            ].length;
+            return ListView(
+              padding: const EdgeInsets.all(16),
+              children: [
+                Card(
+                  color: issueCount > 0
+                      ? Theme.of(context).colorScheme.errorContainer
+                      : Theme.of(context).colorScheme.primaryContainer,
+                  child: ListTile(
+                    leading: Icon(
+                      issueCount > 0
+                          ? Icons.warning_amber
+                          : Icons.check_circle_outline,
+                    ),
+                    title: Text(
+                      data.reviewStatus == 'REVIEWED'
+                          ? 'Reviewed'
+                          : issueCount > 0
+                          ? 'Needs review'
+                          : 'Ready for review',
+                    ),
+                    subtitle: Text(
+                      issueCount == 1
+                          ? '1 field needs attention'
+                          : '$issueCount fields need attention',
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  'Invoice Summary',
+                  style: Theme.of(context).textTheme.titleLarge,
+                ),
+                ListTile(
+                  title: const Text('Vendor'),
+                  subtitle: Text(data.vendorName ?? 'Missing'),
+                ),
+                ListTile(
+                  title: const Text('Invoice number'),
+                  subtitle: Text(data.invoiceNumber ?? 'Missing'),
+                ),
+                ListTile(
+                  title: const Text('Invoice date'),
+                  subtitle: Text(
+                    data.invoiceDate == null
+                        ? 'Missing'
+                        : _date(data.invoiceDate!),
+                  ),
+                ),
+                ListTile(
+                  title: const Text('Subtotal'),
+                  subtitle: Text(
+                    data.subtotal == null
+                        ? 'Missing'
+                        : formatCurrency(data.subtotal!),
+                  ),
+                ),
+                ListTile(
+                  title: const Text('Tax'),
+                  subtitle: Text(
+                    data.tax == null ? 'Missing' : formatCurrency(data.tax!),
+                  ),
+                ),
+                ListTile(
+                  title: const Text('Total'),
+                  subtitle: Text(
+                    data.total == null
+                        ? 'Missing'
+                        : formatCurrency(data.total!),
+                  ),
+                ),
+                if (data.extractionConfidence != null)
+                  ListTile(
+                    title: const Text('Extraction confidence'),
+                    subtitle: Text(
+                      '${(data.extractionConfidence! * 100).toStringAsFixed(0)}%',
+                    ),
+                  ),
+                if (data.reviewStatus != 'REVIEWED')
+                  OutlinedButton.icon(
+                    onPressed: () async {
+                      await Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => InvoiceEditScreen(
+                            invoice: data,
+                            reviewMode: true,
+                          ),
+                        ),
+                      );
+                      ref.invalidate(invoiceDetailProvider(invoiceId));
+                    },
+                    icon: const Icon(Icons.edit_outlined),
+                    label: const Text('Edit Invoice Fields'),
+                  ),
+                const Divider(height: 32),
+                Text(
+                  'Extracted Line Items',
+                  style: Theme.of(context).textTheme.titleLarge,
+                ),
+                if (items.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 20),
+                    child: Text('No line items were extracted.'),
+                  ),
+                for (final item in items)
+                  Card(
+                    color: item.lowConfidence
+                        ? Theme.of(context).colorScheme.errorContainer
+                        : null,
+                    child: InkWell(
+                      onTap: data.reviewStatus == 'REVIEWED'
+                          ? null
+                          : () => _editLine(context, ref, data, item),
+                      child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    item.rawDescription,
+                                    style: Theme.of(
+                                      context,
+                                    ).textTheme.titleMedium,
+                                  ),
+                                ),
+                                if (data.reviewStatus != 'REVIEWED')
+                                  const Icon(Icons.edit_outlined),
+                              ],
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              [
+                                if (item.sku != null) 'SKU: ${item.sku}',
+                                'Quantity: ${item.quantity?.toString() ?? 'Missing'} ${item.unit ?? ''}',
+                                if (item.packSize != null)
+                                  'Pack: ${item.packSize}',
+                                'Unit price: ${item.unitPrice == null ? 'Missing' : formatCurrency(item.unitPrice!)}',
+                                'Extended: ${item.extendedPrice == null ? 'Missing' : formatCurrency(item.extendedPrice!)}',
+                                'Confidence: ${item.lowConfidence
+                                    ? 'Low'
+                                    : (item.confidence ?? 0) < .9
+                                    ? 'Medium'
+                                    : 'High'}',
+                              ].join('\n'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                const SizedBox(height: 16),
+                if (data.reviewStatus != 'REVIEWED')
+                  FilledButton.icon(
+                    onPressed: () => _markReviewed(context, ref, data),
+                    icon: const Icon(Icons.check),
+                    label: const Text('Mark Reviewed'),
+                  ),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Future<void> _markReviewed(
+    BuildContext context,
+    WidgetRef ref,
+    InvoiceRecord invoice,
+  ) async {
+    try {
+      await ref.read(invoiceRepositoryProvider).review(invoice.id, {
+        'markReviewed': true,
+      });
+      ref.invalidate(invoiceDetailProvider(invoice.id));
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Invoice marked reviewed')),
+        );
+      }
+    } on DioException catch (error) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              error.response?.data is Map
+                  ? (error.response?.data['message']?.toString() ??
+                        'Unable to mark reviewed')
+                  : 'Unable to mark reviewed',
+            ),
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _editLine(
+    BuildContext context,
+    WidgetRef ref,
+    InvoiceRecord invoice,
+    InvoiceLineItem item,
+  ) async {
+    final description = TextEditingController(text: item.rawDescription);
+    final sku = TextEditingController(text: item.sku);
+    final quantity = TextEditingController(text: item.quantity?.toString());
+    final unit = TextEditingController(text: item.unit);
+    final pack = TextEditingController(text: item.packSize);
+    final unitPrice = TextEditingController(
+      text: item.unitPrice?.toStringAsFixed(2),
+    );
+    final extended = TextEditingController(
+      text: item.extendedPrice?.toStringAsFixed(2),
+    );
+    final category = TextEditingController(text: item.category);
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Edit Line Item'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              for (final field in <MapEntry<String, TextEditingController>>[
+                MapEntry('Description', description),
+                MapEntry('SKU', sku),
+                MapEntry('Quantity', quantity),
+                MapEntry('Unit', unit),
+                MapEntry('Pack size', pack),
+                MapEntry('Unit price', unitPrice),
+                MapEntry('Extended price', extended),
+                MapEntry('Category', category),
+              ])
+                TextField(
+                  controller: field.value,
+                  decoration: InputDecoration(labelText: field.key),
+                  keyboardType:
+                      [
+                        'Quantity',
+                        'Unit price',
+                        'Extended price',
+                      ].contains(field.key)
+                      ? const TextInputType.numberWithOptions(decimal: true)
+                      : TextInputType.text,
+                ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    if (saved != true) return;
+    double? number(TextEditingController controller) =>
+        controller.text.trim().isEmpty
+        ? null
+        : double.tryParse(controller.text.trim());
+    await ref.read(invoiceRepositoryProvider).updateLineItem(
+      invoice.id,
+      item.id,
+      {
+        'rawDescription': description.text.trim(),
+        'sku': sku.text.trim().isEmpty ? null : sku.text.trim(),
+        'quantity': number(quantity),
+        'unit': unit.text.trim().isEmpty ? null : unit.text.trim(),
+        'packSize': pack.text.trim().isEmpty ? null : pack.text.trim(),
+        'unitPrice': number(unitPrice),
+        'extendedPrice': number(extended),
+        'category': category.text.trim().isEmpty ? null : category.text.trim(),
+      },
+    );
+    ref.invalidate(invoiceLineItemsProvider(invoice.id));
+  }
+}
+
 class InvoiceEditScreen extends ConsumerStatefulWidget {
-  const InvoiceEditScreen({required this.invoice, super.key});
+  const InvoiceEditScreen({
+    required this.invoice,
+    this.reviewMode = false,
+    super.key,
+  });
   final InvoiceRecord invoice;
+  final bool reviewMode;
   @override
   ConsumerState<InvoiceEditScreen> createState() => _InvoiceEditScreenState();
 }
@@ -374,6 +743,9 @@ class _InvoiceEditScreenState extends ConsumerState<InvoiceEditScreen> {
     text: widget.invoice.total?.toStringAsFixed(2),
   );
   late final notes = TextEditingController(text: widget.invoice.notes);
+  late final vendorName = TextEditingController(
+    text: widget.invoice.vendorName,
+  );
   String? vendorId;
   DateTime? date;
   bool saving = false;
@@ -419,6 +791,11 @@ class _InvoiceEditScreenState extends ConsumerState<InvoiceEditScreen> {
               ],
               onChanged: (value) => setState(() => vendorId = value),
             ),
+            if (widget.reviewMode)
+              TextFormField(
+                controller: vendorName,
+                decoration: const InputDecoration(labelText: 'Vendor name'),
+              ),
             TextFormField(
               controller: number,
               decoration: const InputDecoration(labelText: 'Invoice number'),
@@ -475,8 +852,12 @@ class _InvoiceEditScreenState extends ConsumerState<InvoiceEditScreen> {
   Future<void> _save() async {
     if (!(formKey.currentState?.validate() ?? false)) return;
     setState(() => saving = true);
-    await ref.read(invoiceRepositoryProvider).update(widget.invoice.id, {
+    final payload = {
       'vendorId': vendorId,
+      if (widget.reviewMode)
+        'vendorName': vendorName.text.trim().isEmpty
+            ? null
+            : vendorName.text.trim(),
       'invoiceNumber': number.text.trim().isEmpty ? null : number.text.trim(),
       'invoiceDate': date?.toIso8601String(),
       'subtotal': subtotal.text.trim().isEmpty ? null : subtotal.text.trim(),
@@ -484,7 +865,16 @@ class _InvoiceEditScreenState extends ConsumerState<InvoiceEditScreen> {
       'total': total.text.trim().isEmpty ? null : total.text.trim(),
       'notes': notes.text.trim().isEmpty ? null : notes.text.trim(),
       'status': 'COMPLETED',
-    });
+    };
+    if (widget.reviewMode) {
+      await ref
+          .read(invoiceRepositoryProvider)
+          .review(widget.invoice.id, payload);
+    } else {
+      await ref
+          .read(invoiceRepositoryProvider)
+          .update(widget.invoice.id, payload);
+    }
     ref.invalidate(invoiceListProvider);
     ref.invalidate(invoiceDetailProvider(widget.invoice.id));
     if (mounted) Navigator.pop(context);
