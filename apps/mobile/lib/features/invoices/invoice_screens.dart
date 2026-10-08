@@ -1,6 +1,9 @@
+import 'dart:typed_data';
+
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../dashboard/foundation.dart';
 import '../dashboard/home_screen.dart' show formatCurrency;
@@ -94,9 +97,8 @@ class InvoiceListScreen extends ConsumerWidget {
 
 class InvoiceUploadScreen extends ConsumerWidget {
   const InvoiceUploadScreen({super.key});
-  Future<void> _pick(BuildContext context, WidgetRef ref) async {
-    final location = ref.read(activeLocationProvider);
-    if (location == null) return;
+
+  Future<void> _pickFile(BuildContext context, WidgetRef ref) async {
     ref.read(invoiceUploadProvider.notifier).selecting();
     final result = await FilePicker.pickFiles(
       type: FileType.custom,
@@ -108,8 +110,47 @@ class InvoiceUploadScreen extends ConsumerWidget {
       return;
     }
     final file = result.files.single;
-    final bytes = file.bytes;
-    final mime = switch (file.extension?.toLowerCase()) {
+    if (!context.mounted) return;
+    await _upload(
+      context,
+      ref,
+      fileName: file.name,
+      extension: file.extension,
+      bytes: file.bytes,
+    );
+  }
+
+  Future<void> _pickPhoto(BuildContext context, WidgetRef ref) async {
+    ref.read(invoiceUploadProvider.notifier).selecting();
+    final file = await ImagePicker().pickImage(source: ImageSource.gallery);
+    if (file == null) {
+      ref.read(invoiceUploadProvider.notifier).reset();
+      return;
+    }
+    final bytes = await file.readAsBytes();
+    if (!context.mounted) return;
+    await _upload(
+      context,
+      ref,
+      fileName: file.name,
+      extension: file.name.split('.').last,
+      bytes: bytes,
+    );
+  }
+
+  Future<void> _upload(
+    BuildContext context,
+    WidgetRef ref, {
+    required String fileName,
+    required String? extension,
+    required List<int>? bytes,
+  }) async {
+    final location = ref.read(activeLocationProvider);
+    if (location == null) {
+      ref.read(invoiceUploadProvider.notifier).reset();
+      return;
+    }
+    final mime = switch (extension?.toLowerCase()) {
       'pdf' => 'application/pdf',
       'png' => 'image/png',
       'jpg' || 'jpeg' => 'image/jpeg',
@@ -141,9 +182,9 @@ class InvoiceUploadScreen extends ConsumerWidget {
         .read(invoiceUploadProvider.notifier)
         .upload(
           locationId: location.id,
-          fileName: file.name,
+          fileName: fileName,
           mimeType: mime,
-          bytes: bytes,
+          bytes: Uint8List.fromList(bytes),
         );
     if (invoice != null && context.mounted) {
       Navigator.pushReplacement(
@@ -189,9 +230,15 @@ class InvoiceUploadScreen extends ConsumerWidget {
                 ),
               ),
             FilledButton.icon(
-              onPressed: busy ? null : () => _pick(context, ref),
+              onPressed: busy ? null : () => _pickFile(context, ref),
               icon: const Icon(Icons.attach_file),
-              label: Text(busy ? 'Please wait...' : 'Select File or Photo'),
+              label: Text(busy ? 'Please wait...' : 'Select PDF or Image File'),
+            ),
+            const SizedBox(height: 10),
+            OutlinedButton.icon(
+              onPressed: busy ? null : () => _pickPhoto(context, ref),
+              icon: const Icon(Icons.photo_library_outlined),
+              label: const Text('Choose Photo'),
             ),
           ],
         ),

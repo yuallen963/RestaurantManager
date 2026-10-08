@@ -103,6 +103,15 @@ void main() {
     expect(find.text('Retry'), findsOneWidget);
   });
 
+  testWidgets('upload screen exposes file and photo selection separately', (
+    tester,
+  ) async {
+    await tester.pumpWidget(app(const [], const InvoiceUploadScreen()));
+    expect(find.text('Select PDF or Image File'), findsOneWidget);
+    expect(find.text('Choose Photo'), findsOneWidget);
+    expect(find.textContaining('15 MB'), findsOneWidget);
+  });
+
   testWidgets('invoice detail renders manual metadata', (tester) async {
     await tester.pumpWidget(
       app([
