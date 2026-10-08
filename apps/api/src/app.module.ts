@@ -9,5 +9,6 @@ import { DashboardModule } from './dashboard/dashboard.module';
 import { FinanceModule } from './finance/finance.module';
 import { InvoicesModule } from './invoices/invoices.module';
 import { PriceIntelligenceModule } from './price-intelligence/price-intelligence.module';
-@Module({ imports: [ConfigModule.forRoot({ isGlobal: true }), AuthModule, OrganizationsModule, LocationsModule, DashboardModule, FinanceModule, InvoicesModule, PriceIntelligenceModule], providers: [PrismaService, AuditService] })
+import { NeedsAttentionModule } from './needs-attention/needs-attention.module';
+@Module({ imports: [ConfigModule.forRoot({ isGlobal: true }), AuthModule, OrganizationsModule, LocationsModule, DashboardModule, FinanceModule, InvoicesModule, PriceIntelligenceModule, NeedsAttentionModule], providers: [PrismaService, AuditService] })
 export class AppModule {}

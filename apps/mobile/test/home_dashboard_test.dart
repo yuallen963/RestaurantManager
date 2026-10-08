@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:restaurant_profit_mobile/features/dashboard/foundation.dart';
+import 'package:restaurant_profit_mobile/features/needs_attention/foundation.dart';
 import 'package:restaurant_profit_mobile/features/tabs.dart';
 
 const downtown = RestaurantLocation(
@@ -40,6 +41,18 @@ void main() {
       ),
       previousDashboardProvider.overrideWith(
         previous ?? (ref) async => previousDashboard,
+      ),
+      needsAttentionProvider.overrideWith(
+        (_) async => const NeedsAttentionData(
+          summary: AttentionSummary(
+            critical: 0,
+            high: 0,
+            medium: 0,
+            low: 0,
+            estimatedMonthlyImpact: 0,
+          ),
+          items: [],
+        ),
       ),
     ],
     child: const MaterialApp(home: Scaffold(body: HomeScreen())),

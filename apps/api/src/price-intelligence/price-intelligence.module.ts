@@ -9,5 +9,6 @@ import { PriceIntelligenceService } from './price-intelligence.service';
   imports: [AuthModule, OrganizationsModule],
   controllers: [PriceIntelligenceController],
   providers: [PriceIntelligenceService, PrismaService],
+  exports: [PriceIntelligenceService],
 })
 export class PriceIntelligenceModule {}

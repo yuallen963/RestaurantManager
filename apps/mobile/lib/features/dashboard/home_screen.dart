@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'foundation.dart';
+import '../needs_attention/needs_attention_screen.dart';
 
 class HomeScreen extends ConsumerWidget {
   const HomeScreen({super.key});
@@ -51,6 +52,8 @@ class HomeScreen extends ConsumerWidget {
             padding: const EdgeInsets.all(16),
             children: [
               _DashboardHeader(location: location, locations: locations),
+              const SizedBox(height: 16),
+              const NeedsAttentionPreview(),
               const SizedBox(height: 48),
               const EmptyState(
                 message: 'No financial activity found for this period.',
@@ -93,6 +96,8 @@ class _DashboardContent extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
       children: [
         _DashboardHeader(location: location, locations: locations),
+        const SizedBox(height: 16),
+        const NeedsAttentionPreview(),
         const SizedBox(height: 20),
         Card(
           key: const Key('profit-card'),

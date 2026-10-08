@@ -75,6 +75,7 @@ export interface PriceChangeItem {
   estimatedAnnualImpact: number | null;
   firstSeenAt: string;
   latestSeenAt: string;
+  consecutiveIncreases: number;
   history: PriceHistoryPoint[];
 }
 
@@ -106,6 +107,11 @@ export function analyzePriceObservations(rows: TrustedPriceObservation[], option
       ? knownQuantity.reduce((sum, row) => sum + row.quantity!, 0) * 30 / options.lookbackDays
       : null;
     const monthlyImpact = monthlyQuantity == null ? null : absoluteChange * monthlyQuantity;
+    let consecutiveIncreases = 0;
+    for (let index = observations.length - 1; index > 0; index -= 1) {
+      if (observations[index].unitPrice! <= observations[index - 1].unitPrice!) break;
+      consecutiveIncreases += 1;
+    }
     const [, product, basis] = groupKey.match(/^([^|]+)\|(.*)\|(unit:.*)$/) ?? [];
     const itemKey = opaqueItemKey(current.vendorId, product, basis);
     items.push({
@@ -125,6 +131,7 @@ export function analyzePriceObservations(rows: TrustedPriceObservation[], option
       estimatedAnnualImpact: monthlyImpact == null ? null : rounded(monthlyImpact * 12),
       firstSeenAt: observations[0].invoiceDate.toISOString(),
       latestSeenAt: current.invoiceDate.toISOString(),
+      consecutiveIncreases,
       history: observations.map((row) => ({
         date: row.invoiceDate.toISOString(),
         invoiceId: row.invoiceId,

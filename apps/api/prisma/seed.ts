@@ -103,6 +103,23 @@ const downtownRecent: readonly ExpenseRecipe[] = [
   ['equipment', .003, 'restaurant depot', 'Small equipment'],
 ];
 
+// Current-month demo pressure creates deterministic Needs Attention signals
+// without changing any non-demo organization data.
+const downtownCurrent: readonly ExpenseRecipe[] = downtownRecent.map(
+  ([slug, ratio, vendor, description]) => [
+    slug,
+    slug === 'food'
+      ? .37
+      : slug === 'labor'
+      ? .40
+      : slug === 'utilities'
+      ? .033
+      : ratio,
+    vendor,
+    description,
+  ],
+);
+
 const lakesideStable: readonly ExpenseRecipe[] = [
   ['food', .26, 'local produce co.', 'Food inventory'],
   ['labor', .27, 'adp', 'Hourly and salaried labor'],
@@ -297,6 +314,9 @@ async function main() {
         ? bangkokCuisineStable
         : locationId === lakesideId
         ? lakesideStable
+        : date.getUTCFullYear() === seedToday.getUTCFullYear() &&
+          date.getUTCMonth() === seedToday.getUTCMonth()
+        ? downtownCurrent
         : isRecent
         ? downtownRecent
         : downtownPrevious;

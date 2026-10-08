@@ -81,6 +81,15 @@ purchase. Defaults are a 90-day lookback, a 5% change, and a $0.50 absolute
 change, configurable through `PRICE_CHANGE_PERCENT_THRESHOLD` and
 `PRICE_CHANGE_ABSOLUTE_THRESHOLD`.
 
+`GET /api/v1/needs-attention` computes location-scoped, explainable issues from
+reviewed item-price history and authoritative dashboard, vendor, and expense
+data. It compares the selected financial period with the immediately preceding
+equal-length period. Detection and severity are deterministic; thresholds for
+food/labor percentage-point deterioration, vendor/category increases, and
+severity score bands are centralized in the environment variables documented
+in `.env.example`. The summary only totals item-level price impact so overlapping
+vendor and category changes are not double-counted.
+
 ## Data architecture
 
 `User → OrganizationMember → Organization → RestaurantLocation` is the access hierarchy. Financial/domain models are already created with UUIDs, `organizationId`, location keys where applicable, timestamps, money as PostgreSQL `Decimal(14,2)`, and lookup indexes. System expense categories are seeded. Refresh tokens are hashed, persisted, rotated, and revocable; an audit log records organization/location/member mutations.
