@@ -92,6 +92,7 @@ void main() {
     expect(find.text('Downtown Grill'), findsOneWidget);
     expect(find.text('demo@profitlens.local'), findsOneWidget);
     expect(find.text('Owner'), findsOneWidget);
+    await tester.scrollUntilVisible(find.text('Version'), 250);
     expect(find.text('1.2.3'), findsOneWidget);
     expect(find.text('45'), findsOneWidget);
   });
@@ -121,6 +122,8 @@ void main() {
     dio.options.headers['Authorization'] = 'Bearer access-token';
     final container = await pumpMore(tester, dio: dio);
 
+    await tester.drag(find.byType(ListView), const Offset(0, -300));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Sign Out'));
     await tester.pumpAndSettle();
 

@@ -84,6 +84,42 @@ enum ReviewStatus {
  NEEDS_REVIEW
  REVIEWED
 }
+enum BankProvider {
+ PLAID
+ DEMO
+}
+enum BankConnectionStatus {
+ CONNECTED
+ SYNCING
+ NEEDS_ATTENTION
+ DISCONNECTED
+ ERROR
+}
+enum BankReconciliationStatus {
+ UNMATCHED
+ MATCHED_INVOICE
+ MATCHED_EXPENSE
+ NEEDS_REVIEW
+ IGNORED
+}
+enum BankCategorizationSource {
+ PROVIDER
+ MERCHANT_RULE
+ USER_RULE
+ INVOICE_MATCH
+ MANUAL
+ UNRESOLVED
+}
+enum InvoiceMatchConfidence {
+ EXACT
+ LIKELY
+ NO_MATCH
+}
+enum MerchantRuleMatchType {
+ EXACT
+ PREFIX
+ CONTAINS
+}
 model User {
  id String @id @default(uuid())
  email String @unique
@@ -95,6 +131,8 @@ model User {
  memberships OrganizationMember[]
  refreshTokens RefreshToken[]
  auditLogs AuditLog[]
+ bankConnections BankConnection[]
+ merchantRules MerchantRule[]
 }
 model Organization {
  id String @id @default(uuid())
@@ -104,6 +142,10 @@ model Organization {
  memberships OrganizationMember[]
  locations RestaurantLocation[]
  categories ExpenseCategory[]
+ bankConnections BankConnection[]
+ bankAccounts BankAccount[]
+ bankTransactions BankTransaction[]
+ merchantRules MerchantRule[]
 }
 model OrganizationMember {
  id String @id @default(uuid())
@@ -127,6 +169,9 @@ model RestaurantLocation {
  createdAt DateTime @default(now())
  updatedAt DateTime @updatedAt
  organization Organization @relation(fields:[organizationId],references:[id],onDelete:Cascade)
+ bankAccounts BankAccount[]
+ bankTransactions BankTransaction[]
+ merchantRules MerchantRule[]
  @@index([organizationId])
 }
 model ExpenseCategory {
@@ -139,6 +184,8 @@ model ExpenseCategory {
  createdAt DateTime @default(now())
  updatedAt DateTime @updatedAt
  organization Organization? @relation(fields:[organizationId],references:[id],onDelete:Cascade)
+ bankTransactions BankTransaction[]
+ merchantRules MerchantRule[]
  @@index([organizationId,slug])
 }
 model RefreshToken {
@@ -194,6 +241,7 @@ model Expense {
  createdByUserId String?
  createdAt DateTime @default(now())
  updatedAt DateTime @updatedAt
+ bankTransactions BankTransaction[]
  @@index([organizationId,restaurantLocationId,date])
  @@index([vendorId])
  @@index([expenseCategoryId])
@@ -209,6 +257,8 @@ model Vendor {
  notes String?
  createdAt DateTime @default(now())
  updatedAt DateTime @updatedAt
+ bankTransactions BankTransaction[]
+ merchantRules MerchantRule[]
  @@unique([organizationId,normalizedName])
 }
 model Invoice {
@@ -245,6 +295,7 @@ model Invoice {
  createdAt DateTime @default(now())
  updatedAt DateTime @updatedAt
  lineItems InvoiceLineItem[]
+ bankTransactions BankTransaction[]
  @@index([organizationId,restaurantLocationId])
  @@index([restaurantLocationId,invoiceDate])
 }
@@ -353,4 +404,106 @@ model Notification {
  readAt DateTime?
  createdAt DateTime @default(now())
  updatedAt DateTime @updatedAt
+}
+
+model BankConnection {
+ id String @id @default(uuid())
+ organizationId String
+ provider BankProvider
+ providerItemId String
+ encryptedAccessToken String
+ institutionId String?
+ institutionName String?
+ status BankConnectionStatus @default(CONNECTED)
+ syncCursor String?
+ lastSyncAt DateTime?
+ lastError String?
+ createdByUserId String
+ createdAt DateTime @default(now())
+ updatedAt DateTime @updatedAt
+ organization Organization @relation(fields:[organizationId],references:[id],onDelete:Cascade)
+ createdBy User @relation(fields:[createdByUserId],references:[id],onDelete:Restrict)
+ accounts BankAccount[]
+ @@unique([provider,providerItemId])
+ @@index([organizationId,status])
+}
+
+model BankAccount {
+ id String @id @default(uuid())
+ bankConnectionId String
+ organizationId String
+ restaurantLocationId String?
+ providerAccountId String
+ name String
+ mask String?
+ subtype String?
+ type String?
+ active Boolean @default(true)
+ createdAt DateTime @default(now())
+ updatedAt DateTime @updatedAt
+ connection BankConnection @relation(fields:[bankConnectionId],references:[id],onDelete:Cascade)
+ organization Organization @relation(fields:[organizationId],references:[id],onDelete:Cascade)
+ restaurantLocation RestaurantLocation? @relation(fields:[restaurantLocationId],references:[id],onDelete:SetNull)
+ transactions BankTransaction[]
+ @@unique([bankConnectionId,providerAccountId])
+ @@index([organizationId,restaurantLocationId])
+}
+
+model BankTransaction {
+ id String @id @default(uuid())
+ organizationId String
+ restaurantLocationId String?
+ bankAccountId String
+ providerTransactionId String
+ postedDate DateTime
+ authorizedDate DateTime?
+ merchantNameRaw String?
+ merchantNameNormalized String?
+ description String
+ amount Decimal @db.Decimal(14,2)
+ pending Boolean @default(false)
+ providerCategory String?
+ providerCategoryId String?
+ categoryId String?
+ vendorId String?
+ invoiceId String?
+ suggestedInvoiceId String?
+ expenseId String?
+ matchConfidence InvoiceMatchConfidence @default(NO_MATCH)
+ reconciliationStatus BankReconciliationStatus @default(UNMATCHED)
+ categorizationSource BankCategorizationSource @default(UNRESOLVED)
+ removedAt DateTime?
+ createdAt DateTime @default(now())
+ updatedAt DateTime @updatedAt
+ organization Organization @relation(fields:[organizationId],references:[id],onDelete:Cascade)
+ restaurantLocation RestaurantLocation? @relation(fields:[restaurantLocationId],references:[id],onDelete:SetNull)
+ bankAccount BankAccount @relation(fields:[bankAccountId],references:[id],onDelete:Cascade)
+ category ExpenseCategory? @relation(fields:[categoryId],references:[id],onDelete:SetNull)
+ vendor Vendor? @relation(fields:[vendorId],references:[id],onDelete:SetNull)
+ invoice Invoice? @relation(fields:[invoiceId],references:[id],onDelete:SetNull)
+ expense Expense? @relation(fields:[expenseId],references:[id],onDelete:SetNull)
+ @@unique([bankAccountId,providerTransactionId])
+ @@index([organizationId,restaurantLocationId,reconciliationStatus,postedDate])
+ @@index([invoiceId])
+ @@index([suggestedInvoiceId])
+}
+
+model MerchantRule {
+ id String @id @default(uuid())
+ organizationId String
+ matchType MerchantRuleMatchType
+ matchValue String
+ normalizedMerchantName String
+ vendorId String?
+ expenseCategoryId String?
+ restaurantLocationId String?
+ createdByUserId String
+ createdAt DateTime @default(now())
+ updatedAt DateTime @updatedAt
+ organization Organization @relation(fields:[organizationId],references:[id],onDelete:Cascade)
+ vendor Vendor? @relation(fields:[vendorId],references:[id],onDelete:SetNull)
+ expenseCategory ExpenseCategory? @relation(fields:[expenseCategoryId],references:[id],onDelete:SetNull)
+ restaurantLocation RestaurantLocation? @relation(fields:[restaurantLocationId],references:[id],onDelete:Cascade)
+ createdBy User @relation(fields:[createdByUserId],references:[id],onDelete:Restrict)
+ @@index([organizationId,restaurantLocationId,matchType,matchValue])
 }

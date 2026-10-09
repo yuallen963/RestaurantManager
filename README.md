@@ -101,3 +101,12 @@ vendor and category changes are not double-counted.
 ## CSV format
 
 Revenue uses `date,amount,notes`; expenses use `date,vendor,category,amount,description`. See `examples/revenue-import.csv` and `examples/expense-import.csv`. The current schema provides durable `Import` and `ImportRow` staging records for a worker-backed upload processor; production import execution should be added with BullMQ and local/S3 storage rather than processing files in an HTTP request.
+# Bank transaction foundation
+
+Bank connections use Plaid's server-created Link token, public-token exchange, and cursor-based Transactions Sync flow. Set `BANK_PROVIDER=demo` for deterministic development data without contacting Plaid. Production credentials remain server-only, and provider access tokens are encrypted with AES-256-GCM using `BANK_TOKEN_ENCRYPTION_KEY`.
+
+Imported transaction amounts follow one convention throughout the API: positive values are debits/spending and negative values are credits/income. Unassigned accounts remain organization-scoped and their transactions require review before they can affect location workflows. Bank imports never create expenses automatically, so an invoice or expense cannot be counted twice.
+
+The initial Plaid request asks for 90 days of transaction history. Incremental synchronization persists Plaid's cursor and applies added, modified, and removed records. Rotate the encryption key by decrypting every stored token with the old key and re-encrypting it with the new key in one controlled maintenance operation; replacing the environment variable alone will make existing connections unreadable.
+
+Plaid webhooks are intentionally deferred in this foundation. Until ES256 JWT signature, timestamp, and raw-body hash verification are added, no public webhook endpoint is exposed or trusted; users can run **Sync now**, and every connection also retains its incremental cursor for scheduled server-side syncing. Do not enable an unauthenticated webhook route.

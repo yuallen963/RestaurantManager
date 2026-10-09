@@ -42,6 +42,7 @@ dependencies:
   cupertino_icons: ^1.0.8
   file_picker: ^11.0.3
   image_picker: ^1.2.4
+  plaid_link_flutter: ^1.0.0
 
 dev_dependencies:
   flutter_test:

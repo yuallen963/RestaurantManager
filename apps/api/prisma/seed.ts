@@ -337,6 +337,8 @@ async function main() {
   }
 
   await prisma.$transaction([
+    prisma.merchantRule.deleteMany({ where: { organizationId: demoOrgId } }),
+    prisma.bankConnection.deleteMany({ where: { organizationId: demoOrgId } }),
     prisma.revenueEntry.deleteMany({ where: { organizationId: demoOrgId } }),
     prisma.expense.deleteMany({ where: { organizationId: demoOrgId } }),
   ]);
@@ -403,12 +405,14 @@ async function main() {
     const invoiceDate = new Date(seedToday);
     invoiceDate.setUTCDate(seedToday.getUTCDate() - seeded.daysAgo);
     const selectedVendorId = vendorId(seeded.vendor)!;
+    const invoiceTotal = seeded.lines.reduce((sum, line) => sum + line.quantity * line.unitPrice, 0);
     await prisma.invoice.upsert({
       where: { id: seeded.id },
       update: {
         restaurantLocationId: downtownId,
         vendorId: selectedVendorId,
         invoiceDate,
+        total: new Prisma.Decimal(invoiceTotal),
         status: InvoiceStatus.COMPLETED,
         extractionStatus: ExtractionStatus.COMPLETED,
         reviewStatus: ReviewStatus.REVIEWED,
@@ -426,6 +430,7 @@ async function main() {
         fileSize: 1,
         storageKey: `synthetic-price-history/${seeded.id}.pdf`,
         invoiceDate,
+        total: new Prisma.Decimal(invoiceTotal),
         status: InvoiceStatus.COMPLETED,
         extractionStatus: ExtractionStatus.COMPLETED,
         reviewStatus: ReviewStatus.REVIEWED,

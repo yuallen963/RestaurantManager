@@ -7,6 +7,7 @@ import '../dashboard/foundation.dart';
 import '../dashboard/home_screen.dart';
 import '../invoices/invoice_screens.dart';
 import '../price_intelligence/price_changes_screen.dart';
+import '../banking/bank_screens.dart';
 import 'foundation.dart';
 
 class ExpensesScreen extends ConsumerStatefulWidget {
@@ -217,6 +218,17 @@ class _ExpenseHeader extends ConsumerWidget {
             spacing: 8,
             runSpacing: 8,
             children: [
+              OutlinedButton.icon(
+                key: const Key('open-bank-transactions'),
+                onPressed: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => const BankTransactionsScreen(),
+                  ),
+                ),
+                icon: const Icon(Icons.account_balance),
+                label: const Text('Bank Transactions'),
+              ),
               OutlinedButton.icon(
                 key: const Key('open-price-changes'),
                 onPressed: () => Navigator.push(
