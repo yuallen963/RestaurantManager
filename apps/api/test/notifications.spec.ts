@@ -1,9 +1,18 @@
 import { NotificationSeverity, NotificationType, Prisma } from '@prisma/client';
 import { NotificationEvaluator } from '../src/notifications/notification-evaluator.service';
 import { NotificationsService } from '../src/notifications/notifications.service';
+import { NotificationQuery } from '../src/notifications/dto';
+import { plainToInstance } from 'class-transformer';
+import { validate } from 'class-validator';
 
 describe('notification backend', () => {
   const preference = { pushEnabled: true, quietHoursStart: '22:00', quietHoursEnd: '07:00', timezone: 'America/Detroit', priceAlertsEnabled: true, savingsAlertsEnabled: true, costAlertsEnabled: true, syncAlertsEnabled: true, weeklyDigestEnabled: true };
+
+  it('accepts the unread-only HTTP query value', async () => {
+    const query = plainToInstance(NotificationQuery, { unreadOnly: 'true' });
+    expect(await validate(query)).toHaveLength(0);
+    expect(query.unreadOnly).toBe(true);
+  });
 
   it('uses timezone-aware quiet hours and lets high severity operational alerts through', () => {
     const service = new NotificationsService({} as any, {} as any, {} as any);
