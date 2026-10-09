@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../main.dart' show AuthScreen, demoModeProvider;
 import '../dashboard/foundation.dart';
 import '../banking/bank_screens.dart';
+import '../invoice_email/invoice_email_screen.dart';
 import 'foundation.dart';
 
 class MoreScreen extends ConsumerStatefulWidget {
@@ -92,6 +93,20 @@ class _MoreScreenState extends ConsumerState<MoreScreen> {
             ),
             if (demoMode) const Chip(label: Text('Demo Mode')),
           ],
+        ),
+        const SizedBox(height: 20),
+        _Section(
+          title: 'Invoices',
+          child: _InfoTile(
+            icon: Icons.forward_to_inbox_outlined,
+            label: 'Invoice Email',
+            value: 'Forward vendor invoice attachments',
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const InvoiceEmailScreen()),
+            ),
+          ),
         ),
         const SizedBox(height: 20),
         _Section(

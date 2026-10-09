@@ -25,7 +25,7 @@ describe('invoice extraction', () => {
     await processor.process('inv', 'user');
     expect(tx.invoiceLineItem.deleteMany).toHaveBeenCalledWith({ where: { invoiceId: 'inv' } });
     expect(tx.invoiceLineItem.createMany).toHaveBeenCalledWith(expect.objectContaining({ data: [expect.objectContaining({ rawDescription: 'CHKN BRST BNLS SKLS 4/10 LB', quantity: expect.anything(), extendedPrice: expect.anything() })] }));
-    expect(tx.invoice.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ extractionStatus: ExtractionStatus.COMPLETED, reviewStatus: ReviewStatus.NOT_REVIEWED, extractedVendorName: 'Sysco' }) }));
+    expect(tx.invoice.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ extractionStatus: ExtractionStatus.COMPLETED, reviewStatus: ReviewStatus.NOT_REVIEWED, extractedVendorName: 'Sysco', invoiceDate: new Date('2026-10-04T00:00:00.000Z') }) }));
   });
 
   it('records a failed extraction without persisting raw content to audit metadata', async () => {

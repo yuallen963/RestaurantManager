@@ -33,6 +33,7 @@ class InvoiceRecord {
     this.extractionConfidence,
     this.extractionError,
     this.reviewStatus = 'NOT_REVIEWED',
+    this.ingestionSource = 'MANUAL_UPLOAD',
   });
   final String id, restaurantLocationId, fileName, fileType, status;
   final int fileSize;
@@ -41,6 +42,7 @@ class InvoiceRecord {
   final DateTime createdAt;
   final double? subtotal, tax, total;
   final String extractionStatus, reviewStatus;
+  final String ingestionSource;
   final double? extractionConfidence;
   final String? extractionError;
   factory InvoiceRecord.fromJson(Map<String, dynamic> json) => InvoiceRecord(
@@ -65,6 +67,7 @@ class InvoiceRecord {
     extractionConfidence: _money(json['extractionConfidence']),
     extractionError: json['extractionError'] as String?,
     reviewStatus: json['reviewStatus'] as String? ?? 'NOT_REVIEWED',
+    ingestionSource: json['ingestionSource'] as String? ?? 'MANUAL_UPLOAD',
   );
 }
 

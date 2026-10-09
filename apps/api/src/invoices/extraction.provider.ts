@@ -45,7 +45,7 @@ export class InvoiceExtractionProvider {
     const response = await client.responses.parse({
       model,
       store: false,
-      input: [{ role: 'user', content: [document as any, { type: 'input_text', text: 'Extract this restaurant vendor invoice. Preserve every line item raw description exactly as printed. Use null when a value is absent. List field names in uncertainFields only when the document is ambiguous; do not invent confidence scores or values. Categories are suggestions only.' }] }],
+      input: [{ role: 'user', content: [document as any, { type: 'input_text', text: `Extract this restaurant vendor invoice, including every page in page order as one invoice. Preserve every line item raw description exactly as printed. Normalize invoiceDate to YYYY-MM-DD. If a printed date omits its year, infer the current year only when the result is clearly recent and unambiguous; otherwise return null and include invoiceDate in uncertainFields. Use null when a value is absent. List field names in uncertainFields only when the document is ambiguous; do not invent confidence scores or values. Categories are suggestions only. Today is ${new Date().toISOString().slice(0, 10)}.` }] }],
       text: { format: zodTextFormat(ExtractedInvoiceSchema, 'restaurant_invoice') },
     });
     if (!response.output_parsed) throw new Error('Extraction provider returned no structured result');

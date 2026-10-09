@@ -142,6 +142,35 @@ void main() {
     expect(find.text('Uploaded'), findsOneWidget);
   });
 
+  testWidgets('email-ingested invoice shows its source in list and detail', (
+    tester,
+  ) async {
+    final emailed = InvoiceRecord(
+      id: 'email-invoice',
+      restaurantLocationId: 'loc-a',
+      fileName: 'forwarded.pdf',
+      fileType: 'application/pdf',
+      fileSize: 2048,
+      status: 'UPLOADED',
+      createdAt: DateTime(2026, 10, 4),
+      ingestionSource: 'EMAIL_FORWARD',
+    );
+    await tester.pumpWidget(
+      app([
+        invoiceListProvider.overrideWith((_) async => [emailed]),
+        invoiceDetailProvider(
+          'email-invoice',
+        ).overrideWith((_) async => emailed),
+      ], const InvoiceListScreen()),
+    );
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Email •'), findsOneWidget);
+    await tester.tap(find.text('forwarded.pdf'));
+    await tester.pumpAndSettle();
+    expect(find.text('Source'), findsOneWidget);
+    expect(find.text('Email'), findsOneWidget);
+  });
+
   testWidgets('invoice list shows error and retry', (tester) async {
     await tester.pumpWidget(
       app([

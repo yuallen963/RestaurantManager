@@ -98,6 +98,11 @@ enum ReviewStatus {
   REVIEWED
 }
 
+enum InvoiceIngestionSource {
+  MANUAL_UPLOAD
+  EMAIL_FORWARD
+}
+
 enum BankProvider {
   PLAID
   DEMO
@@ -207,6 +212,7 @@ model RestaurantLocation {
   postalCode            String?
   createdAt             DateTime               @default(now())
   updatedAt             DateTime               @updatedAt
+  invoiceEmailToken     String                 @unique
   organization          Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   bankAccounts          BankAccount[]
   bankTransactions      BankTransaction[]
@@ -319,44 +325,53 @@ model Vendor {
 }
 
 model Invoice {
-  id                    String            @id @default(uuid())
-  organizationId        String
-  restaurantLocationId  String
-  vendorId              String?
-  extractedVendorName   String?
-  fileName              String
-  originalFileName      String
-  fileType              String
-  fileSize              Int
-  storageKey            String
-  invoiceNumber         String?
-  invoiceDate           DateTime?
-  subtotal              Decimal?          @db.Decimal(14, 2)
-  tax                   Decimal?          @db.Decimal(14, 2)
-  total                 Decimal?          @db.Decimal(14, 2)
-  notes                 String?
-  status                InvoiceStatus     @default(UPLOADED)
-  createdByUserId       String
-  extractionStatus      ExtractionStatus  @default(NOT_STARTED)
-  extractionProvider    String?
-  extractionModel       String?
-  extractionConfidence  Decimal?          @db.Decimal(5, 4)
-  extractionStartedAt   DateTime?
-  extractionCompletedAt DateTime?
-  extractionError       String?
-  rawExtractionJson     Json?
-  extractionUsage       Json?
-  reviewStatus          ReviewStatus      @default(NOT_REVIEWED)
-  reviewedAt            DateTime?
-  reviewedByUserId      String?
-  createdAt             DateTime          @default(now())
-  updatedAt             DateTime          @updatedAt
-  lineItems             InvoiceLineItem[]
-  vendor                Vendor?           @relation(fields: [vendorId], references: [id], onDelete: SetNull)
-  bankTransactions      BankTransaction[]
+  id                     String                 @id @default(uuid())
+  organizationId         String
+  restaurantLocationId   String
+  vendorId               String?
+  extractedVendorName    String?
+  fileName               String
+  originalFileName       String
+  fileType               String
+  fileSize               Int
+  storageKey             String
+  invoiceNumber          String?
+  invoiceDate            DateTime?
+  subtotal               Decimal?               @db.Decimal(14, 2)
+  tax                    Decimal?               @db.Decimal(14, 2)
+  total                  Decimal?               @db.Decimal(14, 2)
+  notes                  String?
+  status                 InvoiceStatus          @default(UPLOADED)
+  ingestionSource        InvoiceIngestionSource @default(MANUAL_UPLOAD)
+  inboundMessageId       String?
+  inboundSender          String?
+  inboundSubject         String?
+  inboundReceivedAt      DateTime?
+  originalAttachmentName String?
+  attachmentHash         String?
+  createdByUserId        String
+  extractionStatus       ExtractionStatus       @default(NOT_STARTED)
+  extractionProvider     String?
+  extractionModel        String?
+  extractionConfidence   Decimal?               @db.Decimal(5, 4)
+  extractionStartedAt    DateTime?
+  extractionCompletedAt  DateTime?
+  extractionError        String?
+  rawExtractionJson      Json?
+  extractionUsage        Json?
+  reviewStatus           ReviewStatus           @default(NOT_REVIEWED)
+  reviewedAt             DateTime?
+  reviewedByUserId       String?
+  createdAt              DateTime               @default(now())
+  updatedAt              DateTime               @updatedAt
+  lineItems              InvoiceLineItem[]
+  vendor                 Vendor?                @relation(fields: [vendorId], references: [id], onDelete: SetNull)
+  bankTransactions       BankTransaction[]
 
+  @@unique([organizationId, restaurantLocationId, attachmentHash])
   @@index([organizationId, restaurantLocationId])
   @@index([restaurantLocationId, invoiceDate])
+  @@index([organizationId, restaurantLocationId, inboundMessageId])
 }
 
 model InvoiceLineItem {

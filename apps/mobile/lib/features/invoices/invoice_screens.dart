@@ -73,7 +73,7 @@ class InvoiceListScreen extends ConsumerWidget {
                   child: ListTile(
                     title: Text(invoice.vendorName ?? invoice.fileName),
                     subtitle: Text(
-                      '${_date(invoice.invoiceDate ?? invoice.createdAt)}\n'
+                      '${invoice.ingestionSource == 'EMAIL_FORWARD' ? 'Email' : 'Manual Upload'} • ${_date(invoice.invoiceDate ?? invoice.createdAt)}\n'
                       '${invoice.total == null ? 'Total not entered' : formatCurrency(invoice.total!)}',
                     ),
                     isThreeLine: true,
@@ -261,6 +261,12 @@ class InvoiceDetailScreen extends ConsumerWidget {
           error: (_, _) => const Center(child: Text('Unable to load invoice')),
           data: (invoice) {
             final rows = <MapEntry<String, String>>[
+              MapEntry(
+                'Source',
+                invoice.ingestionSource == 'EMAIL_FORWARD'
+                    ? 'Email'
+                    : 'Manual Upload',
+              ),
               MapEntry('Vendor', invoice.vendorName ?? 'Not selected'),
               MapEntry(
                 'Invoice number',

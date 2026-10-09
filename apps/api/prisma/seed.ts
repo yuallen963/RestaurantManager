@@ -219,9 +219,9 @@ async function main() {
       role: OrganizationRole.OWNER,
     },
   });
-  for (const [id, name, addressLine1, city, state, postalCode] of [
-    [downtownId, 'Downtown Grill', null, null, null, null],
-    [lakesideId, 'Lakeside Grill', null, null, null, null],
+  for (const [id, name, addressLine1, city, state, postalCode, invoiceEmailToken] of [
+    [downtownId, 'Downtown Grill', null, null, null, null, 'd84f7c9a61e24337b95d5b822e48a3f1'],
+    [lakesideId, 'Lakeside Grill', null, null, null, null, 'a39e1c72f5b64b62941da52f8c17e604'],
     [
       bangkokCuisineId,
       'Bangkok Cuisine',
@@ -229,11 +229,12 @@ async function main() {
       'Rochester',
       'MI',
       '48307',
+      'f71b3d9c82a64e09a45c1d37b8e260af',
     ],
   ] as const) {
     await prisma.restaurantLocation.upsert({
       where: { id },
-      update: { name, addressLine1, city, state, postalCode },
+      update: { name, addressLine1, city, state, postalCode, invoiceEmailToken },
       create: {
         id,
         name,
@@ -242,6 +243,7 @@ async function main() {
         city,
         state,
         postalCode,
+        invoiceEmailToken,
       },
     });
   }
