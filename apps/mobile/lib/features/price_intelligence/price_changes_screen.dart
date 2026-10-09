@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../dashboard/foundation.dart';
 import '../dashboard/home_screen.dart';
 import 'foundation.dart';
+import '../product_matches/product_matches_screen.dart';
 
 class PriceChangesScreen extends ConsumerWidget {
   const PriceChangesScreen({super.key});
@@ -14,7 +15,18 @@ class PriceChangesScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final location = ref.watch(activeLocationProvider);
     return Scaffold(
-      appBar: AppBar(title: const Text('Price Changes')),
+      appBar: AppBar(
+        title: const Text('Price Changes'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const ProductMatchesScreen()),
+            ),
+            child: const Text('Product Matches'),
+          ),
+        ],
+      ),
       body: location == null
           ? ref
                 .watch(activeLocationStateProvider)

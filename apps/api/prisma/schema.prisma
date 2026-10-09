@@ -1,509 +1,642 @@
 generator client {
- provider = "prisma-client-js"
+  provider = "prisma-client-js"
 }
+
 datasource db {
- provider = "postgresql"
- url = env("DATABASE_URL")
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
 }
+
 enum OrganizationRole {
- OWNER
- ADMIN
- MANAGER
- VIEWER
+  OWNER
+  ADMIN
+  MANAGER
+  VIEWER
 }
+
 enum ImportStatus {
- PENDING
- UPLOADING
- PROCESSING
- REVIEW_REQUIRED
- COMPLETED
- FAILED
+  PENDING
+  UPLOADING
+  PROCESSING
+  REVIEW_REQUIRED
+  COMPLETED
+  FAILED
 }
+
 enum RevenueSource {
- MANUAL
- CSV_IMPORT
- POS_IMPORT
- OTHER
+  MANUAL
+  CSV_IMPORT
+  POS_IMPORT
+  OTHER
 }
+
 enum ExpenseSource {
- MANUAL
- CSV_IMPORT
- INVOICE
- BANK_IMPORT
- OTHER
+  MANUAL
+  CSV_IMPORT
+  INVOICE
+  BANK_IMPORT
+  OTHER
 }
+
 enum ExpenseClassification {
- FOOD
- BEVERAGE
- LABOR
- PAYROLL_TAX
- OCCUPANCY
- UTILITIES
- DELIVERY
- FEES
- OPERATING
- OTHER
+  FOOD
+  BEVERAGE
+  LABOR
+  PAYROLL_TAX
+  OCCUPANCY
+  UTILITIES
+  DELIVERY
+  FEES
+  OPERATING
+  OTHER
 }
+
 enum ImportType {
- REVENUE_CSV
- EXPENSE_CSV
+  REVENUE_CSV
+  EXPENSE_CSV
 }
+
 enum ImportRowStatus {
- PENDING
- VALID
- INVALID
- IMPORTED
- SKIPPED
+  PENDING
+  VALID
+  INVALID
+  IMPORTED
+  SKIPPED
 }
+
 enum InsightStatus {
- ACTIVE
- DISMISSED
- RESOLVED
+  ACTIVE
+  DISMISSED
+  RESOLVED
 }
+
 enum InsightSeverity {
- INFO
- LOW
- MEDIUM
- HIGH
- CRITICAL
+  INFO
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
 }
+
 enum InvoiceStatus {
- UPLOADED
- PROCESSING
- COMPLETED
- FAILED
+  UPLOADED
+  PROCESSING
+  COMPLETED
+  FAILED
 }
+
 enum ExtractionStatus {
- NOT_STARTED
- PROCESSING
- COMPLETED
- FAILED
+  NOT_STARTED
+  PROCESSING
+  COMPLETED
+  FAILED
 }
+
 enum ReviewStatus {
- NOT_REVIEWED
- NEEDS_REVIEW
- REVIEWED
+  NOT_REVIEWED
+  NEEDS_REVIEW
+  REVIEWED
 }
+
 enum BankProvider {
- PLAID
- DEMO
+  PLAID
+  DEMO
 }
+
 enum BankConnectionStatus {
- CONNECTED
- SYNCING
- NEEDS_ATTENTION
- DISCONNECTED
- ERROR
+  CONNECTED
+  SYNCING
+  NEEDS_ATTENTION
+  DISCONNECTED
+  ERROR
 }
+
 enum BankReconciliationStatus {
- UNMATCHED
- MATCHED_INVOICE
- MATCHED_EXPENSE
- NEEDS_REVIEW
- IGNORED
+  UNMATCHED
+  MATCHED_INVOICE
+  MATCHED_EXPENSE
+  NEEDS_REVIEW
+  IGNORED
 }
+
 enum BankCategorizationSource {
- PROVIDER
- MERCHANT_RULE
- USER_RULE
- INVOICE_MATCH
- MANUAL
- UNRESOLVED
+  PROVIDER
+  MERCHANT_RULE
+  USER_RULE
+  INVOICE_MATCH
+  MANUAL
+  UNRESOLVED
 }
+
 enum InvoiceMatchConfidence {
- EXACT
- LIKELY
- NO_MATCH
+  EXACT
+  LIKELY
+  NO_MATCH
 }
+
 enum MerchantRuleMatchType {
- EXACT
- PREFIX
- CONTAINS
+  EXACT
+  PREFIX
+  CONTAINS
 }
+
+enum ProductMatchStatus {
+  PENDING
+  CONFIRMED
+  REJECTED
+}
+
+enum ProductMatchConfidence {
+  HIGH
+  MEDIUM
+  LOW
+}
+
 model User {
- id String @id @default(uuid())
- email String @unique
- passwordHash String
- firstName String?
- lastName String?
- createdAt DateTime @default(now())
- updatedAt DateTime @updatedAt
- memberships OrganizationMember[]
- refreshTokens RefreshToken[]
- auditLogs AuditLog[]
- bankConnections BankConnection[]
- merchantRules MerchantRule[]
+  id                    String                 @id @default(uuid())
+  email                 String                 @unique
+  passwordHash          String
+  firstName             String?
+  lastName              String?
+  createdAt             DateTime               @default(now())
+  updatedAt             DateTime               @updatedAt
+  memberships           OrganizationMember[]
+  refreshTokens         RefreshToken[]
+  auditLogs             AuditLog[]
+  bankConnections       BankConnection[]
+  merchantRules         MerchantRule[]
+  productMatchDecisions ProductMatchDecision[]
 }
+
 model Organization {
- id String @id @default(uuid())
- name String
- createdAt DateTime @default(now())
- updatedAt DateTime @updatedAt
- memberships OrganizationMember[]
- locations RestaurantLocation[]
- categories ExpenseCategory[]
- bankConnections BankConnection[]
- bankAccounts BankAccount[]
- bankTransactions BankTransaction[]
- merchantRules MerchantRule[]
+  id                    String                 @id @default(uuid())
+  name                  String
+  createdAt             DateTime               @default(now())
+  updatedAt             DateTime               @updatedAt
+  memberships           OrganizationMember[]
+  locations             RestaurantLocation[]
+  categories            ExpenseCategory[]
+  bankConnections       BankConnection[]
+  bankAccounts          BankAccount[]
+  bankTransactions      BankTransaction[]
+  merchantRules         MerchantRule[]
+  productGroups         ProductGroup[]
+  productMatchDecisions ProductMatchDecision[]
 }
+
 model OrganizationMember {
- id String @id @default(uuid())
- userId String
- organizationId String
- role OrganizationRole @default(VIEWER)
- createdAt DateTime @default(now())
- user User @relation(fields:[userId],references:[id],onDelete:Cascade)
- organization Organization @relation(fields:[organizationId],references:[id],onDelete:Cascade)
- @@unique([userId,organizationId])
- @@index([organizationId,role])
+  id             String           @id @default(uuid())
+  userId         String
+  organizationId String
+  role           OrganizationRole @default(VIEWER)
+  createdAt      DateTime         @default(now())
+  user           User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, organizationId])
+  @@index([organizationId, role])
 }
+
 model RestaurantLocation {
- id String @id @default(uuid())
- organizationId String
- name String
- addressLine1 String?
- city String?
- state String?
- postalCode String?
- createdAt DateTime @default(now())
- updatedAt DateTime @updatedAt
- organization Organization @relation(fields:[organizationId],references:[id],onDelete:Cascade)
- bankAccounts BankAccount[]
- bankTransactions BankTransaction[]
- merchantRules MerchantRule[]
- @@index([organizationId])
+  id                    String                 @id @default(uuid())
+  organizationId        String
+  name                  String
+  addressLine1          String?
+  city                  String?
+  state                 String?
+  postalCode            String?
+  createdAt             DateTime               @default(now())
+  updatedAt             DateTime               @updatedAt
+  organization          Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  bankAccounts          BankAccount[]
+  bankTransactions      BankTransaction[]
+  merchantRules         MerchantRule[]
+  productGroups         ProductGroup[]
+  productMatchDecisions ProductMatchDecision[]
+
+  @@index([organizationId])
 }
+
 model ExpenseCategory {
- id String @id @default(uuid())
- organizationId String?
- name String
- slug String
- classification ExpenseClassification @default(OTHER)
- isSystem Boolean @default(false)
- createdAt DateTime @default(now())
- updatedAt DateTime @updatedAt
- organization Organization? @relation(fields:[organizationId],references:[id],onDelete:Cascade)
- bankTransactions BankTransaction[]
- merchantRules MerchantRule[]
- @@index([organizationId,slug])
+  id               String                @id @default(uuid())
+  organizationId   String?
+  name             String
+  slug             String
+  classification   ExpenseClassification @default(OTHER)
+  isSystem         Boolean               @default(false)
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+  organization     Organization?         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  bankTransactions BankTransaction[]
+  merchantRules    MerchantRule[]
+
+  @@index([organizationId, slug])
 }
+
 model RefreshToken {
- id String @id @default(uuid())
- userId String
- tokenHash String @unique
- expiresAt DateTime
- revokedAt DateTime?
- replacedByTokenId String?
- createdAt DateTime @default(now())
- user User @relation(fields:[userId],references:[id],onDelete:Cascade)
- @@index([userId,expiresAt])
+  id                String    @id @default(uuid())
+  userId            String
+  tokenHash         String    @unique
+  expiresAt         DateTime
+  revokedAt         DateTime?
+  replacedByTokenId String?
+  createdAt         DateTime  @default(now())
+  user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
 }
+
 model AuditLog {
- id String @id @default(uuid())
- userId String?
- organizationId String?
- action String
- entityType String
- entityId String?
- metadata Json?
- createdAt DateTime @default(now())
- user User? @relation(fields:[userId],references:[id],onDelete:SetNull)
- @@index([organizationId,createdAt])
+  id             String   @id @default(uuid())
+  userId         String?
+  organizationId String?
+  action         String
+  entityType     String
+  entityId       String?
+  metadata       Json?
+  createdAt      DateTime @default(now())
+  user           User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdAt])
 }
+
 model RevenueEntry {
- id String @id @default(uuid())
- organizationId String
- restaurantLocationId String
- amount Decimal @db.Decimal(14,2)
- date DateTime
- source RevenueSource @default(MANUAL)
- notes String?
- importId String?
- createdByUserId String?
- createdAt DateTime @default(now())
- updatedAt DateTime @updatedAt
- @@index([organizationId,restaurantLocationId,date])
- @@index([importId])
+  id                   String        @id @default(uuid())
+  organizationId       String
+  restaurantLocationId String
+  amount               Decimal       @db.Decimal(14, 2)
+  date                 DateTime
+  source               RevenueSource @default(MANUAL)
+  notes                String?
+  importId             String?
+  createdByUserId      String?
+  createdAt            DateTime      @default(now())
+  updatedAt            DateTime      @updatedAt
+
+  @@index([organizationId, restaurantLocationId, date])
+  @@index([importId])
 }
+
 model Expense {
- id String @id @default(uuid())
- organizationId String
- restaurantLocationId String
- vendorId String?
- expenseCategoryId String
- amount Decimal @db.Decimal(14,2)
- date DateTime
- description String?
- notes String?
- source ExpenseSource @default(MANUAL)
- importId String?
- createdByUserId String?
- createdAt DateTime @default(now())
- updatedAt DateTime @updatedAt
- bankTransactions BankTransaction[]
- @@index([organizationId,restaurantLocationId,date])
- @@index([vendorId])
- @@index([expenseCategoryId])
- @@index([importId])
+  id                   String            @id @default(uuid())
+  organizationId       String
+  restaurantLocationId String
+  vendorId             String?
+  expenseCategoryId    String
+  amount               Decimal           @db.Decimal(14, 2)
+  date                 DateTime
+  description          String?
+  notes                String?
+  source               ExpenseSource     @default(MANUAL)
+  importId             String?
+  createdByUserId      String?
+  createdAt            DateTime          @default(now())
+  updatedAt            DateTime          @updatedAt
+  bankTransactions     BankTransaction[]
+
+  @@index([organizationId, restaurantLocationId, date])
+  @@index([vendorId])
+  @@index([expenseCategoryId])
+  @@index([importId])
 }
+
 model Vendor {
- id String @id @default(uuid())
- organizationId String
- name String
- normalizedName String
- email String?
- phone String?
- notes String?
- createdAt DateTime @default(now())
- updatedAt DateTime @updatedAt
- bankTransactions BankTransaction[]
- merchantRules MerchantRule[]
- @@unique([organizationId,normalizedName])
+  id                  String               @id @default(uuid())
+  organizationId      String
+  name                String
+  normalizedName      String
+  email               String?
+  phone               String?
+  notes               String?
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  bankTransactions    BankTransaction[]
+  merchantRules       MerchantRule[]
+  productGroupMembers ProductGroupMember[]
+  invoices            Invoice[]
+
+  @@unique([organizationId, normalizedName])
 }
+
 model Invoice {
- id String @id @default(uuid())
- organizationId String
- restaurantLocationId String
- vendorId String?
- extractedVendorName String?
- fileName String
- originalFileName String
- fileType String
- fileSize Int
- storageKey String
- invoiceNumber String?
- invoiceDate DateTime?
- subtotal Decimal? @db.Decimal(14,2)
- tax Decimal? @db.Decimal(14,2)
- total Decimal? @db.Decimal(14,2)
- notes String?
- status InvoiceStatus @default(UPLOADED)
- createdByUserId String
- extractionStatus ExtractionStatus @default(NOT_STARTED)
- extractionProvider String?
- extractionModel String?
- extractionConfidence Decimal? @db.Decimal(5,4)
- extractionStartedAt DateTime?
- extractionCompletedAt DateTime?
- extractionError String?
- rawExtractionJson Json?
- extractionUsage Json?
- reviewStatus ReviewStatus @default(NOT_REVIEWED)
- reviewedAt DateTime?
- reviewedByUserId String?
- createdAt DateTime @default(now())
- updatedAt DateTime @updatedAt
- lineItems InvoiceLineItem[]
- bankTransactions BankTransaction[]
- @@index([organizationId,restaurantLocationId])
- @@index([restaurantLocationId,invoiceDate])
+  id                    String            @id @default(uuid())
+  organizationId        String
+  restaurantLocationId  String
+  vendorId              String?
+  extractedVendorName   String?
+  fileName              String
+  originalFileName      String
+  fileType              String
+  fileSize              Int
+  storageKey            String
+  invoiceNumber         String?
+  invoiceDate           DateTime?
+  subtotal              Decimal?          @db.Decimal(14, 2)
+  tax                   Decimal?          @db.Decimal(14, 2)
+  total                 Decimal?          @db.Decimal(14, 2)
+  notes                 String?
+  status                InvoiceStatus     @default(UPLOADED)
+  createdByUserId       String
+  extractionStatus      ExtractionStatus  @default(NOT_STARTED)
+  extractionProvider    String?
+  extractionModel       String?
+  extractionConfidence  Decimal?          @db.Decimal(5, 4)
+  extractionStartedAt   DateTime?
+  extractionCompletedAt DateTime?
+  extractionError       String?
+  rawExtractionJson     Json?
+  extractionUsage       Json?
+  reviewStatus          ReviewStatus      @default(NOT_REVIEWED)
+  reviewedAt            DateTime?
+  reviewedByUserId      String?
+  createdAt             DateTime          @default(now())
+  updatedAt             DateTime          @updatedAt
+  lineItems             InvoiceLineItem[]
+  vendor                Vendor?           @relation(fields: [vendorId], references: [id], onDelete: SetNull)
+  bankTransactions      BankTransaction[]
+
+  @@index([organizationId, restaurantLocationId])
+  @@index([restaurantLocationId, invoiceDate])
 }
+
 model InvoiceLineItem {
- id String @id @default(uuid())
- invoiceId String
- organizationId String
- restaurantLocationId String
- lineNumber Int
- rawDescription String
- normalizedName String?
- sku String?
- quantity Decimal? @db.Decimal(14,3)
- unit String?
- packSize String?
- unitPrice Decimal? @db.Decimal(14,2)
- extendedPrice Decimal? @db.Decimal(14,2)
- category String?
- confidence Decimal? @db.Decimal(5,4)
- createdAt DateTime @default(now())
- updatedAt DateTime @updatedAt
- invoice Invoice @relation(fields:[invoiceId],references:[id],onDelete:Cascade)
- @@unique([invoiceId,lineNumber])
- @@index([organizationId,restaurantLocationId])
+  id                      String                 @id @default(uuid())
+  invoiceId               String
+  organizationId          String
+  restaurantLocationId    String
+  lineNumber              Int
+  rawDescription          String
+  normalizedName          String?
+  sku                     String?
+  quantity                Decimal?               @db.Decimal(14, 3)
+  unit                    String?
+  packSize                String?
+  unitPrice               Decimal?               @db.Decimal(14, 2)
+  extendedPrice           Decimal?               @db.Decimal(14, 2)
+  category                String?
+  confidence              Decimal?               @db.Decimal(5, 4)
+  createdAt               DateTime               @default(now())
+  updatedAt               DateTime               @updatedAt
+  invoice                 Invoice                @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  productGroupMemberships ProductGroupMember[]
+  productMatchDecisionsA  ProductMatchDecision[] @relation("ProductMatchItemA")
+  productMatchDecisionsB  ProductMatchDecision[] @relation("ProductMatchItemB")
+
+  @@unique([invoiceId, lineNumber])
+  @@index([organizationId, restaurantLocationId])
 }
+
+model ProductGroup {
+  id                   String                 @id @default(uuid())
+  organizationId       String
+  restaurantLocationId String
+  displayName          String
+  createdAt            DateTime               @default(now())
+  updatedAt            DateTime               @updatedAt
+  organization         Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  restaurantLocation   RestaurantLocation     @relation(fields: [restaurantLocationId], references: [id], onDelete: Cascade)
+  members              ProductGroupMember[]
+  decisions            ProductMatchDecision[]
+
+  @@index([organizationId, restaurantLocationId])
+}
+
+model ProductGroupMember {
+  id                String          @id @default(uuid())
+  productGroupId    String
+  invoiceLineItemId String
+  vendorId          String
+  confirmed         Boolean         @default(true)
+  createdAt         DateTime        @default(now())
+  productGroup      ProductGroup    @relation(fields: [productGroupId], references: [id], onDelete: Cascade)
+  invoiceLineItem   InvoiceLineItem @relation(fields: [invoiceLineItemId], references: [id], onDelete: Cascade)
+  vendor            Vendor          @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+
+  @@unique([productGroupId, invoiceLineItemId])
+  @@index([invoiceLineItemId])
+  @@index([vendorId])
+}
+
+model ProductMatchDecision {
+  id                   String                 @id @default(uuid())
+  organizationId       String
+  restaurantLocationId String
+  candidateLineItemAId String
+  candidateLineItemBId String
+  status               ProductMatchStatus     @default(PENDING)
+  confidence           ProductMatchConfidence
+  reason               String
+  productGroupId       String?
+  reviewedByUserId     String?
+  reviewedAt           DateTime?
+  createdAt            DateTime               @default(now())
+  updatedAt            DateTime               @updatedAt
+  organization         Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  restaurantLocation   RestaurantLocation     @relation(fields: [restaurantLocationId], references: [id], onDelete: Cascade)
+  candidateLineItemA   InvoiceLineItem        @relation("ProductMatchItemA", fields: [candidateLineItemAId], references: [id], onDelete: Cascade)
+  candidateLineItemB   InvoiceLineItem        @relation("ProductMatchItemB", fields: [candidateLineItemBId], references: [id], onDelete: Cascade)
+  productGroup         ProductGroup?          @relation(fields: [productGroupId], references: [id], onDelete: SetNull)
+  reviewedBy           User?                  @relation(fields: [reviewedByUserId], references: [id], onDelete: SetNull)
+
+  @@unique([candidateLineItemAId, candidateLineItemBId])
+  @@index([organizationId, restaurantLocationId, status])
+}
+
 model PayrollPeriod {
- id String @id @default(uuid())
- organizationId String
- restaurantLocationId String
- totalLabor Decimal @db.Decimal(14,2)
- startsOn DateTime
- endsOn DateTime
- createdAt DateTime @default(now())
- updatedAt DateTime @updatedAt
+  id                   String   @id @default(uuid())
+  organizationId       String
+  restaurantLocationId String
+  totalLabor           Decimal  @db.Decimal(14, 2)
+  startsOn             DateTime
+  endsOn               DateTime
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
 }
+
 model Import {
- id String @id @default(uuid())
- organizationId String
- restaurantLocationId String
- type ImportType
- status ImportStatus @default(PENDING)
- originalFileName String
- rowCount Int?
- processedRowCount Int @default(0)
- failedRowCount Int @default(0)
- errorMessage String?
- metadata Json?
- createdByUserId String
- completedAt DateTime?
- createdAt DateTime @default(now())
- updatedAt DateTime @updatedAt
- @@index([organizationId,restaurantLocationId,status])
+  id                   String       @id @default(uuid())
+  organizationId       String
+  restaurantLocationId String
+  type                 ImportType
+  status               ImportStatus @default(PENDING)
+  originalFileName     String
+  rowCount             Int?
+  processedRowCount    Int          @default(0)
+  failedRowCount       Int          @default(0)
+  errorMessage         String?
+  metadata             Json?
+  createdByUserId      String
+  completedAt          DateTime?
+  createdAt            DateTime     @default(now())
+  updatedAt            DateTime     @updatedAt
+
+  @@index([organizationId, restaurantLocationId, status])
 }
+
 model ImportRow {
- id String @id @default(uuid())
- importId String
- rowNumber Int
- rawData Json
- parsedData Json?
- status ImportRowStatus @default(PENDING)
- errorMessage String?
- createdAt DateTime @default(now())
- updatedAt DateTime @updatedAt
- @@unique([importId,rowNumber])
- @@index([importId,status])
+  id           String          @id @default(uuid())
+  importId     String
+  rowNumber    Int
+  rawData      Json
+  parsedData   Json?
+  status       ImportRowStatus @default(PENDING)
+  errorMessage String?
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  @@unique([importId, rowNumber])
+  @@index([importId, status])
 }
+
 model ImportFile {
- id String @id @default(uuid())
- importId String
- fileName String
- mimeType String
- fileSize Int
- storageKey String
- source String
- status ImportStatus @default(PENDING)
- processingError String?
- createdAt DateTime @default(now())
- updatedAt DateTime @updatedAt
+  id              String       @id @default(uuid())
+  importId        String
+  fileName        String
+  mimeType        String
+  fileSize        Int
+  storageKey      String
+  source          String
+  status          ImportStatus @default(PENDING)
+  processingError String?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
 }
+
 model Insight {
- id String @id @default(uuid())
- organizationId String
- restaurantLocationId String
- type String
- severity InsightSeverity
- status InsightStatus @default(ACTIVE)
- title String
- description String
- metadata Json?
- generatedAt DateTime @default(now())
- createdAt DateTime @default(now())
- updatedAt DateTime @updatedAt
+  id                   String          @id @default(uuid())
+  organizationId       String
+  restaurantLocationId String
+  type                 String
+  severity             InsightSeverity
+  status               InsightStatus   @default(ACTIVE)
+  title                String
+  description          String
+  metadata             Json?
+  generatedAt          DateTime        @default(now())
+  createdAt            DateTime        @default(now())
+  updatedAt            DateTime        @updatedAt
 }
+
 model InsightAction {
- id String @id @default(uuid())
- insightId String
- action String
- createdAt DateTime @default(now())
- updatedAt DateTime @updatedAt
+  id        String   @id @default(uuid())
+  insightId String
+  action    String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
+
 model Notification {
- id String @id @default(uuid())
- userId String
- title String
- body String
- readAt DateTime?
- createdAt DateTime @default(now())
- updatedAt DateTime @updatedAt
+  id        String    @id @default(uuid())
+  userId    String
+  title     String
+  body      String
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
 }
 
 model BankConnection {
- id String @id @default(uuid())
- organizationId String
- provider BankProvider
- providerItemId String
- encryptedAccessToken String
- institutionId String?
- institutionName String?
- status BankConnectionStatus @default(CONNECTED)
- syncCursor String?
- lastSyncAt DateTime?
- lastError String?
- createdByUserId String
- createdAt DateTime @default(now())
- updatedAt DateTime @updatedAt
- organization Organization @relation(fields:[organizationId],references:[id],onDelete:Cascade)
- createdBy User @relation(fields:[createdByUserId],references:[id],onDelete:Restrict)
- accounts BankAccount[]
- @@unique([provider,providerItemId])
- @@index([organizationId,status])
+  id                   String               @id @default(uuid())
+  organizationId       String
+  provider             BankProvider
+  providerItemId       String
+  encryptedAccessToken String
+  institutionId        String?
+  institutionName      String?
+  status               BankConnectionStatus @default(CONNECTED)
+  syncCursor           String?
+  lastSyncAt           DateTime?
+  lastError            String?
+  createdByUserId      String
+  createdAt            DateTime             @default(now())
+  updatedAt            DateTime             @updatedAt
+  organization         Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdBy            User                 @relation(fields: [createdByUserId], references: [id], onDelete: Restrict)
+  accounts             BankAccount[]
+
+  @@unique([provider, providerItemId])
+  @@index([organizationId, status])
 }
 
 model BankAccount {
- id String @id @default(uuid())
- bankConnectionId String
- organizationId String
- restaurantLocationId String?
- providerAccountId String
- name String
- mask String?
- subtype String?
- type String?
- active Boolean @default(true)
- createdAt DateTime @default(now())
- updatedAt DateTime @updatedAt
- connection BankConnection @relation(fields:[bankConnectionId],references:[id],onDelete:Cascade)
- organization Organization @relation(fields:[organizationId],references:[id],onDelete:Cascade)
- restaurantLocation RestaurantLocation? @relation(fields:[restaurantLocationId],references:[id],onDelete:SetNull)
- transactions BankTransaction[]
- @@unique([bankConnectionId,providerAccountId])
- @@index([organizationId,restaurantLocationId])
+  id                   String              @id @default(uuid())
+  bankConnectionId     String
+  organizationId       String
+  restaurantLocationId String?
+  providerAccountId    String
+  name                 String
+  mask                 String?
+  subtype              String?
+  type                 String?
+  active               Boolean             @default(true)
+  createdAt            DateTime            @default(now())
+  updatedAt            DateTime            @updatedAt
+  connection           BankConnection      @relation(fields: [bankConnectionId], references: [id], onDelete: Cascade)
+  organization         Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  restaurantLocation   RestaurantLocation? @relation(fields: [restaurantLocationId], references: [id], onDelete: SetNull)
+  transactions         BankTransaction[]
+
+  @@unique([bankConnectionId, providerAccountId])
+  @@index([organizationId, restaurantLocationId])
 }
 
 model BankTransaction {
- id String @id @default(uuid())
- organizationId String
- restaurantLocationId String?
- bankAccountId String
- providerTransactionId String
- postedDate DateTime
- authorizedDate DateTime?
- merchantNameRaw String?
- merchantNameNormalized String?
- description String
- amount Decimal @db.Decimal(14,2)
- pending Boolean @default(false)
- providerCategory String?
- providerCategoryId String?
- categoryId String?
- vendorId String?
- invoiceId String?
- suggestedInvoiceId String?
- expenseId String?
- matchConfidence InvoiceMatchConfidence @default(NO_MATCH)
- reconciliationStatus BankReconciliationStatus @default(UNMATCHED)
- categorizationSource BankCategorizationSource @default(UNRESOLVED)
- removedAt DateTime?
- createdAt DateTime @default(now())
- updatedAt DateTime @updatedAt
- organization Organization @relation(fields:[organizationId],references:[id],onDelete:Cascade)
- restaurantLocation RestaurantLocation? @relation(fields:[restaurantLocationId],references:[id],onDelete:SetNull)
- bankAccount BankAccount @relation(fields:[bankAccountId],references:[id],onDelete:Cascade)
- category ExpenseCategory? @relation(fields:[categoryId],references:[id],onDelete:SetNull)
- vendor Vendor? @relation(fields:[vendorId],references:[id],onDelete:SetNull)
- invoice Invoice? @relation(fields:[invoiceId],references:[id],onDelete:SetNull)
- expense Expense? @relation(fields:[expenseId],references:[id],onDelete:SetNull)
- @@unique([bankAccountId,providerTransactionId])
- @@index([organizationId,restaurantLocationId,reconciliationStatus,postedDate])
- @@index([invoiceId])
- @@index([suggestedInvoiceId])
+  id                     String                   @id @default(uuid())
+  organizationId         String
+  restaurantLocationId   String?
+  bankAccountId          String
+  providerTransactionId  String
+  postedDate             DateTime
+  authorizedDate         DateTime?
+  merchantNameRaw        String?
+  merchantNameNormalized String?
+  description            String
+  amount                 Decimal                  @db.Decimal(14, 2)
+  pending                Boolean                  @default(false)
+  providerCategory       String?
+  providerCategoryId     String?
+  categoryId             String?
+  vendorId               String?
+  invoiceId              String?
+  suggestedInvoiceId     String?
+  expenseId              String?
+  matchConfidence        InvoiceMatchConfidence   @default(NO_MATCH)
+  reconciliationStatus   BankReconciliationStatus @default(UNMATCHED)
+  categorizationSource   BankCategorizationSource @default(UNRESOLVED)
+  removedAt              DateTime?
+  createdAt              DateTime                 @default(now())
+  updatedAt              DateTime                 @updatedAt
+  organization           Organization             @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  restaurantLocation     RestaurantLocation?      @relation(fields: [restaurantLocationId], references: [id], onDelete: SetNull)
+  bankAccount            BankAccount              @relation(fields: [bankAccountId], references: [id], onDelete: Cascade)
+  category               ExpenseCategory?         @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  vendor                 Vendor?                  @relation(fields: [vendorId], references: [id], onDelete: SetNull)
+  invoice                Invoice?                 @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  expense                Expense?                 @relation(fields: [expenseId], references: [id], onDelete: SetNull)
+
+  @@unique([bankAccountId, providerTransactionId])
+  @@index([organizationId, restaurantLocationId, reconciliationStatus, postedDate])
+  @@index([invoiceId])
+  @@index([suggestedInvoiceId])
 }
 
 model MerchantRule {
- id String @id @default(uuid())
- organizationId String
- matchType MerchantRuleMatchType
- matchValue String
- normalizedMerchantName String
- vendorId String?
- expenseCategoryId String?
- restaurantLocationId String?
- createdByUserId String
- createdAt DateTime @default(now())
- updatedAt DateTime @updatedAt
- organization Organization @relation(fields:[organizationId],references:[id],onDelete:Cascade)
- vendor Vendor? @relation(fields:[vendorId],references:[id],onDelete:SetNull)
- expenseCategory ExpenseCategory? @relation(fields:[expenseCategoryId],references:[id],onDelete:SetNull)
- restaurantLocation RestaurantLocation? @relation(fields:[restaurantLocationId],references:[id],onDelete:Cascade)
- createdBy User @relation(fields:[createdByUserId],references:[id],onDelete:Restrict)
- @@index([organizationId,restaurantLocationId,matchType,matchValue])
+  id                     String                @id @default(uuid())
+  organizationId         String
+  matchType              MerchantRuleMatchType
+  matchValue             String
+  normalizedMerchantName String
+  vendorId               String?
+  expenseCategoryId      String?
+  restaurantLocationId   String?
+  createdByUserId        String
+  createdAt              DateTime              @default(now())
+  updatedAt              DateTime              @updatedAt
+  organization           Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  vendor                 Vendor?               @relation(fields: [vendorId], references: [id], onDelete: SetNull)
+  expenseCategory        ExpenseCategory?      @relation(fields: [expenseCategoryId], references: [id], onDelete: SetNull)
+  restaurantLocation     RestaurantLocation?   @relation(fields: [restaurantLocationId], references: [id], onDelete: Cascade)
+  createdBy              User                  @relation(fields: [createdByUserId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, restaurantLocationId, matchType, matchValue])
 }

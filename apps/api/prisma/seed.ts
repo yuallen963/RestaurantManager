@@ -408,7 +408,20 @@ async function main() {
       daysAgo: 5,
       lines: [{ rawDescription: 'NITRILE GLOVES LARGE', sku: 'GLOVE-L', quantity: 2, unit: 'CASE', packSize: '5 x 100', unitPrice: 38 }],
     },
+    {
+      id: '10000000-0000-4000-8000-000000000008',
+      vendor: 'us foods',
+      daysAgo: 3,
+      lines: [
+        { rawDescription: 'CHICKEN BREAST B/S 40LB', sku: 'USF-CHKN-40', quantity: 10, unit: 'CASE', packSize: '40 lb', unitPrice: 103 },
+        { rawDescription: 'CHICKEN BREAST B/S 20LB', sku: 'USF-CHKN-20', quantity: 5, unit: 'CASE', packSize: '20 lb', unitPrice: 54 },
+        { rawDescription: 'FROZEN CHICKEN THIGH 40LB', sku: 'USF-THIGH-40', quantity: 4, unit: 'CASE', packSize: '40 lb', unitPrice: 72 },
+      ],
+    },
   ] as const;
+
+  await prisma.productMatchDecision.deleteMany({ where: { organizationId: demoOrgId } });
+  await prisma.productGroup.deleteMany({ where: { organizationId: demoOrgId } });
 
   for (const seeded of syntheticInvoices) {
     const invoiceDate = new Date(seedToday);
