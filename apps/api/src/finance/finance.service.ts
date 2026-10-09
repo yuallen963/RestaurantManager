@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { ExpenseSource, Prisma, RevenueSource } from '@prisma/client';
 import { AuditService } from '../audit.service';
 import { OrganizationAccessService } from '../organizations/organization-access.service';
@@ -30,7 +30,13 @@ export class FinanceService {
 
   async revenue(userId: string, data: any) {
     const location = await this.location(userId, data.restaurantLocationId);
-    const row = await this.prisma.revenueEntry.create({ data: { organizationId: location.organizationId, restaurantLocationId: location.id, date: new Date(data.date), amount: decimal(data.amount), notes: data.notes, source: RevenueSource.MANUAL, createdByUserId: userId } });
+    const amount = decimal(data.amount);
+    const date = new Date(data.date);
+    const dayStart = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+    const dayEnd = new Date(dayStart.getTime() + 86400000);
+    const square = await this.prisma.revenueEntry.findFirst({ where: { organizationId: location.organizationId, restaurantLocationId: location.id, source: RevenueSource.POS_IMPORT, date: { gte: dayStart, lt: dayEnd } } });
+    if (square) throw new ConflictException('Square revenue already exists for this date. Resolve the revenue source before adding a manual total.');
+    const row = await this.prisma.revenueEntry.create({ data: { organizationId: location.organizationId, restaurantLocationId: location.id, date, amount, notes: data.notes, source: RevenueSource.MANUAL, createdByUserId: userId } });
     await this.audit.log({ userId, organizationId: location.organizationId, action: 'revenue.created', entityType: 'RevenueEntry', entityId: row.id });
     return row;
   }
@@ -86,8 +92,8 @@ export class FinanceService {
   }
 
   async revenueDetail(userId: string, id: string) { return this.owned(userId, 'revenueEntry', id); }
-  async updateRevenue(userId: string, id: string, data: any) { const record = await this.owned(userId, 'revenueEntry', id); const row = await this.prisma.revenueEntry.update({ where: { id }, data: { date: data.date ? new Date(data.date) : undefined, amount: data.amount ? decimal(data.amount) : undefined, notes: data.notes } }); await this.audit.log({ userId, organizationId: record.organizationId, action: 'revenue.updated', entityType: 'RevenueEntry', entityId: id }); return row; }
-  async deleteRevenue(userId: string, id: string) { const record = await this.owned(userId, 'revenueEntry', id); await this.prisma.revenueEntry.delete({ where: { id } }); await this.audit.log({ userId, organizationId: record.organizationId, action: 'revenue.deleted', entityType: 'RevenueEntry', entityId: id }); }
+  async updateRevenue(userId: string, id: string, data: any) { const record = await this.owned(userId, 'revenueEntry', id); if (record.source === RevenueSource.POS_IMPORT) throw new BadRequestException('Square revenue is managed by POS sync'); if (data.date) { const date = new Date(data.date); const start = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate())); const square = await this.prisma.revenueEntry.findFirst({ where: { organizationId: record.organizationId, restaurantLocationId: record.restaurantLocationId, source: RevenueSource.POS_IMPORT, date: { gte: start, lt: new Date(start.getTime() + 86400000) } } }); if (square) throw new ConflictException('Square revenue already exists for this date. Resolve the revenue source before moving a manual total.'); } const row = await this.prisma.revenueEntry.update({ where: { id }, data: { date: data.date ? new Date(data.date) : undefined, amount: data.amount ? decimal(data.amount) : undefined, notes: data.notes } }); await this.audit.log({ userId, organizationId: record.organizationId, action: 'revenue.updated', entityType: 'RevenueEntry', entityId: id }); return row; }
+  async deleteRevenue(userId: string, id: string) { const record = await this.owned(userId, 'revenueEntry', id); if (record.source === RevenueSource.POS_IMPORT) throw new BadRequestException('Square revenue is managed by POS sync'); await this.prisma.revenueEntry.delete({ where: { id } }); await this.audit.log({ userId, organizationId: record.organizationId, action: 'revenue.deleted', entityType: 'RevenueEntry', entityId: id }); }
   async categories(userId: string, organizationId: string) { await this.access.requireMember(userId, organizationId); return this.prisma.expenseCategory.findMany({ where: { OR: [{ organizationId: null }, { organizationId }] }, orderBy: { name: 'asc' } }); }
   async category(organizationId: string, id: string) { const category = await this.prisma.expenseCategory.findFirst({ where: { id, OR: [{ organizationId: null }, { organizationId }] } }); if (!category) throw new ForbiddenException('Category is not available'); return category; }
   async expense(userId: string, data: any) { const location = await this.location(userId, data.restaurantLocationId); await this.category(location.organizationId, data.expenseCategoryId); if (data.vendorId) { const vendor = await this.owned(userId, 'vendor', data.vendorId); if (vendor.organizationId !== location.organizationId) throw new ForbiddenException('Vendor is not available'); } const row = await this.prisma.expense.create({ data: { organizationId: location.organizationId, restaurantLocationId: location.id, expenseCategoryId: data.expenseCategoryId, vendorId: data.vendorId, date: new Date(data.date), amount: decimal(data.amount), description: data.description, notes: data.notes, source: ExpenseSource.MANUAL, createdByUserId: userId } }); await this.audit.log({ userId, organizationId: location.organizationId, action: 'expense.created', entityType: 'Expense', entityId: row.id }); return row; }

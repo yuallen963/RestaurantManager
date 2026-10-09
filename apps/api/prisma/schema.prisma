@@ -30,6 +30,25 @@ enum RevenueSource {
   OTHER
 }
 
+enum PosProvider {
+  SQUARE
+}
+
+enum PosConnectionStatus {
+  CONNECTED
+  SYNCING
+  REAUTH_REQUIRED
+  ERROR
+  DISCONNECTED
+}
+
+enum PosRevenueConflictStatus {
+  NONE
+  PENDING
+  USE_MANUAL
+  USE_POS
+}
+
 enum ExpenseSource {
   MANUAL
   CSV_IMPORT
@@ -171,6 +190,8 @@ model User {
   bankConnections       BankConnection[]
   merchantRules         MerchantRule[]
   productMatchDecisions ProductMatchDecision[]
+  posConnections        PosConnection[]
+  posOAuthStates        PosOAuthState[]
 }
 
 model Organization {
@@ -187,6 +208,10 @@ model Organization {
   merchantRules         MerchantRule[]
   productGroups         ProductGroup[]
   productMatchDecisions ProductMatchDecision[]
+  posConnections        PosConnection[]
+  posLocationMappings   PosLocationMapping[]
+  posDailySales         PosDailySales[]
+  posOAuthStates        PosOAuthState[]
 }
 
 model OrganizationMember {
@@ -219,6 +244,8 @@ model RestaurantLocation {
   merchantRules         MerchantRule[]
   productGroups         ProductGroup[]
   productMatchDecisions ProductMatchDecision[]
+  posLocationMappings   PosLocationMapping[]
+  posDailySales         PosDailySales[]
 
   @@index([organizationId])
 }
@@ -267,20 +294,125 @@ model AuditLog {
 }
 
 model RevenueEntry {
-  id                   String        @id @default(uuid())
+  id                   String         @id @default(uuid())
   organizationId       String
   restaurantLocationId String
-  amount               Decimal       @db.Decimal(14, 2)
+  amount               Decimal        @db.Decimal(14, 2)
   date                 DateTime
-  source               RevenueSource @default(MANUAL)
+  source               RevenueSource  @default(MANUAL)
   notes                String?
   importId             String?
   createdByUserId      String?
-  createdAt            DateTime      @default(now())
-  updatedAt            DateTime      @updatedAt
+  createdAt            DateTime       @default(now())
+  updatedAt            DateTime       @updatedAt
+  posDailySales        PosDailySales?
 
   @@index([organizationId, restaurantLocationId, date])
   @@index([importId])
+}
+
+model PosOAuthState {
+  id             String       @id @default(uuid())
+  organizationId String
+  userId         String
+  provider       PosProvider  @default(SQUARE)
+  stateHash      String       @unique
+  expiresAt      DateTime
+  usedAt         DateTime?
+  createdAt      DateTime     @default(now())
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, expiresAt])
+}
+
+model PosConnection {
+  id                    String               @id @default(uuid())
+  organizationId        String
+  provider              PosProvider          @default(SQUARE)
+  encryptedAccessToken  String
+  encryptedRefreshToken String?
+  providerMerchantId    String
+  merchantName          String?
+  status                PosConnectionStatus  @default(CONNECTED)
+  tokenExpiresAt        DateTime?
+  lastSyncAt            DateTime?
+  lastError             String?
+  createdByUserId       String
+  createdAt             DateTime             @default(now())
+  updatedAt             DateTime             @updatedAt
+  organization          Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdBy             User                 @relation(fields: [createdByUserId], references: [id], onDelete: Restrict)
+  mappings              PosLocationMapping[]
+  dailySales            PosDailySales[]
+
+  @@unique([provider, providerMerchantId])
+  @@index([organizationId, provider, status])
+}
+
+model PosLocationMapping {
+  id                   String             @id @default(uuid())
+  posConnectionId      String
+  organizationId       String
+  restaurantLocationId String
+  providerLocationId   String
+  providerLocationName String
+  providerTimezone     String
+  active               Boolean            @default(true)
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+  connection           PosConnection      @relation(fields: [posConnectionId], references: [id], onDelete: Cascade)
+  organization         Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  restaurantLocation   RestaurantLocation @relation(fields: [restaurantLocationId], references: [id], onDelete: Cascade)
+  dailySales           PosDailySales[]
+
+  @@unique([posConnectionId, providerLocationId])
+  @@unique([posConnectionId, restaurantLocationId])
+  @@index([organizationId, restaurantLocationId, active])
+}
+
+model PosDailySales {
+  id                   String                   @id @default(uuid())
+  organizationId       String
+  restaurantLocationId String
+  posConnectionId      String
+  posLocationMappingId String
+  providerLocationId   String
+  businessDate         DateTime
+  grossSales           Decimal                  @db.Decimal(14, 2)
+  discounts            Decimal                  @db.Decimal(14, 2)
+  refunds              Decimal                  @db.Decimal(14, 2)
+  taxes                Decimal                  @db.Decimal(14, 2)
+  tips                 Decimal                  @db.Decimal(14, 2)
+  netSales             Decimal                  @db.Decimal(14, 2)
+  transactionCount     Int
+  providerUpdatedAt    DateTime?
+  revenueEntryId       String?                  @unique
+  conflictStatus       PosRevenueConflictStatus @default(NONE)
+  createdAt            DateTime                 @default(now())
+  updatedAt            DateTime                 @updatedAt
+  organization         Organization             @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  restaurantLocation   RestaurantLocation       @relation(fields: [restaurantLocationId], references: [id], onDelete: Cascade)
+  connection           PosConnection            @relation(fields: [posConnectionId], references: [id], onDelete: Cascade)
+  mapping              PosLocationMapping       @relation(fields: [posLocationMappingId], references: [id], onDelete: Cascade)
+  revenueEntry         RevenueEntry?            @relation(fields: [revenueEntryId], references: [id], onDelete: SetNull)
+
+  @@unique([posConnectionId, providerLocationId, businessDate])
+  @@index([organizationId, restaurantLocationId, businessDate])
+  @@index([conflictStatus])
+}
+
+model PosWebhookEvent {
+  id              String      @id @default(uuid())
+  provider        PosProvider @default(SQUARE)
+  providerEventId String
+  eventType       String
+  merchantId      String?
+  receivedAt      DateTime    @default(now())
+  processedAt     DateTime?
+
+  @@unique([provider, providerEventId])
+  @@index([merchantId, receivedAt])
 }
 
 model Expense {

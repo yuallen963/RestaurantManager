@@ -428,11 +428,13 @@ Widget detail(String label, String value) => Padding(
     ],
   ),
 );
-String sourceLabel(String value) => value
-    .toLowerCase()
-    .split('_')
-    .map((word) => '${word[0].toUpperCase()}${word.substring(1)}')
-    .join(' ');
+String sourceLabel(String value) => value == 'POS_IMPORT'
+    ? 'Square'
+    : value
+          .toLowerCase()
+          .split('_')
+          .map((word) => '${word[0].toUpperCase()}${word.substring(1)}')
+          .join(' ');
 String shortDate(DateTime value) => '${month(value.month)} ${value.day}';
 String formatDate(DateTime value) =>
     '${month(value.month)} ${value.day}, ${value.year}';

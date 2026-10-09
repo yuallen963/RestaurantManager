@@ -90,6 +90,7 @@ void main() {
 
     expect(find.text('Demo Restaurant Group'), findsOneWidget);
     expect(find.text('Downtown Grill'), findsOneWidget);
+    await tester.scrollUntilVisible(find.text('demo@profitlens.local'), 250);
     expect(find.text('demo@profitlens.local'), findsOneWidget);
     expect(find.text('Owner'), findsOneWidget);
     await tester.scrollUntilVisible(find.text('Version'), 250);
@@ -102,6 +103,9 @@ void main() {
   ) async {
     final container = await pumpMore(tester);
 
+    await tester.scrollUntilVisible(find.text('Downtown Grill'), 250);
+    await tester.drag(find.byType(ListView), const Offset(0, -80));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Downtown Grill'));
     await tester.pumpAndSettle();
     expect(find.text('Select restaurant'), findsOneWidget);
@@ -152,6 +156,10 @@ void main() {
     );
 
     expect(find.text('Unable to load restaurant information'), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.text('Unable to load account information'),
+      250,
+    );
     expect(find.text('Unable to load account information'), findsOneWidget);
     expect(find.text('Retry'), findsNWidgets(2));
   });

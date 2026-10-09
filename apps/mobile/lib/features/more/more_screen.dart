@@ -5,6 +5,7 @@ import '../../main.dart' show AuthScreen, demoModeProvider;
 import '../dashboard/foundation.dart';
 import '../banking/bank_screens.dart';
 import '../invoice_email/invoice_email_screen.dart';
+import '../pos/pos_integrations_screen.dart';
 import 'foundation.dart';
 
 class MoreScreen extends ConsumerStatefulWidget {
@@ -93,6 +94,20 @@ class _MoreScreenState extends ConsumerState<MoreScreen> {
             ),
             if (demoMode) const Chip(label: Text('Demo Mode')),
           ],
+        ),
+        const SizedBox(height: 20),
+        _Section(
+          title: 'Integrations',
+          child: _InfoTile(
+            icon: Icons.point_of_sale_outlined,
+            label: 'POS Integrations',
+            value: 'Connect and sync Square sales',
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const PosIntegrationsScreen()),
+            ),
+          ),
         ),
         const SizedBox(height: 20),
         _Section(

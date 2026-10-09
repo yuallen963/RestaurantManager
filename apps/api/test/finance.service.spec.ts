@@ -1,4 +1,4 @@
-import { ForbiddenException } from '@nestjs/common';
+import { ConflictException, ForbiddenException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { FinanceService } from '../src/finance/finance.service';
 
@@ -19,6 +19,15 @@ describe('FinanceService tenant enforcement', () => {
     const prisma: any = { restaurantLocation: { findUnique: jest.fn().mockResolvedValue({ id: 'loc-a', organizationId: 'org-a' }) }, revenueEntry: { create: jest.fn() } };
     const access = { requireMember: jest.fn().mockResolvedValue({}) } as any;
     await expect(new FinanceService(prisma, access, audit).revenue('user-a', { restaurantLocationId: 'loc-a', amount: 0, date: '2026-10-01' })).rejects.toThrow('Amount must be positive');
+  });
+  it('prevents a manual total from double-counting a Square business day', async () => {
+    const prisma: any = {
+      restaurantLocation: { findUnique: jest.fn().mockResolvedValue({ id: 'loc-a', organizationId: 'org-a' }) },
+      revenueEntry: { findFirst: jest.fn().mockResolvedValue({ id: 'square-day', source: 'POS_IMPORT' }), create: jest.fn() },
+    };
+    const access = { requireMember: jest.fn().mockResolvedValue({}) } as any;
+    await expect(new FinanceService(prisma, access, audit).revenue('user-a', { restaurantLocationId: 'loc-a', amount: 100, date: '2026-10-01' })).rejects.toBeInstanceOf(ConflictException);
+    expect(prisma.revenueEntry.create).not.toHaveBeenCalled();
   });
   it('returns filtered totals, sorting, and pagination metadata', async () => {
     const items = [{ id: 'expense-1', amount: new Prisma.Decimal(250) }];

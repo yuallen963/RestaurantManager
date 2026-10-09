@@ -227,7 +227,7 @@ void main() {
     expect(find.text('Amount'), findsOneWidget);
     expect(find.text('Date'), findsOneWidget);
     expect(find.text('Source'), findsOneWidget);
-    expect(find.text('Pos Import'), findsOneWidget);
+    expect(find.text('Square'), findsOneWidget);
     expect(find.text('Notes'), findsOneWidget);
     expect(find.text('Dinner service'), findsWidgets);
   });
