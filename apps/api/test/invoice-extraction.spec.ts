@@ -29,12 +29,14 @@ describe('invoice extraction', () => {
   });
 
   it('records a failed extraction without persisting raw content to audit metadata', async () => {
-    const prisma: any = { invoice: { findUnique: jest.fn().mockResolvedValue({ id: 'inv', organizationId: 'org', storageKey: 'missing' }), update: jest.fn() } };
+    const prisma: any = { invoice: { findUnique: jest.fn().mockResolvedValue({ id: 'inv', organizationId: 'org', restaurantLocationId: 'loc', storageKey: 'missing' }), update: jest.fn() } };
     const audit: any = { log: jest.fn() };
-    const processor = new InvoiceExtractionProcessor(prisma, { get: jest.fn().mockRejectedValue(new Error('missing')) } as any, {} as any, audit);
+    const notifications: any = { notifyOperational: jest.fn() };
+    const processor = new InvoiceExtractionProcessor(prisma, { get: jest.fn().mockRejectedValue(new Error('missing')) } as any, {} as any, audit, notifications);
     await processor.process('inv', 'user');
     expect(prisma.invoice.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ extractionStatus: ExtractionStatus.FAILED }) }));
     expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({ metadata: { errorType: 'Error' } }));
+    expect(notifications.notifyOperational).toHaveBeenCalledWith(expect.objectContaining({ type: 'INVOICE_EXTRACTION_FAILED', dedupeKey: 'invoice-extraction-failed:inv:Error', restaurantLocationId: 'loc' }));
   });
 
   it('enforces tenant authorization before extraction', async () => {

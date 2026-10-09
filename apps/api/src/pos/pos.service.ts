@@ -5,6 +5,7 @@ import { AuditService } from '../audit.service';
 import { BankTokenEncryptionService } from '../bank/encryption.service';
 import { OrganizationAccessService } from '../organizations/organization-access.service';
 import { PrismaService } from '../prisma.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { PosMapLocationDto } from './dto';
 import { SquareOrder, SquareProvider } from './square.provider';
 
@@ -41,7 +42,7 @@ export function aggregateSquareOrders(orders: SquareOrder[], timezone: string): 
 
 @Injectable()
 export class PosService {
-  constructor(private readonly prisma: PrismaService, private readonly access: OrganizationAccessService, private readonly audit: AuditService, private readonly encryption: BankTokenEncryptionService, private readonly square: SquareProvider) {}
+  constructor(private readonly prisma: PrismaService, private readonly access: OrganizationAccessService, private readonly audit: AuditService, private readonly encryption: BankTokenEncryptionService, private readonly square: SquareProvider, private readonly notifications?: NotificationsService) {}
   private safe(connection: any) { const { encryptedAccessToken: _a, encryptedRefreshToken: _r, ...safe } = connection; return safe; }
   async syncAll() {
     const connections = await this.prisma.posConnection.findMany({ where: { provider: PosProvider.SQUARE, status: { in: [PosConnectionStatus.CONNECTED, PosConnectionStatus.ERROR] } }, select: { id: true, createdByUserId: true } });
@@ -141,6 +142,7 @@ export class PosService {
       const reauth = error instanceof UnauthorizedException;
       await this.prisma.posConnection.update({ where: { id }, data: { status: reauth ? PosConnectionStatus.REAUTH_REQUIRED : PosConnectionStatus.ERROR, lastError: reauth ? 'Reconnect Square to continue syncing.' : 'Unable to sync Square. Try again.' } });
       await this.audit.log({ userId, organizationId: connection.organizationId, action: 'pos.sync_failed', entityType: 'PosConnection', entityId: id, metadata: { reauthRequired: reauth } });
+      await this.notifications?.notifyOperational({ organizationId: connection.organizationId, type: reauth ? 'POS_REAUTH_REQUIRED' : 'POS_SYNC_FAILED', severity: 'HIGH', title: reauth ? 'Reconnect Square' : 'Square sync failed', body: reauth ? 'Reconnect Square to continue syncing sales.' : 'We could not sync Square sales. Try again shortly.', deepLinkType: 'OPEN_POS_INTEGRATIONS', deepLinkId: id, dedupeKey: reauth ? `pos-reauth:${id}` : `pos-sync-failed:${id}:${error instanceof Error ? error.name : 'unknown'}` });
       throw new ServiceUnavailableException(reauth ? 'Square authorization must be renewed' : 'Unable to sync Square');
     }
   }

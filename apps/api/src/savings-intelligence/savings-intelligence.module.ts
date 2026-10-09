@@ -10,5 +10,6 @@ import { SavingsIntelligenceService } from './savings-intelligence.service';
   imports: [AuthModule, OrganizationsModule, ConfigModule],
   controllers: [SavingsIntelligenceController],
   providers: [SavingsIntelligenceService, PrismaService],
+  exports: [SavingsIntelligenceService],
 })
 export class SavingsIntelligenceModule {}

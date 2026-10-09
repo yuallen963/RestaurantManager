@@ -45,6 +45,8 @@ dependencies:
   plaid_link_flutter: ^1.0.0
   share_plus: ^10.1.4
   url_launcher: ^6.3.2
+  firebase_core: ^4.15.0
+  firebase_messaging: ^16.7.0
 
 dev_dependencies:
   flutter_test:

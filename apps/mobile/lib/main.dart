@@ -6,6 +6,9 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'features/tabs.dart';
+import 'features/notifications/notification_screen.dart';
+import 'features/notifications/push_service.dart';
+import 'features/notifications/notification_router.dart';
 
 const storage = FlutterSecureStorage();
 const apiBaseUrl = String.fromEnvironment(
@@ -268,14 +271,18 @@ class Onboarding extends StatelessWidget {
   );
 }
 
-class Home extends StatefulWidget {
+class Home extends ConsumerStatefulWidget {
   const Home({super.key});
   @override
-  State<Home> createState() => _HomeState();
+  ConsumerState<Home> createState() => _HomeState();
 }
 
-class _HomeState extends State<Home> {
+class _HomeState extends ConsumerState<Home> {
   int index = 0;
+  PushMessageCoordinator? coordinator;
+  @override void initState() { super.initState(); _startPush(); }
+  Future<void> _startPush() async { final client = await FirebasePushClient.create(); if (!mounted) return; coordinator = PushMessageCoordinator(client); await coordinator!.start(onForeground: () { ref.invalidate(notificationListProvider); }, onOpen: (data) async { if (!mounted) return; await ref.read(notificationRouterProvider).open(context, ref, NotificationRouteData.fromJson(data)); }); }
+  @override void dispose() { coordinator?.dispose(); super.dispose(); }
   @override
   Widget build(BuildContext context) {
     const pages = [
@@ -286,7 +293,21 @@ class _HomeState extends State<Home> {
       MoreScreen(),
     ];
     return Scaffold(
-      appBar: AppBar(title: const Text('Profit Lens')),
+      appBar: AppBar(
+        title: const Text('Profit Lens'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.notifications_outlined),
+            tooltip: 'Notifications',
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => const NotificationCenterScreen(),
+              ),
+            ),
+          ),
+        ],
+      ),
       body: pages[index],
       bottomNavigationBar: NavigationBar(
         selectedIndex: index,

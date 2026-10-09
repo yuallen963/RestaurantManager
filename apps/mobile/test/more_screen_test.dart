@@ -121,14 +121,15 @@ void main() {
   testWidgets('sign out calls logout, clears credentials, and shows login', (
     tester,
   ) async {
+    await tester.binding.setSurfaceSize(const Size(800, 1000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
     var logoutCalls = 0;
     final dio = successfulLogoutDio(onLogout: () => logoutCalls++);
     dio.options.headers['Authorization'] = 'Bearer access-token';
     final container = await pumpMore(tester, dio: dio);
 
-    await tester.drag(find.byType(ListView), const Offset(0, -300));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Sign Out'));
+    final signOut = find.text('Sign Out');
+    await tester.tap(signOut);
     await tester.pumpAndSettle();
 
     expect(logoutCalls, 1);

@@ -6,6 +6,7 @@ import '../dashboard/foundation.dart';
 import '../banking/bank_screens.dart';
 import '../invoice_email/invoice_email_screen.dart';
 import '../pos/pos_integrations_screen.dart';
+import '../notifications/notification_screen.dart';
 import 'foundation.dart';
 
 class MoreScreen extends ConsumerStatefulWidget {
@@ -106,6 +107,22 @@ class _MoreScreenState extends ConsumerState<MoreScreen> {
             onTap: () => Navigator.push(
               context,
               MaterialPageRoute(builder: (_) => const PosIntegrationsScreen()),
+            ),
+          ),
+        ),
+        const SizedBox(height: 20),
+        _Section(
+          title: 'Alerts',
+          child: _InfoTile(
+            icon: Icons.notifications_outlined,
+            label: 'Notifications',
+            value: 'Preferences and weekly digest',
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => const NotificationSettingsScreen(),
+              ),
             ),
           ),
         ),

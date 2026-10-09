@@ -4,6 +4,7 @@ import { AuditService } from '../audit.service';
 import { PrismaService } from '../prisma.service';
 import { ExtractedInvoice, InvoiceExtractionProvider } from './extraction.provider';
 import { InvoiceStorageService } from './storage.service';
+import { NotificationsService } from '../notifications/notifications.service';
 
 const clamp = (value: number) => Math.max(0, Math.min(1, value));
 export function extractionConfidence(data: ExtractedInvoice) {
@@ -20,7 +21,7 @@ export function extractionConfidence(data: ExtractedInvoice) {
 
 @Injectable()
 export class InvoiceExtractionProcessor {
-  constructor(private readonly prisma: PrismaService, private readonly storage: InvoiceStorageService, private readonly provider: InvoiceExtractionProvider, private readonly audit: AuditService) {}
+  constructor(private readonly prisma: PrismaService, private readonly storage: InvoiceStorageService, private readonly provider: InvoiceExtractionProvider, private readonly audit: AuditService, private readonly notifications?: NotificationsService) {}
   isConfigured() { return this.provider.isConfigured(); }
   async process(invoiceId: string, userId: string) {
     const invoice = await this.prisma.invoice.findUnique({ where: { id: invoiceId } });
@@ -40,6 +41,7 @@ export class InvoiceExtractionProcessor {
       const message = error instanceof Error ? error.message.slice(0, 500) : 'Unknown extraction error';
       await this.prisma.invoice.update({ where: { id: invoiceId }, data: { extractionStatus: ExtractionStatus.FAILED, extractionCompletedAt: new Date(), extractionError: message } });
       await this.audit.log({ userId, organizationId: invoice.organizationId, action: 'invoice.extraction_failed', entityType: 'Invoice', entityId: invoiceId, metadata: { errorType: error instanceof Error ? error.name : 'UnknownError' } });
+      await this.notifications?.notifyOperational({ organizationId: invoice.organizationId, restaurantLocationId: invoice.restaurantLocationId, type: 'INVOICE_EXTRACTION_FAILED' as any, severity: 'HIGH' as any, title: 'Invoice extraction failed', body: 'Invoice extraction failed for a recent upload.', deepLinkType: 'OPEN_INVOICE', deepLinkId: invoiceId, dedupeKey: `invoice-extraction-failed:${invoiceId}:${error instanceof Error ? error.name : 'unknown'}` });
     }
   }
 }

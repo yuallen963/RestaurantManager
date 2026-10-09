@@ -1,4 +1,4 @@
-import { ForbiddenException } from '@nestjs/common';
+import { ForbiddenException, UnauthorizedException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { createHmac } from 'node:crypto';
 import { BankTokenEncryptionService } from '../src/bank/encryption.service';
@@ -115,5 +115,17 @@ describe('Square POS integration', () => {
     await service.disconnect('user-a', 'connection');
     expect(square.revoke).toHaveBeenCalledWith('access-token');
     expect(prisma.posConnection.update).toHaveBeenCalledWith({ where: { id: 'connection' }, data: { status: 'DISCONNECTED', encryptedAccessToken: 'revoked-cipher', encryptedRefreshToken: null } });
+  });
+
+  it('creates POS failure and reauthentication alerts with stable keys', async () => {
+    const connection = { id: 'connection-a', organizationId: 'org-a', createdByUserId: 'user-a', encryptedAccessToken: 'cipher', tokenExpiresAt: null, status: 'CONNECTED', mappings: [] };
+    const prisma: any = { posConnection: { findUnique: jest.fn().mockResolvedValue(connection), update: jest.fn().mockResolvedValue(connection) } };
+    const notifications = { notifyOperational: jest.fn() };
+    const service = new PosService(prisma, { requireMember: jest.fn().mockResolvedValue({}) } as any, { log: jest.fn() } as any, { decryptPos: jest.fn(() => { throw new Error('network'); }) } as any, {} as any, notifications as any);
+    await expect(service.sync('user-a', 'connection-a')).rejects.toThrow('Unable to sync Square');
+    expect(notifications.notifyOperational).toHaveBeenCalledWith(expect.objectContaining({ type: 'POS_SYNC_FAILED', dedupeKey: 'pos-sync-failed:connection-a:Error' }));
+    const reauth = new PosService(prisma, { requireMember: jest.fn().mockResolvedValue({}) } as any, { log: jest.fn() } as any, { decryptPos: jest.fn(() => { throw new UnauthorizedException(); }) } as any, {} as any, notifications as any);
+    await expect(reauth.sync('user-a', 'connection-a')).rejects.toThrow('Square authorization must be renewed');
+    expect(notifications.notifyOperational).toHaveBeenLastCalledWith(expect.objectContaining({ type: 'POS_REAUTH_REQUIRED', dedupeKey: 'pos-reauth:connection-a' }));
   });
 });

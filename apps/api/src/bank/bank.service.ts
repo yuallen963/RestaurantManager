@@ -1,8 +1,9 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { BankCategorizationSource, BankConnectionStatus, BankProvider, BankReconciliationStatus, InvoiceMatchConfidence, MerchantRuleMatchType, Prisma, ReviewStatus } from '@prisma/client';
 import { AuditService } from '../audit.service';
 import { OrganizationAccessService } from '../organizations/organization-access.service';
 import { PrismaService } from '../prisma.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { AssignBankAccountDto, BankTransactionQuery, ConfirmInvoiceMatchDto, ExchangeBankTokenDto, ReviewBankTransactionDto } from './dto';
 import { BankTokenEncryptionService } from './encryption.service';
 import { BankProviderFactory, ProviderTransaction } from './bank.provider';
@@ -19,7 +20,7 @@ export const normalizeMerchant = (value?: string | null) => {
 
 @Injectable()
 export class BankService {
-  constructor(private readonly prisma: PrismaService, private readonly access: OrganizationAccessService, private readonly audit: AuditService, private readonly encryption: BankTokenEncryptionService, private readonly providers: BankProviderFactory) {}
+  constructor(private readonly prisma: PrismaService, private readonly access: OrganizationAccessService, private readonly audit: AuditService, private readonly encryption: BankTokenEncryptionService, private readonly providers: BankProviderFactory, private readonly notifications?: NotificationsService) {}
 
   private async organization(userId: string, organizationId: string) { await this.access.requireMember(userId, organizationId); return organizationId; }
   private async connection(userId: string, id: string) { const row = await this.prisma.bankConnection.findUnique({ where: { id }, include: { accounts: true } }); if (!row) throw new NotFoundException('Bank connection not found'); await this.organization(userId, row.organizationId); return row; }
@@ -71,7 +72,10 @@ export class BankService {
       await this.audit.log({ userId, organizationId: connection.organizationId, action: 'bank.synced', entityType: 'BankConnection', entityId: id, metadata: { added: updates.added.length, modified: updates.modified.length, removed: updates.removed.length } });
       return this.safeConnection(saved);
     } catch (error) {
-      await this.prisma.bankConnection.update({ where: { id }, data: { status: BankConnectionStatus.ERROR, lastError: 'Unable to sync this connection. Try again.' } });
+      const reauth = error instanceof UnauthorizedException;
+      await this.prisma.bankConnection.update({ where: { id }, data: { status: reauth ? BankConnectionStatus.NEEDS_ATTENTION : BankConnectionStatus.ERROR, lastError: reauth ? 'Reconnect your bank to continue syncing.' : 'Unable to sync this connection. Try again.' } });
+      await this.audit.log({ userId, organizationId: connection.organizationId, action: 'bank.sync_failed', entityType: 'BankConnection', entityId: id, metadata: { reauthRequired: reauth } });
+      await this.notifications?.notifyOperational({ organizationId: connection.organizationId, type: reauth ? 'BANK_REAUTH_REQUIRED' : 'BANK_SYNC_FAILED', severity: 'HIGH', title: reauth ? 'Reconnect your bank account' : 'Bank sync failed', body: reauth ? 'Reconnect your bank account to continue syncing transactions.' : 'We could not sync this bank connection. Try again shortly.', deepLinkType: 'OPEN_BANK_ACCOUNTS', deepLinkId: id, dedupeKey: reauth ? `bank-reauth:${id}` : `bank-sync-failed:${id}:${error instanceof Error ? error.name : 'unknown'}` });
       throw error;
     }
   }

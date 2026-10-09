@@ -11,5 +11,6 @@ import { NeedsAttentionService } from './needs-attention.service';
   imports: [AuthModule, OrganizationsModule, DashboardModule, PriceIntelligenceModule],
   controllers: [NeedsAttentionController],
   providers: [NeedsAttentionService, PrismaService],
+  exports: [NeedsAttentionService],
 })
 export class NeedsAttentionModule {}

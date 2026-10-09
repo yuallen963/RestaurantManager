@@ -1,4 +1,4 @@
-import { ForbiddenException } from '@nestjs/common';
+import { ForbiddenException, UnauthorizedException } from '@nestjs/common';
 import { BankCategorizationSource, BankReconciliationStatus, InvoiceMatchConfidence, MerchantRuleMatchType, Prisma } from '@prisma/client';
 import { BankService, normalizeMerchant } from '../src/bank/bank.service';
 import { BankTokenEncryptionService } from '../src/bank/encryption.service';
@@ -96,5 +96,17 @@ describe('bank transaction foundation', () => {
     const { service, access } = setup();
     access.requireMember.mockRejectedValue(new ForbiddenException());
     await expect(service.sync('other-user', 'connection-a')).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('creates a bank failure or reauthentication alert with stable keys', async () => {
+    const { prisma, provider, service } = setup();
+    const notifications = { notifyOperational: jest.fn() };
+    const alerted = new BankService(prisma, { requireMember: jest.fn().mockResolvedValue({}) } as any, { log: jest.fn() } as any, { decrypt: jest.fn().mockReturnValue('token') } as any, { get: jest.fn().mockReturnValue(provider) } as any, notifications as any);
+    provider.sync.mockRejectedValue(new Error('network'));
+    await expect(alerted.sync('user-a', 'connection-a')).rejects.toThrow('network');
+    expect(notifications.notifyOperational).toHaveBeenCalledWith(expect.objectContaining({ type: 'BANK_SYNC_FAILED', dedupeKey: 'bank-sync-failed:connection-a:Error' }));
+    provider.sync.mockRejectedValue(new UnauthorizedException());
+    await expect(alerted.sync('user-a', 'connection-a')).rejects.toBeInstanceOf(UnauthorizedException);
+    expect(notifications.notifyOperational).toHaveBeenLastCalledWith(expect.objectContaining({ type: 'BANK_REAUTH_REQUIRED', dedupeKey: 'bank-reauth:connection-a' }));
   });
 });

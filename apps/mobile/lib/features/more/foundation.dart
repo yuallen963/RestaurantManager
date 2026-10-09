@@ -56,6 +56,10 @@ class MoreRepository {
   }
 
   Future<void> signOut() async {
+    final fcmToken = await secureStorage.read(key: 'fcmToken');
+    if (fcmToken != null) {
+      try { await dio.delete('/notifications/devices/${Uri.encodeComponent(fcmToken)}'); } on DioException { /* never block local logout */ }
+    }
     final refreshToken = await secureStorage.read(key: 'refreshToken');
     if (refreshToken != null) {
       try {
@@ -66,6 +70,7 @@ class MoreRepository {
     }
     await secureStorage.delete(key: 'accessToken');
     await secureStorage.delete(key: 'refreshToken');
+    await secureStorage.delete(key: 'fcmToken');
     dio.options.headers.remove('Authorization');
   }
 }
