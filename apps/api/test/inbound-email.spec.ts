@@ -1,4 +1,4 @@
-import { ForbiddenException, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { ForbiddenException, NotAcceptableException, UnauthorizedException } from '@nestjs/common';
 import { createHmac } from 'crypto';
 import { InboundAttachment, InboundEmailService, MailgunInboundBody } from '../src/invoices/inbound-email.service';
 
@@ -49,7 +49,7 @@ describe('invoice email ingestion', () => {
 
   it('rejects an unknown forwarding alias without storing data', async () => {
     const { service, storage } = setup({ location: null });
-    await expect(service.ingest(signedBody(), [file()])).rejects.toBeInstanceOf(NotFoundException);
+    await expect(service.ingest(signedBody(), [file()])).rejects.toBeInstanceOf(NotAcceptableException);
     expect(storage.put).not.toHaveBeenCalled();
   });
 

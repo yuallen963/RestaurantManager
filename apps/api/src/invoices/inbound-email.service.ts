@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotAcceptableException, NotFoundException, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ExtractionStatus, InvoiceIngestionSource, InvoiceStatus, Prisma } from '@prisma/client';
 import { createHash, createHmac, randomUUID, timingSafeEqual } from 'crypto';
@@ -62,10 +62,10 @@ export class InboundEmailService {
   }
 
   private aliasToken(recipient?: string) {
-    if (!recipient) throw new NotFoundException('Unknown invoice forwarding address');
+    if (!recipient) throw new NotAcceptableException('Unknown invoice forwarding address');
     const address = recipient.match(/<?([^<>\s,]+@[^<>\s,]+)>?/)?.[1]?.toLowerCase();
     const match = address?.match(new RegExp(`^${this.prefix()}\\+([a-f0-9]{24,64})@${this.domain().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`));
-    if (!match) throw new NotFoundException('Unknown invoice forwarding address');
+    if (!match) throw new NotAcceptableException('Unknown invoice forwarding address');
     return match[1];
   }
 
@@ -79,7 +79,7 @@ export class InboundEmailService {
   async ingest(body: MailgunInboundBody, files: InboundAttachment[]) {
     this.verifySignature(body);
     const location = await this.prisma.restaurantLocation.findUnique({ where: { invoiceEmailToken: this.aliasToken(body.recipient) } });
-    if (!location) throw new NotFoundException('Unknown invoice forwarding address');
+    if (!location) throw new NotAcceptableException('Unknown invoice forwarding address');
     const member = await this.prisma.organizationMember.findFirst({ where: { organizationId: location.organizationId }, orderBy: { createdAt: 'asc' }, select: { userId: true } });
     if (!member) throw new ServiceUnavailableException('Invoice email location has no active organization member');
     const sender = (body.sender || body.from || '').slice(0, 320) || null;

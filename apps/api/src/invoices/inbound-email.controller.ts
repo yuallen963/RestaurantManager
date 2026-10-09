@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, Query, UploadedFiles, UseGuards, UseInterceptors } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Post, Query, UploadedFiles, UseGuards, UseInterceptors } from '@nestjs/common';
 import { AnyFilesInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../auth/current-user.decorator';
@@ -18,6 +18,7 @@ export class InvoiceEmailController {
   }
 
   @Post('webhooks/mailgun')
+  @HttpCode(200)
   @UseInterceptors(AnyFilesInterceptor({ limits: { files: 20, fileSize: 16 * 1024 * 1024, fields: 100, fieldSize: 1024 * 1024 } }))
   webhook(@Body() body: MailgunInboundBody, @UploadedFiles() files: InboundAttachment[] = []) {
     return this.inbound.ingest(body, files);
