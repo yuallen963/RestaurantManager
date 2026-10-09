@@ -20,9 +20,10 @@ class DemoBankProvider implements BankProviderClient {
     return { accessToken: 'demo-access-token', itemId: 'demo-profitlens-checking', institutionId: 'demo-bank', institutionName: 'Profit Lens Sandbox Bank', accounts: [{ id: 'demo-checking-4242', name: 'Business Checking', mask: '4242', subtype: 'checking', type: 'depository' }] };
   }
   async sync(_accessToken: string, cursor?: string | null): Promise<ProviderSync> {
-    if (cursor) return { added: [], modified: [], removed: [], cursor };
     const today = new Date();
     const day = (offset: number) => { const date = new Date(today); date.setUTCDate(date.getUTCDate() + offset); return date.toISOString().slice(0, 10); };
+    if (cursor === 'demo-cursor-1') return { added: [{ id: 'demo-rochester-repeat', accountId: 'demo-checking-4242', date: day(0), merchantName: 'ROCHESTER MARKET 8841', description: 'ROCHESTER MARKET 8841', amount: 42.1, pending: false, category: 'General Merchandise', categoryId: 'GENERAL_MERCHANDISE' }], modified: [], removed: [], cursor: 'demo-cursor-2' };
+    if (cursor) return { added: [], modified: [], removed: [], cursor };
     return { cursor: 'demo-cursor-1', modified: [], removed: [], added: [
       { id: 'demo-sysco-invoice', accountId: 'demo-checking-4242', date: day(-3), merchantName: 'SYSCO FOOD SERVICES #1842', description: 'SYSCO ACH PAYMENT', amount: 1446, pending: false, category: 'Food and Drink', categoryId: 'FOOD_AND_DRINK' },
       { id: 'demo-adp-payroll', accountId: 'demo-checking-4242', date: day(-2), merchantName: 'ADP PAYROLL', description: 'ADP PAYROLL', amount: 3810.25, pending: false, category: 'Payroll', categoryId: 'PAYROLL' },
