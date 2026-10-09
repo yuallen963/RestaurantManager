@@ -7,6 +7,7 @@ import '../dashboard/foundation.dart';
 import '../dashboard/home_screen.dart';
 import 'foundation.dart';
 import '../product_matches/product_matches_screen.dart';
+import '../savings/savings_screen.dart';
 
 class PriceChangesScreen extends ConsumerWidget {
   const PriceChangesScreen({super.key});
@@ -18,12 +19,23 @@ class PriceChangesScreen extends ConsumerWidget {
       appBar: AppBar(
         title: const Text('Price Changes'),
         actions: [
+          IconButton(
+            key: const Key('open-savings-opportunities'),
+            tooltip: 'Savings Opportunities',
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => const SavingsOpportunitiesScreen(),
+              ),
+            ),
+            icon: const Icon(Icons.savings_outlined),
+          ),
           TextButton(
             onPressed: () => Navigator.push(
               context,
               MaterialPageRoute(builder: (_) => const ProductMatchesScreen()),
             ),
-            child: const Text('Product Matches'),
+            child: const Text('Matches'),
           ),
         ],
       ),

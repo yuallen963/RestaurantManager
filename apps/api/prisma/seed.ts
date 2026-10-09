@@ -7,6 +7,8 @@ import {
   OrganizationRole,
   Prisma,
   PrismaClient,
+  ProductMatchConfidence,
+  ProductMatchStatus,
   ReviewStatus,
   RevenueSource,
 } from '@prisma/client';
@@ -411,9 +413,9 @@ async function main() {
     {
       id: '10000000-0000-4000-8000-000000000008',
       vendor: 'us foods',
-      daysAgo: 3,
+      daysAgo: 10,
       lines: [
-        { rawDescription: 'CHICKEN BREAST B/S 40LB', sku: 'USF-CHKN-40', quantity: 10, unit: 'CASE', packSize: '40 lb', unitPrice: 103 },
+        { rawDescription: 'CHICKEN BREAST B/S 40LB', sku: 'USF-CHKN-40', quantity: 12, unit: 'CASE', packSize: '40 lb', unitPrice: 94.2 },
         { rawDescription: 'CHICKEN BREAST B/S 20LB', sku: 'USF-CHKN-20', quantity: 5, unit: 'CASE', packSize: '20 lb', unitPrice: 54 },
         { rawDescription: 'FROZEN CHICKEN THIGH 40LB', sku: 'USF-THIGH-40', quantity: 4, unit: 'CASE', packSize: '40 lb', unitPrice: 72 },
       ],
@@ -481,6 +483,39 @@ async function main() {
       })),
     });
   }
+
+  const [syscoChicken, usFoodsChicken] = await Promise.all([
+    prisma.invoiceLineItem.findFirstOrThrow({ where: { invoiceId: '10000000-0000-4000-8000-000000000003', sku: '384920' } }),
+    prisma.invoiceLineItem.findFirstOrThrow({ where: { invoiceId: '10000000-0000-4000-8000-000000000008', sku: 'USF-CHKN-40' } }),
+  ]);
+  const chickenGroup = await prisma.productGroup.create({
+    data: {
+      id: '20000000-0000-4000-8000-000000000001',
+      organizationId: demoOrgId,
+      restaurantLocationId: downtownId,
+      displayName: 'Boneless Skinless Chicken Breast',
+      members: {
+        create: [
+          { invoiceLineItemId: syscoChicken.id, vendorId: vendorId('sysco')!, confirmed: true },
+          { invoiceLineItemId: usFoodsChicken.id, vendorId: vendorId('us foods')!, confirmed: true },
+        ],
+      },
+    },
+  });
+  await prisma.productMatchDecision.create({
+    data: {
+      organizationId: demoOrgId,
+      restaurantLocationId: downtownId,
+      candidateLineItemAId: [syscoChicken.id, usFoodsChicken.id].sort()[0],
+      candidateLineItemBId: [syscoChicken.id, usFoodsChicken.id].sort()[1],
+      status: ProductMatchStatus.CONFIRMED,
+      confidence: ProductMatchConfidence.HIGH,
+      reason: 'Synthetic demo confirmation: compatible case unit and 40 lb total weight',
+      productGroupId: chickenGroup.id,
+      reviewedByUserId: user.id,
+      reviewedAt: seedToday,
+    },
+  });
 
   console.log(
     `Demo seeded through ${seedToday.toISOString().slice(0, 10)}: ${demoEmail} / DemoProfit2026!`,

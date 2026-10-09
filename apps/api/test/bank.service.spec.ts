@@ -39,7 +39,9 @@ describe('bank transaction foundation', () => {
     const stored = encryption.encrypt('access-token');
     expect(stored).not.toContain('access-token');
     expect(encryption.decrypt(stored)).toBe('access-token');
-    expect(() => encryption.decrypt(`${stored.slice(0, -1)}x`)).toThrow();
+    const tampered = stored.split('.');
+    tampered[3] = `${tampered[3][0] === 'A' ? 'B' : 'A'}${tampered[3].slice(1)}`;
+    expect(() => encryption.decrypt(tampered.join('.'))).toThrow();
   });
 
   it('ingests positive spending using a provider-id upsert and exact invoice suggestion', async () => {
