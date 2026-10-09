@@ -3,6 +3,7 @@ import {
   ExpenseSource,
   ExtractionStatus,
   InvoiceStatus,
+  MerchantRuleMatchType,
   OrganizationRole,
   Prisma,
   PrismaClient,
@@ -269,6 +270,15 @@ async function main() {
           (vendor) => vendor.normalizedName === normalizedName,
         )!.id;
 
+  await prisma.merchantRule.deleteMany({ where: { organizationId: demoOrgId } });
+  await prisma.merchantRule.createMany({
+    data: [
+      { organizationId: demoOrgId, matchType: MerchantRuleMatchType.CONTAINS, matchValue: 'SYSCO', normalizedMerchantName: 'Sysco', vendorId: vendorId('sysco'), expenseCategoryId: categoryId('food'), createdByUserId: user.id },
+      { organizationId: demoOrgId, matchType: MerchantRuleMatchType.CONTAINS, matchValue: 'ADP', normalizedMerchantName: 'ADP', vendorId: vendorId('adp'), expenseCategoryId: categoryId('labor'), createdByUserId: user.id },
+      { organizationId: demoOrgId, matchType: MerchantRuleMatchType.CONTAINS, matchValue: 'DTE', normalizedMerchantName: 'DTE Energy', vendorId: vendorId('dte energy'), expenseCategoryId: categoryId('utilities'), createdByUserId: user.id },
+    ],
+  });
+
   const revenueRows: Prisma.RevenueEntryCreateManyInput[] = [];
   const expenseRows: Prisma.ExpenseCreateManyInput[] = [];
 
@@ -337,7 +347,6 @@ async function main() {
   }
 
   await prisma.$transaction([
-    prisma.merchantRule.deleteMany({ where: { organizationId: demoOrgId } }),
     prisma.bankConnection.deleteMany({ where: { organizationId: demoOrgId } }),
     prisma.revenueEntry.deleteMany({ where: { organizationId: demoOrgId } }),
     prisma.expense.deleteMany({ where: { organizationId: demoOrgId } }),
@@ -412,6 +421,7 @@ async function main() {
         restaurantLocationId: downtownId,
         vendorId: selectedVendorId,
         invoiceDate,
+        invoiceNumber: `DEMO-${seeded.id.slice(-4)}`,
         total: new Prisma.Decimal(invoiceTotal),
         status: InvoiceStatus.COMPLETED,
         extractionStatus: ExtractionStatus.COMPLETED,
@@ -430,6 +440,7 @@ async function main() {
         fileSize: 1,
         storageKey: `synthetic-price-history/${seeded.id}.pdf`,
         invoiceDate,
+        invoiceNumber: `DEMO-${seeded.id.slice(-4)}`,
         total: new Prisma.Decimal(invoiceTotal),
         status: InvoiceStatus.COMPLETED,
         extractionStatus: ExtractionStatus.COMPLETED,
