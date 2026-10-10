@@ -260,6 +260,7 @@ class InvoiceDetailScreen extends ConsumerWidget {
           loading: () => const Center(child: CircularProgressIndicator()),
           error: (_, _) => const Center(child: Text('Unable to load invoice')),
           data: (invoice) {
+            final extractionState = ref.watch(invoiceExtractionProvider);
             final rows = <MapEntry<String, String>>[
               MapEntry(
                 'Source',
@@ -326,10 +327,19 @@ class InvoiceDetailScreen extends ConsumerWidget {
                   ),
                   const SizedBox(height: 8),
                 ],
+                if (extractionState.hasError) ...[
+                  Text(
+                    'Unable to start extraction. Check the service configuration and try again later.',
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.error,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                ],
                 if (invoice.extractionStatus == 'NOT_STARTED' ||
                     invoice.extractionStatus == 'FAILED')
                   FilledButton.icon(
-                    onPressed: ref.watch(invoiceExtractionProvider).isLoading
+                    onPressed: extractionState.isLoading
                         ? null
                         : () => ref
                               .read(invoiceExtractionProvider.notifier)

@@ -29,8 +29,10 @@ final invoice = InvoiceRecord(
 );
 
 class FakeInvoiceRepository extends InvoiceRepository {
-  FakeInvoiceRepository({this.failUpload = false}) : super(Dio());
+  FakeInvoiceRepository({this.failUpload = false, this.failExtraction = false})
+    : super(Dio());
   final bool failUpload;
+  final bool failExtraction;
   bool deleted = false;
   bool reviewed = false;
   Map<String, dynamic>? correctedLine;
@@ -49,6 +51,13 @@ class FakeInvoiceRepository extends InvoiceRepository {
 
   @override
   Future<void> delete(String id) async => deleted = true;
+
+  @override
+  Future<void> extract(String id) async {
+    if (failExtraction) {
+      throw DioException(requestOptions: RequestOptions(path: '/extract'));
+    }
+  }
 
   @override
   Future<InvoiceRecord> review(String id, Map<String, dynamic> data) async {
@@ -305,6 +314,34 @@ void main() {
     );
     expect(find.text('Unable to read document'), findsNothing);
     expect(find.text('Retry Extraction'), findsOneWidget);
+  });
+
+  testWidgets('unavailable extraction shows a safe recoverable message', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      app([
+        invoiceRepositoryProvider.overrideWithValue(
+          FakeInvoiceRepository(failExtraction: true),
+        ),
+        invoiceDetailProvider('invoice-a').overrideWith((_) async => invoice),
+      ], const InvoiceDetailScreen(invoiceId: 'invoice-a')),
+    );
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.text('Extract Invoice'),
+      300,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.tap(find.text('Extract Invoice'));
+    await tester.pumpAndSettle();
+    expect(
+      find.text(
+        'Unable to start extraction. Check the service configuration and try again later.',
+      ),
+      findsOneWidget,
+    );
+    expect(find.textContaining('DioException'), findsNothing);
   });
 
   testWidgets('review highlights low confidence and marks reviewed', (
