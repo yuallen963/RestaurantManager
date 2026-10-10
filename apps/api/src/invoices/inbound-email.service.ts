@@ -9,6 +9,7 @@ import { InvoiceExtractionProcessor } from './extraction.processor';
 import { InvoiceStorageService } from './storage.service';
 
 export interface InboundAttachment {
+  fieldname?: string;
   originalname: string;
   mimetype: string;
   size: number;
@@ -25,11 +26,19 @@ export interface MailgunInboundBody {
   subject?: string;
   'Message-Id'?: string;
   'message-id'?: string;
+  'content-id-map'?: string;
 }
 
 const allowedTypes = new Set(['application/pdf', 'image/jpeg', 'image/png']);
 const maxAttachmentSize = 15 * 1024 * 1024;
 const safeName = (name: string) => name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(-160) || 'invoice';
+const replayRetentionMs = 24 * 60 * 60 * 1000;
+const isExpectedContent = (file: InboundAttachment) => {
+  if (file.mimetype === 'application/pdf') return file.buffer.subarray(0, 1024).includes(Buffer.from('%PDF-'));
+  if (file.mimetype === 'image/jpeg') return file.buffer.length >= 3 && file.buffer[0] === 0xff && file.buffer[1] === 0xd8 && file.buffer[2] === 0xff;
+  if (file.mimetype === 'image/png') return file.buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+  return false;
+};
 
 @Injectable()
 export class InboundEmailService {
@@ -78,6 +87,25 @@ export class InboundEmailService {
 
   async ingest(body: MailgunInboundBody, files: InboundAttachment[]) {
     this.verifySignature(body);
+    const tokenHash = createHash('sha256').update(body.token!).digest('hex');
+    await this.prisma.inboundEmailWebhookReceipt.deleteMany({ where: { receivedAt: { lt: new Date(Date.now() - replayRetentionMs) } } });
+    try {
+      await this.prisma.inboundEmailWebhookReceipt.create({ data: { tokenHash } });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') return { accepted: true, created: [], duplicates: [], ignoredAttachments: 0, replay: true };
+      throw error;
+    }
+    try {
+      const result = await this.ingestVerified(body, files);
+      await this.prisma.inboundEmailWebhookReceipt.update({ where: { tokenHash }, data: { processedAt: new Date() } });
+      return result;
+    } catch (error) {
+      await this.prisma.inboundEmailWebhookReceipt.delete({ where: { tokenHash } }).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  private async ingestVerified(body: MailgunInboundBody, files: InboundAttachment[]) {
     const location = await this.prisma.restaurantLocation.findUnique({ where: { invoiceEmailToken: this.aliasToken(body.recipient) } });
     if (!location) throw new NotAcceptableException('Unknown invoice forwarding address');
     const member = await this.prisma.organizationMember.findFirst({ where: { organizationId: location.organizationId }, orderBy: { createdAt: 'asc' }, select: { userId: true } });
@@ -86,9 +114,16 @@ export class InboundEmailService {
     const subject = body.subject?.slice(0, 500) || null;
     const messageId = (body['Message-Id'] || body['message-id'])?.slice(0, 500) || null;
     await this.audit.log({ userId: member.userId, organizationId: location.organizationId, action: 'invoice.email_received', entityType: 'RestaurantLocation', entityId: location.id, metadata: { messageId, attachmentCount: files.length } });
-    const supported = files.filter((file) => allowedTypes.has(file.mimetype) && file.size <= maxAttachmentSize);
-    const rejected = files.filter((file) => !allowedTypes.has(file.mimetype) || file.size > maxAttachmentSize);
-    for (const file of rejected) await this.audit.log({ userId: member.userId, organizationId: location.organizationId, action: 'invoice.ingestion_failed', entityType: 'RestaurantLocation', entityId: location.id, metadata: { messageId, fileName: safeName(file.originalname), reason: allowedTypes.has(file.mimetype) ? 'attachment_too_large' : 'unsupported_mime_type' } });
+    const inlineFields = this.inlineAttachmentFields(body['content-id-map']);
+    const supported: InboundAttachment[] = [];
+    const rejected: Array<{ file: InboundAttachment; reason: string }> = [];
+    for (const file of files) {
+      file.mimetype = file.mimetype.toLowerCase().split(';')[0].trim();
+      const decorative = (file.fieldname && inlineFields.has(file.fieldname)) || inlineFields.has(file.originalname) || (file.size <= 256 * 1024 && /(?:^|[_.-])(logo|signature|spacer|pixel|icon)(?:[_.-]|$)/i.test(file.originalname));
+      const reason = !allowedTypes.has(file.mimetype) ? 'unsupported_mime_type' : file.size > maxAttachmentSize ? 'attachment_too_large' : decorative ? 'decorative_inline_image' : !isExpectedContent(file) ? 'file_signature_mismatch' : null;
+      if (reason) rejected.push({ file, reason }); else supported.push(file);
+    }
+    for (const { file, reason } of rejected) await this.audit.log({ userId: member.userId, organizationId: location.organizationId, action: reason === 'decorative_inline_image' ? 'invoice.attachment_ignored' : 'invoice.ingestion_failed', entityType: 'RestaurantLocation', entityId: location.id, metadata: { messageId, fileName: safeName(file.originalname), reason } });
     if (!supported.length) return { accepted: true, created: [], duplicates: [], ignoredAttachments: rejected.length, message: 'No supported invoice attachments were found' };
     const created: string[] = [];
     const duplicates: string[] = [];
@@ -109,6 +144,7 @@ export class InboundEmailService {
         await this.prisma.invoice.create({ data: { id, organizationId: location.organizationId, restaurantLocationId: location.id, fileName, originalFileName: originalName, originalAttachmentName: originalName, fileType: file.mimetype, fileSize: file.size, storageKey, createdByUserId: member.userId, status: InvoiceStatus.UPLOADED, ingestionSource: InvoiceIngestionSource.EMAIL_FORWARD, inboundMessageId: messageId, inboundSender: sender, inboundSubject: subject, inboundReceivedAt: new Date(), attachmentHash: hash, extractionStatus: ExtractionStatus.NOT_STARTED } });
       } catch (error) {
         if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+          try { await this.storage.remove(storageKey); } catch { /* best-effort cleanup */ }
           const existing = await this.prisma.invoice.findFirst({ where: { organizationId: location.organizationId, restaurantLocationId: location.id, attachmentHash: hash }, select: { id: true } });
           if (existing) {
             duplicates.push(existing.id);
@@ -130,5 +166,15 @@ export class InboundEmailService {
       }
     }
     return { accepted: true, created, duplicates, ignoredAttachments: rejected.length };
+  }
+
+  private inlineAttachmentFields(raw?: string) {
+    if (!raw) return new Set<string>();
+    try {
+      const parsed = JSON.parse(raw);
+      return new Set<string>(Object.values(parsed).filter((value): value is string => typeof value === 'string'));
+    } catch {
+      return new Set<string>();
+    }
   }
 }

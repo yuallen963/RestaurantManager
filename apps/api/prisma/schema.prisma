@@ -605,6 +605,15 @@ model InvoiceLineItem {
   @@index([organizationId, restaurantLocationId])
 }
 
+model InboundEmailWebhookReceipt {
+  id          String    @id @default(uuid())
+  tokenHash   String    @unique
+  receivedAt  DateTime  @default(now())
+  processedAt DateTime?
+
+  @@index([receivedAt])
+}
+
 model ProductGroup {
   id                   String                 @id @default(uuid())
   organizationId       String
