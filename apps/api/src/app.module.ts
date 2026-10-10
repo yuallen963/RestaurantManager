@@ -15,5 +15,6 @@ import { ProductMatchesModule } from './product-matches/product-matches.module';
 import { SavingsIntelligenceModule } from './savings-intelligence/savings-intelligence.module';
 import { PosModule } from './pos/pos.module';
 import { NotificationsModule } from './notifications/notifications.module';
-@Module({ imports: [ConfigModule.forRoot({ isGlobal: true }), AuthModule, OrganizationsModule, LocationsModule, DashboardModule, FinanceModule, InvoicesModule, PriceIntelligenceModule, NeedsAttentionModule, BankModule, ProductMatchesModule, SavingsIntelligenceModule, PosModule, NotificationsModule], providers: [PrismaService, AuditService] })
+import { OnboardingModule } from './onboarding/onboarding.module';
+@Module({ imports: [ConfigModule.forRoot({ isGlobal: true }), AuthModule, OrganizationsModule, LocationsModule, DashboardModule, FinanceModule, InvoicesModule, PriceIntelligenceModule, NeedsAttentionModule, BankModule, ProductMatchesModule, SavingsIntelligenceModule, PosModule, NotificationsModule, OnboardingModule], providers: [PrismaService, AuditService] })
 export class AppModule {}

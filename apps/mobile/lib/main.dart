@@ -9,6 +9,8 @@ import 'features/tabs.dart';
 import 'features/notifications/notification_screen.dart';
 import 'features/notifications/push_service.dart';
 import 'features/notifications/notification_router.dart';
+import 'features/onboarding/foundation.dart';
+import 'features/onboarding/onboarding_screen.dart';
 
 const storage = FlutterSecureStorage();
 const apiBaseUrl = String.fromEnvironment(
@@ -54,7 +56,7 @@ class AuthBootstrap extends ConsumerStatefulWidget {
 
 class _AuthBootstrapState extends ConsumerState<AuthBootstrap> {
   String? error;
-  bool get devAutoLogin => !kReleaseMode && devAutoLoginRequested;
+  bool get devAutoLogin => ref.read(demoModeProvider);
   @override
   void initState() {
     super.initState();
@@ -69,10 +71,7 @@ class _AuthBootstrapState extends ConsumerState<AuthBootstrap> {
       if (access != null) {
         client.options.headers['Authorization'] = 'Bearer $access';
         await client.get('/auth/me');
-        if (mounted)
-          Navigator.of(
-            context,
-          ).pushReplacement(MaterialPageRoute(builder: (_) => const Home()));
+        await _enterAuthenticatedApp();
         return;
       }
       if (refresh != null) {
@@ -81,10 +80,7 @@ class _AuthBootstrapState extends ConsumerState<AuthBootstrap> {
           data: {'refreshToken': refresh},
         );
         await _save(response.data as Map<String, dynamic>);
-        if (mounted)
-          Navigator.of(
-            context,
-          ).pushReplacement(MaterialPageRoute(builder: (_) => const Home()));
+        await _enterAuthenticatedApp();
         return;
       }
       if (devAutoLogin) {
@@ -93,10 +89,7 @@ class _AuthBootstrapState extends ConsumerState<AuthBootstrap> {
           data: {'email': _demoEmail, 'password': _demoPassword},
         );
         await _save(response.data as Map<String, dynamic>);
-        if (mounted)
-          Navigator.of(
-            context,
-          ).pushReplacement(MaterialPageRoute(builder: (_) => const Home()));
+        await _enterAuthenticatedApp(forceHome: true);
         return;
       }
       if (mounted)
@@ -111,10 +104,7 @@ class _AuthBootstrapState extends ConsumerState<AuthBootstrap> {
             data: {'refreshToken': refresh},
           );
           await _save(response.data as Map<String, dynamic>);
-          if (mounted)
-            Navigator.of(
-              context,
-            ).pushReplacement(MaterialPageRoute(builder: (_) => const Home()));
+          await _enterAuthenticatedApp();
           return;
         } catch (_) {}
       }
@@ -125,10 +115,7 @@ class _AuthBootstrapState extends ConsumerState<AuthBootstrap> {
             data: {'email': _demoEmail, 'password': _demoPassword},
           );
           await _save(response.data as Map<String, dynamic>);
-          if (mounted)
-            Navigator.of(
-              context,
-            ).pushReplacement(MaterialPageRoute(builder: (_) => const Home()));
+          await _enterAuthenticatedApp(forceHome: true);
           return;
         } catch (_) {
           if (mounted)
@@ -142,6 +129,19 @@ class _AuthBootstrapState extends ConsumerState<AuthBootstrap> {
           MaterialPageRoute(builder: (_) => const AuthScreen()),
         );
     }
+  }
+
+  Future<void> _enterAuthenticatedApp({bool forceHome = false}) async {
+    if (!mounted) return;
+    final completed =
+        forceHome ||
+        (await ref.read(onboardingRepositoryProvider).get()).completed;
+    if (!mounted) return;
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(
+        builder: (_) => completed ? const Home() : const Onboarding(),
+      ),
+    );
   }
 
   Future<void> _save(Map<String, dynamic> data) async {
@@ -190,6 +190,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
   final email = TextEditingController();
   final password = TextEditingController();
   bool busy = false;
+  bool creatingAccount = false;
   String? error;
   Future<void> login() async {
     setState(() => busy = true);
@@ -197,7 +198,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
       final response = await ref
           .read(api)
           .post(
-            '/auth/login',
+            creatingAccount ? '/auth/register' : '/auth/login',
             data: {'email': email.text, 'password': password.text},
           );
       await storage.write(
@@ -208,14 +209,24 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
         key: 'refreshToken',
         value: response.data['refreshToken'],
       );
+      ref.read(api).options.headers['Authorization'] =
+          'Bearer ${response.data['accessToken']}';
+      final onboarding = await ref.read(onboardingRepositoryProvider).get();
       if (mounted) {
         Navigator.pushReplacement(
           context,
-          MaterialPageRoute(builder: (_) => const Onboarding()),
+          MaterialPageRoute(
+            builder: (_) =>
+                onboarding.completed ? const Home() : const Onboarding(),
+          ),
         );
       }
     } on DioException {
-      setState(() => error = 'Unable to sign in.');
+      setState(
+        () => error = creatingAccount
+            ? 'Unable to create account. Use a valid email and a password of at least 12 characters.'
+            : 'Unable to sign in.',
+      );
     } finally {
       if (mounted) setState(() => busy = false);
     }
@@ -245,27 +256,23 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
             if (error != null) Text(error!),
             FilledButton(
               onPressed: busy ? null : login,
-              child: const Text('Log in'),
+              child: Text(creatingAccount ? 'Create account' : 'Log in'),
+            ),
+            TextButton(
+              onPressed: busy
+                  ? null
+                  : () => setState(() {
+                      creatingAccount = !creatingAccount;
+                      error = null;
+                    }),
+              child: Text(
+                creatingAccount
+                    ? 'Already have an account? Log in'
+                    : 'New to ProfitLens? Create account',
+              ),
             ),
           ],
         ),
-      ),
-    ),
-  );
-}
-
-class Onboarding extends StatelessWidget {
-  const Onboarding({super.key});
-  @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('Set up your workspace')),
-    body: Center(
-      child: FilledButton(
-        onPressed: () => Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (_) => const Home()),
-        ),
-        child: const Text('Create organization and first location'),
       ),
     ),
   );
@@ -280,9 +287,35 @@ class Home extends ConsumerStatefulWidget {
 class _HomeState extends ConsumerState<Home> {
   int index = 0;
   PushMessageCoordinator? coordinator;
-  @override void initState() { super.initState(); _startPush(); }
-  Future<void> _startPush() async { final client = await FirebasePushClient.create(); if (!mounted) return; coordinator = PushMessageCoordinator(client); await coordinator!.start(onForeground: () { ref.invalidate(notificationListProvider); }, onOpen: (data) async { if (!mounted) return; await ref.read(notificationRouterProvider).open(context, ref, NotificationRouteData.fromJson(data)); }); }
-  @override void dispose() { coordinator?.dispose(); super.dispose(); }
+  @override
+  void initState() {
+    super.initState();
+    _startPush();
+  }
+
+  Future<void> _startPush() async {
+    final client = await FirebasePushClient.create();
+    if (!mounted) return;
+    coordinator = PushMessageCoordinator(client);
+    await coordinator!.start(
+      onForeground: () {
+        ref.invalidate(notificationListProvider);
+      },
+      onOpen: (data) async {
+        if (!mounted) return;
+        await ref
+            .read(notificationRouterProvider)
+            .open(context, ref, NotificationRouteData.fromJson(data));
+      },
+    );
+  }
+
+  @override
+  void dispose() {
+    coordinator?.dispose();
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
     const pages = [

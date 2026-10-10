@@ -223,6 +223,7 @@ model User {
   notifications         Notification[]
   notificationPreferences NotificationPreference[]
   devicePushTokens      DevicePushToken[]
+  onboardingState       OnboardingState?
 }
 
 model Organization {
@@ -245,6 +246,7 @@ model Organization {
   posOAuthStates        PosOAuthState[]
   notifications         Notification[]
   notificationPreferences NotificationPreference[]
+  onboardingStates      OnboardingState[]
 }
 
 model OrganizationMember {
@@ -268,6 +270,7 @@ model RestaurantLocation {
   city                  String?
   state                 String?
   postalCode            String?
+  timezone              String                 @default("America/Detroit")
   createdAt             DateTime               @default(now())
   updatedAt             DateTime               @updatedAt
   invoiceEmailToken     String                 @unique
@@ -281,8 +284,28 @@ model RestaurantLocation {
   posDailySales         PosDailySales[]
   notifications         Notification[]
   notificationPreferences NotificationPreference[]
+  onboardingStates      OnboardingState[]
 
   @@index([organizationId])
+}
+
+model OnboardingState {
+  id                   String              @id @default(uuid())
+  userId               String              @unique
+  organizationId       String?
+  restaurantLocationId String?
+  onboardingStartedAt  DateTime            @default(now())
+  onboardingCompletedAt DateTime?
+  currentStep          Int                 @default(1)
+  selectedDataSources  String[]            @default([])
+  createdAt            DateTime            @default(now())
+  updatedAt            DateTime            @updatedAt
+  user                 User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization         Organization?       @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  restaurantLocation   RestaurantLocation? @relation(fields: [restaurantLocationId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId])
+  @@index([restaurantLocationId])
 }
 
 model ExpenseCategory {

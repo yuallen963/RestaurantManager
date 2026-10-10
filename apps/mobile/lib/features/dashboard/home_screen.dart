@@ -5,6 +5,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'foundation.dart';
 import '../needs_attention/needs_attention_screen.dart';
+import '../banking/bank_screens.dart';
+import '../invoice_email/invoice_email_screen.dart';
+import '../invoices/invoice_screens.dart';
+import '../pos/pos_integrations_screen.dart';
 
 class HomeScreen extends ConsumerWidget {
   const HomeScreen({super.key});
@@ -58,6 +62,13 @@ class HomeScreen extends ConsumerWidget {
               const EmptyState(
                 message: 'No financial activity found for this period.',
               ),
+              const SizedBox(height: 8),
+              const Text(
+                'No cost insights yet. Upload more vendor invoices to start detecting price changes.',
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 20),
+              const _FirstRunActions(),
             ],
           );
         }
@@ -70,6 +81,47 @@ class HomeScreen extends ConsumerWidget {
       },
     );
   }
+}
+
+class _FirstRunActions extends StatelessWidget {
+  const _FirstRunActions();
+  @override
+  Widget build(BuildContext context) => Wrap(
+    spacing: 8,
+    runSpacing: 8,
+    alignment: WrapAlignment.center,
+    children: [
+      FilledButton.icon(
+        onPressed: () => Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const InvoiceUploadScreen()),
+        ),
+        icon: const Icon(Icons.upload_file),
+        label: const Text('Upload Invoice'),
+      ),
+      OutlinedButton(
+        onPressed: () => Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const InvoiceEmailScreen()),
+        ),
+        child: const Text('View Invoice Email'),
+      ),
+      OutlinedButton(
+        onPressed: () => Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const PosIntegrationsScreen()),
+        ),
+        child: const Text('Connect POS'),
+      ),
+      OutlinedButton(
+        onPressed: () => Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const BankAccountsScreen()),
+        ),
+        child: const Text('Connect Bank'),
+      ),
+    ],
+  );
 }
 
 class _DashboardContent extends StatelessWidget {

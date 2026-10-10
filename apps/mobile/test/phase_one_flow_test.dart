@@ -7,6 +7,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:restaurant_profit_mobile/main.dart';
 import 'package:restaurant_profit_mobile/features/dashboard/foundation.dart';
+import 'package:restaurant_profit_mobile/features/onboarding/onboarding_screen.dart';
 
 void main() {
   setUp(() => FlutterSecureStorage.setMockInitialValues({}));
@@ -39,7 +40,10 @@ void main() {
       await tester.tap(find.text('Log in'));
       await tester.pumpAndSettle();
 
-      expect(find.text('Set up your workspace'), findsOneWidget);
+      expect(
+        find.text('Find the costs quietly eating your restaurant’s margin.'),
+        findsOneWidget,
+      );
       expect(await storage.read(key: 'accessToken'), 'access-token');
       expect(await storage.read(key: 'refreshToken'), 'refresh-token');
     },
@@ -91,6 +95,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
+          api.overrideWithValue(onboardingDio(step: 6)),
           activeLocationProvider.overrideWithValue(null),
           activeLocationStateProvider.overrideWithValue(
             const AsyncData(ActiveLocationState([], null)),
@@ -99,9 +104,9 @@ void main() {
         child: const MaterialApp(home: Onboarding()),
       ),
     );
-    await tester.tap(find.text('Create organization and first location'));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 400));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Go to Dashboard'));
+    await tester.pumpAndSettle();
 
     expect(find.byType(Home), findsOneWidget);
   });
@@ -165,5 +170,30 @@ Dio deferredDio(Completer<Response<dynamic>> response) => Dio()
           handler.reject(DioException(requestOptions: options, error: error));
         }
       },
+    ),
+  );
+
+Dio onboardingDio({required int step}) => Dio()
+  ..interceptors.add(
+    InterceptorsWrapper(
+      onRequest: (options, handler) => handler.resolve(
+        Response(
+          requestOptions: options,
+          data: {
+            'currentStep': step,
+            'onboardingCompletedAt': options.path.endsWith('/complete')
+                ? DateTime(2026).toIso8601String()
+                : null,
+            'selectedDataSources': ['INVOICES'],
+            'organization': {'id': 'org-1', 'name': 'Test Restaurant Group'},
+            'restaurantLocation': {
+              'id': 'location-1',
+              'name': 'Downtown',
+              'timezone': 'America/Detroit',
+            },
+          },
+          statusCode: 200,
+        ),
+      ),
     ),
   );
