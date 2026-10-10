@@ -1,4 +1,4 @@
-import { ForbiddenException, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { createHmac } from 'node:crypto';
 import { BankTokenEncryptionService } from '../src/bank/encryption.service';
@@ -10,6 +10,8 @@ describe('Square POS integration', () => {
 
   it('uses the Square location timezone for the business date', () => {
     expect(businessDate('2026-10-10T03:30:00.000Z', 'America/Detroit')).toBe('2026-10-09');
+    expect(businessDate('2026-11-01T05:30:00.000Z', 'America/Detroit')).toBe('2026-11-01');
+    expect(businessDate('2026-11-01T06:30:00.000Z', 'America/Detroit')).toBe('2026-11-01');
   });
 
   it('calculates deterministic net restaurant sales excluding tax and tips', () => {
@@ -17,15 +19,20 @@ describe('Square POS integration', () => {
     expect(day).toMatchObject({ businessDate: '2026-10-09', grossSales: 10500, discounts: 500, refunds: 0, taxes: 800, tips: 1200, netSales: 10000, transactionCount: 1 });
   });
 
-  it('applies partial refunds and excludes voided or incomplete orders', () => {
+  it('applies a partial refund once on the original order date and excludes incomplete orders', () => {
     const rows = aggregateSquareOrders([
-      { state: 'COMPLETED', closed_at: '2026-10-09T18:00:00Z', net_amounts: { total_money: { amount: 10000 }, tax_money: { amount: 600 }, tip_money: { amount: 400 }, refund_money: { amount: 0 } } },
-      { state: 'COMPLETED', closed_at: '2026-10-09T20:00:00Z', net_amounts: { total_money: { amount: -3200 }, tax_money: { amount: -200 }, tip_money: { amount: 0 }, refund_money: { amount: 3000 } } },
+      { id: 'order-a', state: 'COMPLETED', closed_at: '2026-10-09T18:00:00Z', updated_at: '2026-10-12T20:00:00Z', net_amounts: { total_money: { amount: 6600 }, tax_money: { amount: 600 }, tip_money: { amount: 0 }, refund_money: { amount: 3000 } } },
       { state: 'CANCELED', closed_at: '2026-10-09T20:00:00Z', net_amounts: { total_money: { amount: 99999 } } },
       { state: 'OPEN', closed_at: '2026-10-09T20:00:00Z', net_amounts: { total_money: { amount: 99999 } } },
     ], 'America/Detroit');
     expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({ netSales: 6000, refunds: 3000, transactionCount: 2 });
+    expect(rows[0]).toMatchObject({ businessDate: '2026-10-09', grossSales: 9000, netSales: 6000, refunds: 3000, transactionCount: 1 });
+  });
+
+  it('applies a full refund once on the original order date', () => {
+    expect(aggregateSquareOrders([{ id: 'order-a', state: 'COMPLETED', closed_at: '2026-10-05T18:00:00Z', updated_at: '2026-10-08T18:00:00Z', net_amounts: { total_money: { amount: 0 }, tax_money: { amount: 0 }, tip_money: { amount: 0 }, refund_money: { amount: 10000 } } }], 'America/Detroit')).toEqual([
+      expect.objectContaining({ businessDate: '2026-10-05', grossSales: 10000, refunds: 10000, netSales: 0 }),
+    ]);
   });
 
   it('follows Square order pagination without calling production', async () => {
@@ -36,6 +43,13 @@ describe('Square POS integration', () => {
     expect(orders.map((order) => order.id)).toEqual(['one', 'two']);
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect((fetchMock.mock.calls[1][1] as RequestInit).body).toContain('"cursor":"next"');
+  });
+
+  it('fails safely when Square OAuth configuration is missing', () => {
+    delete process.env.SQUARE_APPLICATION_ID;
+    delete process.env.SQUARE_APPLICATION_SECRET;
+    delete process.env.SQUARE_REDIRECT_URI;
+    expect(() => new SquareProvider().authorizationUrl('state')).toThrow(ServiceUnavailableException);
   });
 
   it('encrypts POS credentials with authenticated encryption', () => {
@@ -66,7 +80,7 @@ describe('Square POS integration', () => {
 
   it('persists OAuth credentials only after one-time tenant state validation', async () => {
     const prisma: any = {
-      posOAuthState: { findUnique: jest.fn().mockResolvedValue({ id: 'state-id', organizationId: 'org-a', userId: 'user-a', expiresAt: new Date(Date.now() + 60000), usedAt: null }), update: jest.fn().mockResolvedValue({}) },
+      posOAuthState: { findUnique: jest.fn().mockResolvedValue({ id: 'state-id', organizationId: 'org-a', userId: 'user-a', expiresAt: new Date(Date.now() + 60000), usedAt: null }), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
       posConnection: { findUnique: jest.fn().mockResolvedValue(null), upsert: jest.fn(({ create }) => Promise.resolve({ id: 'connection', ...create })) },
     };
     const audit = { log: jest.fn().mockResolvedValue(undefined) };
@@ -75,11 +89,21 @@ describe('Square POS integration', () => {
     const service = new PosService(prisma, {} as any, audit as any, encryption as any, square as any);
     const result = await service.callback('authorization-code', 'oauth-state');
     expect(result).toEqual({ connected: true, connectionId: 'connection' });
-    expect(prisma.posOAuthState.update).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'state-id' }, data: { usedAt: expect.any(Date) } }));
+    expect(prisma.posOAuthState.updateMany).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ id: 'state-id', usedAt: null }), data: { usedAt: expect.any(Date) } }));
     const create = prisma.posConnection.upsert.mock.calls[0][0].create;
     expect(create.encryptedAccessToken).toBe('encrypted:access-secret');
     expect(create.encryptedRefreshToken).toBe('encrypted:refresh-secret');
     expect(JSON.stringify(result)).not.toContain('secret');
+  });
+
+  it('rejects an expired or already-claimed OAuth state before exchanging the code', async () => {
+    const prisma: any = {
+      posOAuthState: { findUnique: jest.fn().mockResolvedValue({ id: 'state-id', organizationId: 'org-a', userId: 'user-a' }), updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
+    };
+    const square = { exchange: jest.fn() };
+    const service = new PosService(prisma, {} as any, {} as any, {} as any, square as any);
+    await expect(service.callback('code', 'replayed-state')).rejects.toBeInstanceOf(BadRequestException);
+    expect(square.exchange).not.toHaveBeenCalled();
   });
 
   it('rejects cross-tenant restaurant location mapping', async () => {
@@ -89,7 +113,69 @@ describe('Square POS integration', () => {
     };
     const access = { requireMember: jest.fn().mockResolvedValue({}) };
     const service = new PosService(prisma, access as any, {} as any, {} as any, {} as any);
-    await expect(service.map('user-a', 'connection', { restaurantLocationId: 'loc-b', providerLocationId: 'square-a', providerLocationName: 'Square A', providerTimezone: 'UTC' })).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(service.map('user-a', 'connection', { restaurantLocationId: 'loc-b', providerLocationId: 'square-a' })).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('uses provider-owned location metadata when creating a mapping', async () => {
+    const connection = { id: 'connection', organizationId: 'org-a', encryptedAccessToken: 'cipher', tokenExpiresAt: null, status: 'CONNECTED', mappings: [] };
+    const prisma: any = {
+      posConnection: { findUnique: jest.fn().mockResolvedValue(connection) },
+      restaurantLocation: { findUnique: jest.fn().mockResolvedValue({ id: 'loc-a', organizationId: 'org-a' }) },
+      posLocationMapping: { findFirst: jest.fn().mockResolvedValue(null), upsert: jest.fn(({ create }) => Promise.resolve({ id: 'mapping', ...create })) },
+    };
+    const square = { locations: jest.fn().mockResolvedValue([{ id: 'square-a', name: 'Provider Name', timezone: 'America/Detroit' }]) };
+    const service = new PosService(prisma, { requireMember: jest.fn() } as any, { log: jest.fn() } as any, { decryptPos: jest.fn().mockReturnValue('token') } as any, square as any);
+    jest.spyOn(service, 'sync').mockResolvedValue({} as any);
+    await service.map('user-a', 'connection', { restaurantLocationId: 'loc-a', providerLocationId: 'square-a' });
+    expect(prisma.posLocationMapping.upsert).toHaveBeenCalledWith(expect.objectContaining({ create: expect.objectContaining({ providerLocationName: 'Provider Name', providerTimezone: 'America/Detroit', organizationId: 'org-a' }) }));
+  });
+
+  it('performs an idempotent initial sync through the daily-sales unique key', async () => {
+    const connection = { id: 'connection', organizationId: 'org-a', createdByUserId: 'user-a', encryptedAccessToken: 'cipher', tokenExpiresAt: null, status: 'CONNECTED', lastSyncAt: null, mappings: [{ id: 'mapping', active: true, providerLocationId: 'square-a', providerTimezone: 'America/Detroit', restaurantLocationId: 'loc-a' }] };
+    const prisma: any = {
+      posConnection: { findUnique: jest.fn().mockResolvedValue(connection), updateMany: jest.fn().mockResolvedValue({ count: 1 }), update: jest.fn().mockResolvedValue(connection) },
+      posDailySales: { findMany: jest.fn().mockResolvedValue([]), upsert: jest.fn().mockResolvedValue({ id: 'sales', revenueEntryId: null }), update: jest.fn() },
+      revenueEntry: { findFirst: jest.fn().mockResolvedValue(null), create: jest.fn().mockResolvedValue({ id: 'revenue' }), update: jest.fn() },
+    };
+    const square = { orders: jest.fn().mockResolvedValue([{ state: 'COMPLETED', closed_at: '2026-10-05T18:00:00Z', net_amounts: { total_money: { amount: 10800 }, tax_money: { amount: 800 }, tip_money: { amount: 0 }, refund_money: { amount: 0 } } }]) };
+    const service = new PosService(prisma, { requireMember: jest.fn() } as any, { log: jest.fn() } as any, { decryptPos: jest.fn().mockReturnValue('token') } as any, square as any);
+    await service.sync('user-a', 'connection', true);
+    const orderWindow = square.orders.mock.calls[0];
+    expect(orderWindow[3].getTime() - orderWindow[2].getTime()).toBe(90 * 86400000);
+    expect(prisma.posDailySales.upsert).toHaveBeenCalledWith(expect.objectContaining({ where: { posConnectionId_providerLocationId_businessDate: expect.objectContaining({ posConnectionId: 'connection', providerLocationId: 'square-a' }) } }));
+    expect(prisma.revenueEntry.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ source: 'POS_IMPORT', organizationId: 'org-a', restaurantLocationId: 'loc-a' }) }));
+  });
+
+  it('uses the overlap window and updates linked revenue without duplicating it', async () => {
+    const lastSyncAt = new Date('2026-10-09T12:00:00Z');
+    const connection = { id: 'connection', organizationId: 'org-a', createdByUserId: 'user-a', encryptedAccessToken: 'cipher', tokenExpiresAt: null, status: 'CONNECTED', lastSyncAt, mappings: [{ id: 'mapping', active: true, providerLocationId: 'square-a', providerTimezone: 'UTC', restaurantLocationId: 'loc-a' }] };
+    const existing = { id: 'sales', businessDate: new Date('2026-10-05T00:00:00Z'), netSales: new Prisma.Decimal(100), conflictStatus: 'NONE', revenueEntryId: 'revenue' };
+    const prisma: any = {
+      posConnection: { findUnique: jest.fn().mockResolvedValue(connection), updateMany: jest.fn().mockResolvedValue({ count: 1 }), update: jest.fn().mockResolvedValue(connection) },
+      posDailySales: { findMany: jest.fn().mockResolvedValue([existing]), upsert: jest.fn().mockResolvedValue(existing), update: jest.fn() },
+      revenueEntry: { findFirst: jest.fn().mockResolvedValue(null), create: jest.fn(), update: jest.fn() },
+    };
+    const square = { orders: jest.fn().mockResolvedValue([{ state: 'COMPLETED', closed_at: '2026-10-05T18:00:00Z', net_amounts: { total_money: { amount: 9000 }, tax_money: { amount: 0 }, tip_money: { amount: 0 }, refund_money: { amount: 1000 } } }]) };
+    const service = new PosService(prisma, { requireMember: jest.fn() } as any, { log: jest.fn() } as any, { decryptPos: jest.fn().mockReturnValue('token') } as any, square as any);
+    await service.sync('user-a', 'connection');
+    expect(square.orders.mock.calls[0][2]).toEqual(new Date(lastSyncAt.getTime() - 7 * 86400000));
+    expect(prisma.revenueEntry.update).toHaveBeenCalledTimes(1);
+    expect(prisma.revenueEntry.create).not.toHaveBeenCalled();
+  });
+
+  it('keeps Square revenue pending when manual revenue exists for the same day', async () => {
+    const connection = { id: 'connection', organizationId: 'org-a', createdByUserId: 'user-a', encryptedAccessToken: 'cipher', tokenExpiresAt: null, status: 'CONNECTED', lastSyncAt: null, mappings: [{ id: 'mapping', active: true, providerLocationId: 'square-a', providerTimezone: 'UTC', restaurantLocationId: 'loc-a' }] };
+    const prisma: any = {
+      posConnection: { findUnique: jest.fn().mockResolvedValue(connection), updateMany: jest.fn().mockResolvedValue({ count: 1 }), update: jest.fn().mockResolvedValue(connection) },
+      posDailySales: { findMany: jest.fn().mockResolvedValue([]), upsert: jest.fn(({ create }) => Promise.resolve({ id: 'sales', revenueEntryId: null, ...create })), update: jest.fn() },
+      revenueEntry: { findFirst: jest.fn().mockResolvedValue({ id: 'manual' }), create: jest.fn(), update: jest.fn(), delete: jest.fn() },
+    };
+    const square = { orders: jest.fn().mockResolvedValue([{ state: 'COMPLETED', closed_at: '2026-10-05T18:00:00Z', net_amounts: { total_money: { amount: 10000 } } }]) };
+    const service = new PosService(prisma, { requireMember: jest.fn() } as any, { log: jest.fn() } as any, { decryptPos: jest.fn().mockReturnValue('token') } as any, square as any);
+    const result = await service.sync('user-a', 'connection', true);
+    expect(result.conflicts).toBe(1);
+    expect(prisma.posDailySales.upsert).toHaveBeenCalledWith(expect.objectContaining({ create: expect.objectContaining({ conflictStatus: 'PENDING' }) }));
+    expect(prisma.revenueEntry.create).not.toHaveBeenCalled();
   });
 
   it('verifies Square webhooks and makes duplicate events idempotent', async () => {
@@ -119,7 +205,7 @@ describe('Square POS integration', () => {
 
   it('creates POS failure and reauthentication alerts with stable keys', async () => {
     const connection = { id: 'connection-a', organizationId: 'org-a', createdByUserId: 'user-a', encryptedAccessToken: 'cipher', tokenExpiresAt: null, status: 'CONNECTED', mappings: [] };
-    const prisma: any = { posConnection: { findUnique: jest.fn().mockResolvedValue(connection), update: jest.fn().mockResolvedValue(connection) } };
+    const prisma: any = { posConnection: { findUnique: jest.fn().mockResolvedValue(connection), updateMany: jest.fn().mockResolvedValue({ count: 1 }), update: jest.fn().mockResolvedValue(connection) } };
     const notifications = { notifyOperational: jest.fn() };
     const service = new PosService(prisma, { requireMember: jest.fn().mockResolvedValue({}) } as any, { log: jest.fn() } as any, { decryptPos: jest.fn(() => { throw new Error('network'); }) } as any, {} as any, notifications as any);
     await expect(service.sync('user-a', 'connection-a')).rejects.toThrow('Unable to sync Square');
@@ -127,5 +213,13 @@ describe('Square POS integration', () => {
     const reauth = new PosService(prisma, { requireMember: jest.fn().mockResolvedValue({}) } as any, { log: jest.fn() } as any, { decryptPos: jest.fn(() => { throw new UnauthorizedException(); }) } as any, {} as any, notifications as any);
     await expect(reauth.sync('user-a', 'connection-a')).rejects.toThrow('Square authorization must be renewed');
     expect(notifications.notifyOperational).toHaveBeenLastCalledWith(expect.objectContaining({ type: 'POS_REAUTH_REQUIRED', dedupeKey: 'pos-reauth:connection-a' }));
+  });
+
+  it('prevents concurrent syncs while allowing stale locks to recover', async () => {
+    const connection = { id: 'connection-a', organizationId: 'org-a', status: 'SYNCING', mappings: [] };
+    const prisma: any = { posConnection: { findUnique: jest.fn().mockResolvedValue(connection), updateMany: jest.fn().mockResolvedValue({ count: 0 }) } };
+    const service = new PosService(prisma, { requireMember: jest.fn() } as any, {} as any, {} as any, {} as any);
+    await expect(service.sync('user-a', 'connection-a')).rejects.toBeInstanceOf(ConflictException);
+    expect(prisma.posConnection.updateMany).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ id: 'connection-a', OR: expect.any(Array) }) }));
   });
 });

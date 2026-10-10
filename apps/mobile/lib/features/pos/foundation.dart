@@ -144,8 +144,6 @@ class PosRepository {
       '/pos/connections/$connectionId/mappings',
       data: {
         'providerLocationId': square.id,
-        'providerLocationName': square.name,
-        'providerTimezone': square.timezone,
         'restaurantLocationId': restaurantLocationId,
       },
     );

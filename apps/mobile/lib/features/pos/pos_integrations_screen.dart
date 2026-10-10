@@ -229,26 +229,44 @@ class _PosIntegrationsScreenState extends ConsumerState<PosIntegrationsScreen>
           Wrap(
             spacing: 8,
             children: [
-              OutlinedButton(
-                onPressed: busy ? null : () => _map(connection),
-                child: const Text('Map location'),
-              ),
-              FilledButton(
-                onPressed: busy
-                    ? null
-                    : () => action(
-                        () =>
-                            ref.read(posRepositoryProvider).sync(connection.id),
-                        'Square sales synced.',
-                      ),
-                child: Text(
-                  connection.status == 'SYNCING' ? 'Syncing…' : 'Sync now',
+              if (connection.status == 'DISCONNECTED' ||
+                  connection.status == 'REAUTH_REQUIRED')
+                FilledButton(
+                  onPressed: busy
+                      ? null
+                      : () => action(
+                          () => ref
+                              .read(posRepositoryProvider)
+                              .connect(organizationId),
+                          'Complete authorization in Square, then return here.',
+                        ),
+                  child: const Text('Reconnect'),
+                )
+              else ...[
+                OutlinedButton(
+                  onPressed: busy || connection.status == 'SYNCING'
+                      ? null
+                      : () => _map(connection),
+                  child: const Text('Map location'),
                 ),
-              ),
-              TextButton(
-                onPressed: busy ? null : () => _disconnect(connection),
-                child: const Text('Disconnect'),
-              ),
+                FilledButton(
+                  onPressed: busy || connection.status == 'SYNCING'
+                      ? null
+                      : () => action(
+                          () => ref
+                              .read(posRepositoryProvider)
+                              .sync(connection.id),
+                          'Square sales synced.',
+                        ),
+                  child: Text(
+                    connection.status == 'SYNCING' ? 'Syncing…' : 'Sync now',
+                  ),
+                ),
+                TextButton(
+                  onPressed: busy ? null : () => _disconnect(connection),
+                  child: const Text('Disconnect'),
+                ),
+              ],
             ],
           ),
         ],
@@ -259,6 +277,7 @@ class _PosIntegrationsScreenState extends ConsumerState<PosIntegrationsScreen>
     'CONNECTED' => 'Connected',
     'SYNCING' => 'Syncing',
     'REAUTH_REQUIRED' => 'Reconnect required',
+    'DISCONNECTED' => 'Disconnected',
     'ERROR' => 'Error',
     _ => status,
   };

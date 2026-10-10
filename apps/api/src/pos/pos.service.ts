@@ -11,6 +11,7 @@ import { SquareOrder, SquareProvider } from './square.provider';
 
 const cents = (money: any) => Number(money?.amount ?? 0);
 const dollars = (value: number) => new Prisma.Decimal(value).div(100).toDecimalPlaces(2);
+const SYNC_LOCK_TIMEOUT_MS = 10 * 60 * 1000;
 export const businessDate = (timestamp: string, timezone: string) => {
   const parts = new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date(timestamp));
   const part = (type: string) => parts.find((item) => item.type === type)?.value;
@@ -66,8 +67,10 @@ export class PosService {
     if (!code || !state) throw new BadRequestException('Square authorization response is incomplete');
     const stateHash = createHash('sha256').update(state).digest('hex');
     const saved = await this.prisma.posOAuthState.findUnique({ where: { stateHash } });
-    if (!saved || saved.usedAt || saved.expiresAt < new Date()) throw new BadRequestException('Square authorization state is invalid or expired');
-    await this.prisma.posOAuthState.update({ where: { id: saved.id }, data: { usedAt: new Date() } });
+    if (!saved) throw new BadRequestException('Square authorization state is invalid or expired');
+    const now = new Date();
+    const claimed = await this.prisma.posOAuthState.updateMany({ where: { id: saved.id, usedAt: null, expiresAt: { gt: now } }, data: { usedAt: now } });
+    if (claimed.count !== 1) throw new BadRequestException('Square authorization state is invalid or expired');
     const token = await this.square.exchange(code);
     const merchant = await this.square.merchant(token.accessToken, token.merchantId);
     const existing = await this.prisma.posConnection.findUnique({ where: { provider_providerMerchantId: { provider: PosProvider.SQUARE, providerMerchantId: token.merchantId } } });
@@ -78,7 +81,7 @@ export class PosService {
   }
   async list(userId: string, organizationId: string) {
     await this.access.requireMember(userId, organizationId);
-    const rows = await this.prisma.posConnection.findMany({ where: { organizationId, provider: PosProvider.SQUARE, status: { not: PosConnectionStatus.DISCONNECTED } }, include: { mappings: { orderBy: { providerLocationName: 'asc' } }, dailySales: { where: { conflictStatus: PosRevenueConflictStatus.PENDING }, select: { id: true, businessDate: true, netSales: true, restaurantLocationId: true, conflictStatus: true }, orderBy: { businessDate: 'desc' }, take: 25 } }, orderBy: { createdAt: 'desc' } });
+    const rows = await this.prisma.posConnection.findMany({ where: { organizationId, provider: PosProvider.SQUARE }, include: { mappings: { orderBy: { providerLocationName: 'asc' } }, dailySales: { where: { conflictStatus: PosRevenueConflictStatus.PENDING }, select: { id: true, businessDate: true, netSales: true, restaurantLocationId: true, conflictStatus: true }, orderBy: { businessDate: 'desc' }, take: 25 } }, orderBy: { createdAt: 'desc' } });
     return rows.map((row) => this.safe(row));
   }
   private async token(connection: any) {
@@ -111,7 +114,11 @@ export class PosService {
   async sync(userId: string, id: string, initial = false) {
     const connection = await this.connection(userId, id);
     if (connection.status === PosConnectionStatus.DISCONNECTED) throw new BadRequestException('Square is disconnected');
-    await this.prisma.posConnection.update({ where: { id }, data: { status: PosConnectionStatus.SYNCING, lastError: null } });
+    const lock = await this.prisma.posConnection.updateMany({
+      where: { id, OR: [{ status: { not: PosConnectionStatus.SYNCING } }, { updatedAt: { lt: new Date(Date.now() - SYNC_LOCK_TIMEOUT_MS) } }] },
+      data: { status: PosConnectionStatus.SYNCING, lastError: null },
+    });
+    if (lock.count !== 1) throw new ConflictException('Square sync is already in progress');
     await this.audit.log({ userId, organizationId: connection.organizationId, action: 'pos.sync_started', entityType: 'PosConnection', entityId: id });
     try {
       const authorized = await this.token(connection); const end = new Date();
@@ -171,8 +178,13 @@ export class PosService {
     const eventId = body?.event_id; if (!eventId) throw new BadRequestException('Square webhook event is invalid');
     try { await this.prisma.posWebhookEvent.create({ data: { providerEventId: eventId, eventType: body.type ?? 'unknown', merchantId: body.merchant_id } }); } catch (error) { if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') return { received: true, duplicate: true }; throw error; }
     const connection = body.merchant_id ? await this.prisma.posConnection.findUnique({ where: { provider_providerMerchantId: { provider: PosProvider.SQUARE, providerMerchantId: body.merchant_id } } }) : null;
-    if (connection && connection.status !== PosConnectionStatus.DISCONNECTED) setImmediate(() => void this.sync(connection.createdByUserId, connection.id).catch(() => undefined));
-    await this.prisma.posWebhookEvent.update({ where: { provider_providerEventId: { provider: PosProvider.SQUARE, providerEventId: eventId } }, data: { processedAt: new Date() } });
+    if (connection && connection.status !== PosConnectionStatus.DISCONNECTED) {
+      setImmediate(() => void this.sync(connection.createdByUserId, connection.id)
+        .then(() => this.prisma.posWebhookEvent.update({ where: { provider_providerEventId: { provider: PosProvider.SQUARE, providerEventId: eventId } }, data: { processedAt: new Date() } }))
+        .catch(() => undefined));
+    } else {
+      await this.prisma.posWebhookEvent.update({ where: { provider_providerEventId: { provider: PosProvider.SQUARE, providerEventId: eventId } }, data: { processedAt: new Date() } });
+    }
     return { received: true };
   }
 }

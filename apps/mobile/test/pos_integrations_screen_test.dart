@@ -41,6 +41,14 @@ final connected = PosConnectionData(
   ],
 );
 
+PosConnectionData connectionWithStatus(String status) => PosConnectionData(
+  id: 'connection',
+  status: status,
+  merchantName: 'Square Sandbox Cafe',
+  mappings: const [],
+  conflicts: const [],
+);
+
 class FakePosRepository extends PosRepository {
   FakePosRepository() : super(Dio());
   int connectCalls = 0, syncCalls = 0, disconnectCalls = 0, mapCalls = 0;
@@ -183,5 +191,58 @@ void main() {
     await tester.tap(find.widgetWithText(FilledButton, 'Disconnect'));
     await tester.pumpAndSettle();
     expect(repository.disconnectCalls, 1);
+  });
+
+  testWidgets('offers reauthorization for reauth-required connections', (
+    tester,
+  ) async {
+    final repository = FakePosRepository();
+    await tester.pumpWidget(
+      app(repository, [connectionWithStatus('REAUTH_REQUIRED')]),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Reconnect required'), findsOneWidget);
+    expect(find.text('Sync now'), findsNothing);
+    await tester.tap(find.text('Reconnect'));
+    await tester.pumpAndSettle();
+    expect(repository.connectCalls, 1);
+  });
+
+  testWidgets('keeps intentionally disconnected connections visible', (
+    tester,
+  ) async {
+    final repository = FakePosRepository();
+    await tester.pumpWidget(
+      app(repository, [connectionWithStatus('DISCONNECTED')]),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Disconnected'), findsOneWidget);
+    expect(find.text('Square Sandbox Cafe'), findsOneWidget);
+    expect(find.text('Reconnect'), findsOneWidget);
+    expect(find.text('Disconnect'), findsNothing);
+  });
+
+  testWidgets('disables mapping and sync actions while a sync is active', (
+    tester,
+  ) async {
+    final repository = FakePosRepository();
+    await tester.pumpWidget(app(repository, [connectionWithStatus('SYNCING')]));
+    await tester.pumpAndSettle();
+    expect(find.text('Syncing'), findsOneWidget);
+    expect(find.text('Syncing…'), findsOneWidget);
+    expect(
+      tester
+          .widget<FilledButton>(find.widgetWithText(FilledButton, 'Syncing…'))
+          .onPressed,
+      isNull,
+    );
+    expect(
+      tester
+          .widget<OutlinedButton>(
+            find.widgetWithText(OutlinedButton, 'Map location'),
+          )
+          .onPressed,
+      isNull,
+    );
   });
 }
