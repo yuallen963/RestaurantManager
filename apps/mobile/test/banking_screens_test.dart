@@ -45,6 +45,7 @@ final reviewTransaction = BankTransactionData(
   status: 'NEEDS_REVIEW',
   categorizationSource: 'MERCHANT_RULE',
   matchConfidence: 'EXACT',
+  pending: false,
   vendorId: 'sysco',
   vendorName: 'Sysco',
   restaurantLocationId: 'downtown',
@@ -60,7 +61,12 @@ const lookups = ExpenseLookups(
 
 class FakeBankingRepository extends BankingRepository {
   FakeBankingRepository() : super(Dio());
-  int syncCalls = 0, retryCalls = 0;
+  int syncCalls = 0,
+      retryCalls = 0,
+      exchangeCalls = 0,
+      disconnectCalls = 0,
+      reauthenticationCalls = 0;
+  bool failSync = false;
   String? assignedLocation, confirmedInvoice;
   Map<String, dynamic>? reviewData;
   @override
@@ -71,7 +77,19 @@ class FakeBankingRepository extends BankingRepository {
     String organizationId,
     String publicToken,
     String? locationId,
-  ) async {}
+  ) async {
+    exchangeCalls++;
+  }
+
+  @override
+  Future<BankLinkSetup> reauthenticationLinkToken(String connectionId) async =>
+      const BankLinkSetup('update-link', true, updateMode: true);
+
+  @override
+  Future<void> completeReauthentication(String connectionId) async {
+    reauthenticationCalls++;
+  }
+
   @override
   Future<void> assignAccount(String id, String? locationId) async {
     assignedLocation = locationId;
@@ -80,10 +98,14 @@ class FakeBankingRepository extends BankingRepository {
   @override
   Future<void> sync(String id) async {
     syncCalls++;
+    if (failSync) throw DioException(requestOptions: RequestOptions());
   }
 
   @override
-  Future<void> disconnect(String id) async {}
+  Future<void> disconnect(String id) async {
+    disconnectCalls++;
+  }
+
   @override
   Future<void> confirmMatch(String id, String invoiceId) async {
     confirmedInvoice = invoiceId;
@@ -137,6 +159,16 @@ Widget transactionsApp(
 );
 
 void main() {
+  testWidgets('disconnected state shows a working connect CTA', (tester) async {
+    final repository = FakeBankingRepository();
+    await tester.pumpWidget(accountsApp(repository, () async => []));
+    await tester.pumpAndSettle();
+    expect(find.text('No bank accounts connected.'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('connect-bank')));
+    await tester.pumpAndSettle();
+    expect(repository.exchangeCalls, 1);
+  });
+
   testWidgets(
     'bank accounts shows loading, masked success state, and sync action',
     (tester) async {
@@ -186,6 +218,65 @@ void main() {
     expect(repository.assignedLocation, 'lakeside');
   });
 
+  testWidgets(
+    'sync failure is contained and shown as a safe connection error',
+    (tester) async {
+      final repository = FakeBankingRepository()..failSync = true;
+      await tester.pumpWidget(
+        accountsApp(repository, () async => [connection]),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Sync now'));
+      await tester.pumpAndSettle();
+      expect(
+        find.text('Unable to update this bank connection. Try again.'),
+        findsOneWidget,
+      );
+    },
+  );
+
+  testWidgets(
+    'reauth state exposes update-mode reconnect without duplicating a connection',
+    (tester) async {
+      final repository = FakeBankingRepository();
+      final needsAttention = BankConnectionData(
+        id: connection.id,
+        institutionName: connection.institutionName,
+        status: 'NEEDS_ATTENTION',
+        accounts: connection.accounts,
+        lastError: 'Reconnect your bank to continue syncing.',
+      );
+      await tester.pumpWidget(
+        accountsApp(repository, () async => [needsAttention]),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('reconnect-bank')), findsOneWidget);
+      await tester.tap(find.byKey(const Key('reconnect-bank')));
+      await tester.pumpAndSettle();
+      expect(repository.reauthenticationCalls, 1);
+      expect(repository.exchangeCalls, 0);
+    },
+  );
+
+  testWidgets('disconnect confirmation preserves an explicit user decision', (
+    tester,
+  ) async {
+    final repository = FakeBankingRepository();
+    await tester.pumpWidget(accountsApp(repository, () async => [connection]));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Disconnect'));
+    await tester.pumpAndSettle();
+    expect(
+      find.text(
+        'Imported transaction history will remain, but future syncing will stop.',
+      ),
+      findsOneWidget,
+    );
+    await tester.tap(find.widgetWithText(FilledButton, 'Disconnect'));
+    await tester.pumpAndSettle();
+    expect(repository.disconnectCalls, 1);
+  });
+
   testWidgets('transaction queue renders review and matched filters', (
     tester,
   ) async {
@@ -209,6 +300,7 @@ void main() {
       await tester.tap(find.text('Sysco'));
       await tester.pumpAndSettle();
       expect(find.text('EXACT invoice match'), findsOneWidget);
+      expect(find.text('Raw description: SYSCO ACH'), findsOneWidget);
       expect(find.textContaining('10492'), findsOneWidget);
       await tester.tap(find.text('Confirm Match'));
       await tester.pumpAndSettle();
@@ -233,7 +325,7 @@ void main() {
     await tester.tap(find.text('Food').last);
     await tester.pumpAndSettle();
     await tester.tap(find.byType(Switch));
-    await tester.tap(find.text('Save Review'));
+    await tester.tap(find.text('Reconcile Expense'));
     await tester.pumpAndSettle();
     expect(repository.reviewData, containsPair('vendorId', 'adp'));
     expect(repository.reviewData, containsPair('categoryId', 'food'));

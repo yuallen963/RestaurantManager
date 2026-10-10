@@ -9,6 +9,8 @@ import { AssignBankAccountDto, BankTransactionQuery, ConfirmInvoiceMatchDto, Exc
 export class BankController {
   constructor(private readonly service: BankService) {}
   @Post('bank/link-token') linkToken(@CurrentUser() u: { sub: string }, @Body() d: OrganizationDto) { return this.service.linkToken(u.sub, d.organizationId); }
+  @Post('bank/connections/:id/link-token') reauthenticationLinkToken(@CurrentUser() u: { sub: string }, @Param('id') id: string) { return this.service.reauthenticationLinkToken(u.sub, id); }
+  @Post('bank/connections/:id/reauthenticated') reauthenticated(@CurrentUser() u: { sub: string }, @Param('id') id: string) { return this.service.completeReauthentication(u.sub, id); }
   @Post('bank/exchange-token') exchange(@CurrentUser() u: { sub: string }, @Body() d: ExchangeBankTokenDto) { return this.service.exchange(u.sub, d); }
   @Get('bank/connections') connections(@CurrentUser() u: { sub: string }, @Query('organizationId') organizationId: string) { return this.service.connections(u.sub, organizationId); }
   @Patch('bank/accounts/:id') account(@CurrentUser() u: { sub: string }, @Param('id') id: string, @Body() d: AssignBankAccountDto) { return this.service.assignAccount(u.sub, id, d); }
@@ -19,4 +21,3 @@ export class BankController {
   @Post('bank-transactions/:id/confirm-match') confirm(@CurrentUser() u: { sub: string }, @Param('id') id: string, @Body() d: ConfirmInvoiceMatchDto) { return this.service.confirmMatch(u.sub, id, d); }
   @Post('bank-transactions/:id/reject-match') reject(@CurrentUser() u: { sub: string }, @Param('id') id: string) { return this.service.rejectMatch(u.sub, id); }
 }
-

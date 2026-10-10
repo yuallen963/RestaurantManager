@@ -88,6 +88,7 @@ class BankTransactionData {
     required this.status,
     required this.categorizationSource,
     required this.matchConfidence,
+    required this.pending,
     this.categoryId,
     this.categoryName,
     this.vendorId,
@@ -103,6 +104,7 @@ class BankTransactionData {
       categorizationSource,
       matchConfidence;
   final double amount;
+  final bool pending;
   final DateTime postedDate;
   final String? categoryId,
       categoryName,
@@ -127,6 +129,7 @@ class BankTransactionData {
       status: json['reconciliationStatus'] as String,
       categorizationSource: json['categorizationSource'] as String,
       matchConfidence: json['matchConfidence'] as String? ?? 'NO_MATCH',
+      pending: json['pending'] as bool? ?? false,
       categoryId: json['categoryId'] as String?,
       categoryName: category?['name'] as String?,
       vendorId: json['vendorId'] as String?,
@@ -141,9 +144,10 @@ class BankTransactionData {
 }
 
 class BankLinkSetup {
-  const BankLinkSetup(this.linkToken, this.demo);
+  const BankLinkSetup(this.linkToken, this.demo, {this.updateMode = false});
   final String linkToken;
   final bool demo;
+  final bool updateMode;
 }
 
 class BankingRepository {
@@ -159,6 +163,20 @@ class BankingRepository {
       response.data['demo'] as bool? ?? false,
     );
   }
+
+  Future<BankLinkSetup> reauthenticationLinkToken(String connectionId) async {
+    final response = await dio.post(
+      '/bank/connections/$connectionId/link-token',
+    );
+    return BankLinkSetup(
+      response.data['linkToken'] as String,
+      response.data['demo'] as bool? ?? false,
+      updateMode: response.data['updateMode'] as bool? ?? true,
+    );
+  }
+
+  Future<void> completeReauthentication(String connectionId) =>
+      dio.post('/bank/connections/$connectionId/reauthenticated');
 
   Future<void> exchange(
     String organizationId,

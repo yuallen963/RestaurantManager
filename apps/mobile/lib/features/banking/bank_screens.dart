@@ -19,7 +19,7 @@ class _BankAccountsScreenState extends ConsumerState<BankAccountsScreen> {
   String? actionError;
   PlaidLinkSession? session;
 
-  Future<void> connect() async {
+  Future<void> connect([BankConnectionData? existing]) async {
     final location = ref.read(activeLocationProvider);
     if (location == null) return;
     setState(() {
@@ -28,13 +28,19 @@ class _BankAccountsScreenState extends ConsumerState<BankAccountsScreen> {
     });
     try {
       final repository = ref.read(bankingRepositoryProvider);
-      final setup = await repository.linkToken(location.organizationId);
+      final setup = existing == null
+          ? await repository.linkToken(location.organizationId)
+          : await repository.reauthenticationLinkToken(existing.id);
       if (setup.demo) {
-        await repository.exchange(
-          location.organizationId,
-          'demo-public-token',
-          location.id,
-        );
+        if (existing == null) {
+          await repository.exchange(
+            location.organizationId,
+            'demo-public-${location.organizationId}',
+            location.id,
+          );
+        } else {
+          await repository.completeReauthentication(existing.id);
+        }
         await refresh();
         return;
       }
@@ -44,11 +50,15 @@ class _BankAccountsScreenState extends ConsumerState<BankAccountsScreen> {
           token: setup.linkToken,
           onSuccess: (success) async {
             try {
-              await repository.exchange(
-                location.organizationId,
-                success.publicToken,
-                location.id,
-              );
+              if (existing == null) {
+                await repository.exchange(
+                  location.organizationId,
+                  success.publicToken,
+                  location.id,
+                );
+              } else {
+                await repository.completeReauthentication(existing.id);
+              }
               await refresh();
               if (!completer.isCompleted) completer.complete();
             } catch (error, stack) {
@@ -148,7 +158,10 @@ class _BankAccountsScreenState extends ConsumerState<BankAccountsScreen> {
                 )
               else
                 for (final connection in connections)
-                  _ConnectionCard(connection: connection),
+                  _ConnectionCard(
+                    connection: connection,
+                    onReconnect: () => connect(connection),
+                  ),
             ],
           ),
         ),
@@ -157,11 +170,40 @@ class _BankAccountsScreenState extends ConsumerState<BankAccountsScreen> {
   }
 }
 
-class _ConnectionCard extends ConsumerWidget {
-  const _ConnectionCard({required this.connection});
+class _ConnectionCard extends ConsumerStatefulWidget {
+  const _ConnectionCard({required this.connection, required this.onReconnect});
   final BankConnectionData connection;
+  final Future<void> Function() onReconnect;
   @override
-  Widget build(BuildContext context, WidgetRef ref) => Card(
+  ConsumerState<_ConnectionCard> createState() => _ConnectionCardState();
+}
+
+class _ConnectionCardState extends ConsumerState<_ConnectionCard> {
+  bool busy = false;
+  String? error;
+
+  Future<void> run(Future<void> Function() action) async {
+    setState(() {
+      busy = true;
+      error = null;
+    });
+    try {
+      await action();
+      ref.invalidate(bankConnectionsProvider);
+      ref.invalidate(bankTransactionsProvider);
+    } catch (_) {
+      if (mounted) {
+        setState(
+          () => error = 'Unable to update this bank connection. Try again.',
+        );
+      }
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Card(
     child: Padding(
       padding: const EdgeInsets.all(16),
       child: Column(
@@ -173,70 +215,93 @@ class _ConnectionCard extends ConsumerWidget {
               const SizedBox(width: 10),
               Expanded(
                 child: Text(
-                  connection.institutionName,
+                  widget.connection.institutionName,
                   style: Theme.of(context).textTheme.titleMedium,
                 ),
               ),
-              _StatusChip(connection.status),
+              _StatusChip(widget.connection.status),
             ],
           ),
-          if (connection.lastSyncAt != null)
+          if (widget.connection.lastSyncAt != null)
             Padding(
               padding: const EdgeInsets.only(top: 6),
-              child: Text('Last synced ${_date(connection.lastSyncAt!)}'),
+              child: Text(
+                'Last synced ${_date(widget.connection.lastSyncAt!)}',
+              ),
             ),
-          if (connection.lastError != null)
+          if (widget.connection.lastError != null)
             Padding(
               padding: const EdgeInsets.only(top: 6),
-              child: Text(connection.lastError!),
+              child: Text(widget.connection.lastError!),
+            ),
+          if (error != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Text(
+                error!,
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
             ),
           const Divider(),
-          for (final account in connection.accounts)
+          for (final account in widget.connection.accounts)
             _AccountTile(account: account),
           Wrap(
             spacing: 8,
             children: [
+              if (widget.connection.status == 'NEEDS_ATTENTION')
+                FilledButton.icon(
+                  key: const Key('reconnect-bank'),
+                  onPressed: busy ? null : () => run(widget.onReconnect),
+                  icon: const Icon(Icons.lock_reset),
+                  label: const Text('Reconnect'),
+                ),
               OutlinedButton.icon(
-                onPressed: connection.status == 'SYNCING'
+                onPressed:
+                    busy ||
+                        widget.connection.status == 'SYNCING' ||
+                        widget.connection.status == 'DISCONNECTED'
                     ? null
-                    : () async {
-                        await ref
+                    : () => run(
+                        () => ref
                             .read(bankingRepositoryProvider)
-                            .sync(connection.id);
-                        ref.invalidate(bankConnectionsProvider);
-                        ref.invalidate(bankTransactionsProvider);
-                      },
+                            .sync(widget.connection.id),
+                      ),
                 icon: const Icon(Icons.sync),
                 label: const Text('Sync now'),
               ),
               TextButton(
-                onPressed: () async {
-                  final confirmed = await showDialog<bool>(
-                    context: context,
-                    builder: (dialogContext) => AlertDialog(
-                      title: const Text('Disconnect bank?'),
-                      content: const Text(
-                        'Imported transaction history will remain, but future syncing will stop.',
-                      ),
-                      actions: [
-                        TextButton(
-                          onPressed: () => Navigator.pop(dialogContext, false),
-                          child: const Text('Cancel'),
-                        ),
-                        FilledButton(
-                          onPressed: () => Navigator.pop(dialogContext, true),
-                          child: const Text('Disconnect'),
-                        ),
-                      ],
-                    ),
-                  );
-                  if (confirmed == true) {
-                    await ref
-                        .read(bankingRepositoryProvider)
-                        .disconnect(connection.id);
-                    ref.invalidate(bankConnectionsProvider);
-                  }
-                },
+                onPressed: busy || widget.connection.status == 'DISCONNECTED'
+                    ? null
+                    : () async {
+                        final confirmed = await showDialog<bool>(
+                          context: context,
+                          builder: (dialogContext) => AlertDialog(
+                            title: const Text('Disconnect bank?'),
+                            content: const Text(
+                              'Imported transaction history will remain, but future syncing will stop.',
+                            ),
+                            actions: [
+                              TextButton(
+                                onPressed: () =>
+                                    Navigator.pop(dialogContext, false),
+                                child: const Text('Cancel'),
+                              ),
+                              FilledButton(
+                                onPressed: () =>
+                                    Navigator.pop(dialogContext, true),
+                                child: const Text('Disconnect'),
+                              ),
+                            ],
+                          ),
+                        );
+                        if (confirmed == true) {
+                          await run(
+                            () => ref
+                                .read(bankingRepositoryProvider)
+                                .disconnect(widget.connection.id),
+                          );
+                        }
+                      },
                 child: const Text('Disconnect'),
               ),
             ],
@@ -391,6 +456,7 @@ class TransactionReviewSheet extends ConsumerStatefulWidget {
 class _TransactionReviewSheetState
     extends ConsumerState<TransactionReviewSheet> {
   String? vendorId, categoryId, locationId;
+  String? actionError;
   bool createRule = false, saving = false;
   @override
   void initState() {
@@ -401,7 +467,10 @@ class _TransactionReviewSheetState
   }
 
   Future<void> save({bool ignored = false}) async {
-    setState(() => saving = true);
+    setState(() {
+      saving = true;
+      actionError = null;
+    });
     try {
       await ref
           .read(bankingRepositoryProvider)
@@ -415,6 +484,13 @@ class _TransactionReviewSheetState
           );
       ref.invalidate(bankTransactionsProvider);
       if (mounted) Navigator.pop(context);
+    } catch (_) {
+      if (mounted) {
+        setState(
+          () => actionError =
+              'Unable to reconcile this transaction. Review the selections and try again.',
+        );
+      }
     } finally {
       if (mounted) setState(() => saving = false);
     }
@@ -465,6 +541,28 @@ class _TransactionReviewSheetState
                 Text(
                   '${_currency(widget.transaction.amount)} • ${_date(widget.transaction.postedDate)}',
                 ),
+                const SizedBox(height: 8),
+                Text('Raw description: ${widget.transaction.description}'),
+                Text(
+                  'Categorization: ${_status(widget.transaction.categorizationSource)}',
+                ),
+                if (widget.transaction.pending)
+                  const Padding(
+                    padding: EdgeInsets.only(top: 8),
+                    child: Text(
+                      'Pending transaction — it can be categorized now, but no expense will be created until it posts.',
+                    ),
+                  ),
+                if (actionError != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Text(
+                      actionError!,
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.error,
+                      ),
+                    ),
+                  ),
                 const SizedBox(height: 16),
                 if (widget.transaction.suggestedInvoice != null)
                   Card(
@@ -485,7 +583,9 @@ class _TransactionReviewSheetState
                             spacing: 8,
                             children: [
                               FilledButton(
-                                onPressed: saving ? null : confirm,
+                                onPressed: saving || widget.transaction.pending
+                                    ? null
+                                    : confirm,
                                 child: const Text('Confirm Match'),
                               ),
                               TextButton(
@@ -562,7 +662,11 @@ class _TransactionReviewSheetState
                     Expanded(
                       child: FilledButton(
                         onPressed: saving ? null : save,
-                        child: const Text('Save Review'),
+                        child: Text(
+                          widget.transaction.pending
+                              ? 'Save Category'
+                              : 'Reconcile Expense',
+                        ),
                       ),
                     ),
                   ],
