@@ -11,6 +11,7 @@ function setup() {
       create: jest.fn().mockResolvedValue({ ...invoice, storageKey: 'pending' }),
       update: jest.fn().mockImplementation(({ data }: any) => Promise.resolve({ ...invoice, ...data })),
       findUnique: jest.fn().mockResolvedValue(invoice),
+      findFirst: jest.fn().mockResolvedValue(null),
       findMany: jest.fn().mockResolvedValue([invoice]),
       delete: jest.fn().mockResolvedValue(invoice),
     },
@@ -18,7 +19,7 @@ function setup() {
   };
   const access: any = { requireMember: jest.fn().mockResolvedValue({ role: 'OWNER' }) };
   const audit: any = { log: jest.fn().mockResolvedValue({}) };
-  const storage: any = { putUrl: jest.fn().mockResolvedValue('https://storage/upload'), exists: jest.fn().mockResolvedValue(undefined), remove: jest.fn().mockResolvedValue(undefined) };
+  const storage: any = { putUrl: jest.fn().mockResolvedValue('https://storage/upload'), exists: jest.fn().mockResolvedValue(undefined), get: jest.fn().mockResolvedValue(Buffer.from('invoice bytes')), remove: jest.fn().mockResolvedValue(undefined) };
   const extraction: any = { isConfigured: jest.fn().mockReturnValue(false), process: jest.fn() };
   return { prisma, access, audit, storage, extraction, service: new InvoicesService(prisma, access, audit, storage, extraction) };
 }
@@ -59,6 +60,18 @@ describe('InvoicesService', () => {
   it('rejects a vendor from another organization', async () => {
     const { service } = setup();
     await expect(service.uploadIntent('user-a', { restaurantLocationId: 'loc-a', vendorId: 'vendor-b', fileName: 'x.pdf', mimeType: 'application/pdf', fileSize: 10 })).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('reuses an existing location-scoped duplicate without starting extraction again', async () => {
+    const { service, prisma, storage, extraction, audit } = setup();
+    const existing = { ...invoice, id: 'existing-invoice', attachmentHash: 'existing-hash' };
+    prisma.invoice.findFirst.mockResolvedValue(existing);
+    const result = await service.complete('user-a', 'invoice-a', { etag: 'uploaded' });
+    expect(result.id).toBe('existing-invoice');
+    expect(storage.remove).toHaveBeenCalledWith(invoice.storageKey);
+    expect(prisma.invoice.delete).toHaveBeenCalledWith({ where: { id: 'invoice-a' } });
+    expect(extraction.process).not.toHaveBeenCalled();
+    expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({ action: 'invoice.duplicate_skipped', entityId: 'existing-invoice' }));
   });
 
   it('validates non-negative metadata amounts', async () => {

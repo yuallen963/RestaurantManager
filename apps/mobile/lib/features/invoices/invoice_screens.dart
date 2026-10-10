@@ -319,7 +319,7 @@ class InvoiceDetailScreen extends ConsumerWidget {
                 ],
                 if (invoice.extractionStatus == 'FAILED') ...[
                   Text(
-                    invoice.extractionError ?? 'Extraction failed',
+                    'Unable to extract this invoice. Your upload is safe; retry or enter the fields manually.',
                     style: TextStyle(
                       color: Theme.of(context).colorScheme.error,
                     ),
@@ -433,8 +433,10 @@ class InvoiceReviewScreen extends ConsumerWidget {
           data: (items) {
             final issueCount = [
               if (data.vendorName == null) 'vendor',
+              if (data.invoiceNumber == null) 'invoiceNumber',
               if (data.invoiceDate == null) 'date',
               if (data.total == null) 'total',
+              ...data.uncertainFields,
               ...items
                   .where((item) => item.lowConfidence)
                   .map((item) => item.id),
@@ -473,20 +475,48 @@ class InvoiceReviewScreen extends ConsumerWidget {
                 ),
                 ListTile(
                   title: const Text('Vendor'),
-                  subtitle: Text(data.vendorName ?? 'Missing'),
+                  subtitle: Text(
+                    _reviewValue(
+                      data.vendorName,
+                      data.uncertainFields.contains('vendorName'),
+                    ),
+                  ),
                 ),
+                if (data.vendorAddress != null)
+                  ListTile(
+                    title: const Text('Vendor address'),
+                    subtitle: Text(data.vendorAddress!),
+                  ),
                 ListTile(
                   title: const Text('Invoice number'),
-                  subtitle: Text(data.invoiceNumber ?? 'Missing'),
+                  subtitle: Text(
+                    _reviewValue(
+                      data.invoiceNumber,
+                      data.uncertainFields.contains('invoiceNumber'),
+                    ),
+                  ),
                 ),
                 ListTile(
                   title: const Text('Invoice date'),
                   subtitle: Text(
-                    data.invoiceDate == null
-                        ? 'Missing'
-                        : _date(data.invoiceDate!),
+                    _reviewValue(
+                      data.invoiceDate == null
+                          ? null
+                          : _date(data.invoiceDate!),
+                      data.uncertainFields.contains('invoiceDate'),
+                    ),
                   ),
                 ),
+                if (data.dueDate != null)
+                  ListTile(
+                    title: const Text('Due date'),
+                    subtitle: Text(
+                      _reviewValue(
+                        _date(data.dueDate!),
+                        data.uncertainFields.contains('dueDate'),
+                      ),
+                    ),
+                  ),
                 ListTile(
                   title: const Text('Subtotal'),
                   subtitle: Text(
@@ -504,11 +534,22 @@ class InvoiceReviewScreen extends ConsumerWidget {
                 ListTile(
                   title: const Text('Total'),
                   subtitle: Text(
-                    data.total == null
-                        ? 'Missing'
-                        : formatCurrency(data.total!),
+                    _reviewValue(
+                      data.total == null ? null : formatCurrency(data.total!),
+                      data.uncertainFields.contains('total'),
+                    ),
                   ),
                 ),
+                if (data.otherFees != null)
+                  ListTile(
+                    title: const Text('Other fees'),
+                    subtitle: Text(formatCurrency(data.otherFees!)),
+                  ),
+                if (data.currency != null)
+                  ListTile(
+                    title: const Text('Currency'),
+                    subtitle: Text(data.currency!),
+                  ),
                 if (data.extractionConfidence != null)
                   ListTile(
                     title: const Text('Extraction confidence'),
@@ -574,10 +615,16 @@ class InvoiceReviewScreen extends ConsumerWidget {
                             const SizedBox(height: 8),
                             Text(
                               [
+                                if (item.normalizedName != null)
+                                  'Interpreted as: ${item.normalizedName}',
                                 if (item.sku != null) 'SKU: ${item.sku}',
+                                if (item.sourcePage != null)
+                                  'Page: ${item.sourcePage}',
                                 'Quantity: ${item.quantity?.toString() ?? 'Missing'} ${item.unit ?? ''}',
                                 if (item.packSize != null)
                                   'Pack: ${item.packSize}',
+                                if (item.totalPackageQuantity != null)
+                                  'Package total: ${item.totalPackageQuantity} ${item.measurementUnit ?? ''}',
                                 'Unit price: ${item.unitPrice == null ? 'Missing' : formatCurrency(item.unitPrice!)}',
                                 'Extended: ${item.extendedPrice == null ? 'Missing' : formatCurrency(item.extendedPrice!)}',
                                 'Confidence: ${item.lowConfidence
@@ -585,6 +632,12 @@ class InvoiceReviewScreen extends ConsumerWidget {
                                     : (item.confidence ?? 0) < .9
                                     ? 'Medium'
                                     : 'High'}',
+                                if (item.uncertainFields.isNotEmpty)
+                                  'Check: ${item.uncertainFields.join(', ')}',
+                                if (item.productAttributes.values.any(
+                                  (value) => value != null,
+                                ))
+                                  'Attributes: ${item.productAttributes.entries.where((entry) => entry.value != null).map((entry) => '${entry.key}: ${entry.value}').join(', ')}',
                               ].join('\n'),
                             ),
                           ],
@@ -645,6 +698,7 @@ class InvoiceReviewScreen extends ConsumerWidget {
     InvoiceLineItem item,
   ) async {
     final description = TextEditingController(text: item.rawDescription);
+    final normalizedName = TextEditingController(text: item.normalizedName);
     final sku = TextEditingController(text: item.sku);
     final quantity = TextEditingController(text: item.quantity?.toString());
     final unit = TextEditingController(text: item.unit);
@@ -666,6 +720,7 @@ class InvoiceReviewScreen extends ConsumerWidget {
             children: [
               for (final field in <MapEntry<String, TextEditingController>>[
                 MapEntry('Description', description),
+                MapEntry('Normalized name', normalizedName),
                 MapEntry('SKU', sku),
                 MapEntry('Quantity', quantity),
                 MapEntry('Unit', unit),
@@ -711,6 +766,9 @@ class InvoiceReviewScreen extends ConsumerWidget {
       item.id,
       {
         'rawDescription': description.text.trim(),
+        'normalizedName': normalizedName.text.trim().isEmpty
+            ? null
+            : normalizedName.text.trim(),
         'sku': sku.text.trim().isEmpty ? null : sku.text.trim(),
         'quantity': number(quantity),
         'unit': unit.text.trim().isEmpty ? null : unit.text.trim(),
@@ -903,6 +961,11 @@ String _date(DateTime value) {
     'Dec',
   ];
   return '${months[value.month - 1]} ${value.day}, ${value.year}';
+}
+
+String _reviewValue(String? value, bool uncertain) {
+  final displayed = value ?? 'Missing';
+  return uncertain ? '$displayed • Needs review' : displayed;
 }
 
 String _status(String value) => value

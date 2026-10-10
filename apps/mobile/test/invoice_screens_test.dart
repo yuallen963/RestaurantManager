@@ -89,10 +89,17 @@ const lineItem = InvoiceLineItem(
   id: 'line-a',
   lineNumber: 1,
   rawDescription: 'CHKN BRST BNLS SKLS 4/10 LB',
+  normalizedName: 'Chicken Breast',
   sku: '384920',
   quantity: 2,
   unit: 'CASE',
   packSize: '4 x 10 lb',
+  packCount: 4,
+  packUnitQuantity: 10,
+  measurementUnit: 'LB',
+  totalPackageQuantity: 40,
+  sourcePage: 1,
+  productAttributes: {'condition': 'Fresh', 'bone': 'Boneless'},
   unitPrice: 50,
   extendedPrice: 100,
   category: 'Food',
@@ -260,7 +267,13 @@ void main() {
       300,
       scrollable: find.byType(Scrollable).first,
     );
-    expect(find.text('Unable to read document'), findsOneWidget);
+    expect(
+      find.text(
+        'Unable to extract this invoice. Your upload is safe; retry or enter the fields manually.',
+      ),
+      findsOneWidget,
+    );
+    expect(find.text('Unable to read document'), findsNothing);
     expect(find.text('Retry Extraction'), findsOneWidget);
   });
 
@@ -288,6 +301,11 @@ void main() {
     );
     expect(find.text('CHKN BRST BNLS SKLS 4/10 LB'), findsOneWidget);
     expect(find.textContaining('Confidence: Low'), findsOneWidget);
+    expect(
+      find.textContaining('Interpreted as: Chicken Breast'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('Package total: 40.0 LB'), findsOneWidget);
     await tester.scrollUntilVisible(
       find.text('Mark Reviewed'),
       300,
@@ -296,6 +314,38 @@ void main() {
     await tester.tap(find.text('Mark Reviewed'));
     await tester.pump();
     expect(repository.reviewed, isTrue);
+  });
+
+  testWidgets('reviewed invoice remains read-only after reopening', (
+    tester,
+  ) async {
+    final reviewed = InvoiceRecord(
+      id: extractedInvoice.id,
+      restaurantLocationId: extractedInvoice.restaurantLocationId,
+      fileName: extractedInvoice.fileName,
+      fileType: extractedInvoice.fileType,
+      fileSize: extractedInvoice.fileSize,
+      status: extractedInvoice.status,
+      createdAt: extractedInvoice.createdAt,
+      vendorName: extractedInvoice.vendorName,
+      invoiceNumber: extractedInvoice.invoiceNumber,
+      invoiceDate: extractedInvoice.invoiceDate,
+      total: extractedInvoice.total,
+      extractionStatus: 'COMPLETED',
+      reviewStatus: 'REVIEWED',
+    );
+    await tester.pumpWidget(
+      app([
+        invoiceDetailProvider('invoice-a').overrideWith((_) async => reviewed),
+        invoiceLineItemsProvider(
+          'invoice-a',
+        ).overrideWith((_) async => [lineItem]),
+      ], const InvoiceReviewScreen(invoiceId: 'invoice-a')),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Reviewed'), findsOneWidget);
+    expect(find.text('Edit Invoice Fields'), findsNothing);
+    expect(find.text('Mark Reviewed'), findsNothing);
   });
 
   testWidgets('line item correction persists raw description edit', (

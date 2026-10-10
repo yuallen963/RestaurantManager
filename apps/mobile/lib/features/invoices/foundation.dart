@@ -23,28 +23,39 @@ class InvoiceRecord {
     required this.createdAt,
     this.vendorId,
     this.vendorName,
+    this.vendorAddress,
     this.invoiceNumber,
     this.invoiceDate,
+    this.dueDate,
     this.subtotal,
     this.tax,
+    this.otherFees,
     this.total,
+    this.currency,
     this.notes,
     this.extractionStatus = 'NOT_STARTED',
     this.extractionConfidence,
     this.extractionError,
     this.reviewStatus = 'NOT_REVIEWED',
     this.ingestionSource = 'MANUAL_UPLOAD',
+    this.uncertainFields = const [],
   });
   final String id, restaurantLocationId, fileName, fileType, status;
   final int fileSize;
-  final String? vendorId, vendorName, invoiceNumber, notes;
-  final DateTime? invoiceDate;
+  final String? vendorId,
+      vendorName,
+      vendorAddress,
+      invoiceNumber,
+      notes,
+      currency;
+  final DateTime? invoiceDate, dueDate;
   final DateTime createdAt;
-  final double? subtotal, tax, total;
+  final double? subtotal, tax, otherFees, total;
   final String extractionStatus, reviewStatus;
   final String ingestionSource;
   final double? extractionConfidence;
   final String? extractionError;
+  final List<String> uncertainFields;
   factory InvoiceRecord.fromJson(Map<String, dynamic> json) => InvoiceRecord(
     id: json['id'] as String,
     restaurantLocationId: json['restaurantLocationId'] as String,
@@ -55,19 +66,27 @@ class InvoiceRecord {
     createdAt: DateTime.parse(json['createdAt'] as String),
     vendorId: json['vendorId'] as String?,
     vendorName: json['vendorName'] as String?,
+    vendorAddress: json['extractedVendorAddress'] as String?,
     invoiceNumber: json['invoiceNumber'] as String?,
     invoiceDate: json['invoiceDate'] == null
         ? null
         : DateTime.parse(json['invoiceDate'] as String),
+    dueDate: json['dueDate'] == null
+        ? null
+        : DateTime.parse(json['dueDate'] as String),
     subtotal: _money(json['subtotal']),
     tax: _money(json['tax']),
+    otherFees: _money(json['otherFees']),
     total: _money(json['total']),
+    currency: json['currency'] as String?,
     notes: json['notes'] as String?,
     extractionStatus: json['extractionStatus'] as String? ?? 'NOT_STARTED',
     extractionConfidence: _money(json['extractionConfidence']),
     extractionError: json['extractionError'] as String?,
     reviewStatus: json['reviewStatus'] as String? ?? 'NOT_REVIEWED',
     ingestionSource: json['ingestionSource'] as String? ?? 'MANUAL_UPLOAD',
+    uncertainFields: (json['uncertainFields'] as List? ?? const [])
+        .cast<String>(),
   );
 }
 
@@ -77,32 +96,61 @@ class InvoiceLineItem {
     required this.lineNumber,
     required this.rawDescription,
     this.sku,
+    this.normalizedName,
     this.quantity,
     this.unit,
     this.packSize,
+    this.packCount,
+    this.packUnitQuantity,
+    this.measurementUnit,
+    this.totalPackageQuantity,
+    this.productAttributes = const {},
+    this.sourcePage,
     this.unitPrice,
     this.extendedPrice,
     this.category,
     this.confidence,
+    this.uncertainFields = const [],
   });
   final String id, rawDescription;
   final int lineNumber;
-  final String? sku, unit, packSize, category;
-  final double? quantity, unitPrice, extendedPrice, confidence;
-  bool get lowConfidence => (confidence ?? 0) < .75;
+  final String? sku, normalizedName, unit, packSize, measurementUnit, category;
+  final double? quantity,
+      packCount,
+      packUnitQuantity,
+      totalPackageQuantity,
+      unitPrice,
+      extendedPrice,
+      confidence;
+  final int? sourcePage;
+  final Map<String, dynamic> productAttributes;
+  final List<String> uncertainFields;
+  bool get lowConfidence =>
+      (confidence ?? 0) < .75 || uncertainFields.isNotEmpty;
   factory InvoiceLineItem.fromJson(Map<String, dynamic> json) =>
       InvoiceLineItem(
         id: json['id'] as String,
         lineNumber: json['lineNumber'] as int,
         rawDescription: json['rawDescription'] as String,
+        normalizedName: json['normalizedName'] as String?,
         sku: json['sku'] as String?,
         quantity: _money(json['quantity']),
         unit: json['unit'] as String?,
         packSize: json['packSize'] as String?,
+        packCount: _money(json['packCount']),
+        packUnitQuantity: _money(json['packUnitQuantity']),
+        measurementUnit: json['measurementUnit'] as String?,
+        totalPackageQuantity: _money(json['totalPackageQuantity']),
+        productAttributes: Map<String, dynamic>.from(
+          json['productAttributes'] as Map? ?? const {},
+        ),
+        sourcePage: json['sourcePage'] as int?,
         unitPrice: _money(json['unitPrice']),
         extendedPrice: _money(json['extendedPrice']),
         category: json['category'] as String?,
         confidence: _money(json['confidence']),
+        uncertainFields: (json['uncertainFields'] as List? ?? const [])
+            .cast<String>(),
       );
 }
 

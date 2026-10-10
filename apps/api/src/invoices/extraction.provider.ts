@@ -6,17 +6,34 @@ import { z } from 'zod';
 
 const nullableText = z.string().nullable();
 const nullableNumber = z.number().nonnegative().nullable();
+const ProductAttributesSchema = z.object({
+  brand: nullableText,
+  condition: nullableText,
+  bone: nullableText,
+  skin: nullableText,
+  organic: nullableText,
+  grade: nullableText,
+  cut: nullableText,
+  size: nullableText,
+  packConfiguration: nullableText,
+});
 export const ExtractedInvoiceSchema = z.object({
   vendorName: nullableText,
+  vendorAddress: nullableText,
   invoiceNumber: nullableText,
   invoiceDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable(),
+  dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable(),
   subtotal: nullableNumber,
   tax: nullableNumber,
+  otherFees: nullableNumber,
   total: nullableNumber,
+  currency: z.string().regex(/^[A-Z]{3}$/).nullable(),
   uncertainFields: z.array(z.string()),
   lineItems: z.array(z.object({
     lineNumber: z.number().int().positive(),
+    sourcePage: z.number().int().positive().nullable(),
     rawDescription: z.string(),
+    normalizedName: nullableText,
     sku: nullableText,
     quantity: nullableNumber,
     unit: nullableText,
@@ -24,6 +41,7 @@ export const ExtractedInvoiceSchema = z.object({
     unitPrice: nullableNumber,
     extendedPrice: nullableNumber,
     category: z.enum(['Food', 'Beverage', 'Alcohol', 'Supplies', 'Cleaning', 'Packaging', 'Other']).nullable(),
+    productAttributes: ProductAttributesSchema.nullable(),
     uncertainFields: z.array(z.string()),
   })),
 });
@@ -45,7 +63,7 @@ export class InvoiceExtractionProvider {
     const response = await client.responses.parse({
       model,
       store: false,
-      input: [{ role: 'user', content: [document as any, { type: 'input_text', text: `Extract this restaurant vendor invoice, including every page in page order as one invoice. Preserve every line item raw description exactly as printed. Normalize invoiceDate to YYYY-MM-DD. If a printed date omits its year, infer the current year only when the result is clearly recent and unambiguous; otherwise return null and include invoiceDate in uncertainFields. Use null when a value is absent. List field names in uncertainFields only when the document is ambiguous; do not invent confidence scores or values. Categories are suggestions only. Today is ${new Date().toISOString().slice(0, 10)}.` }] }],
+      input: [{ role: 'user', content: [document as any, { type: 'input_text', text: `Extract this restaurant vendor invoice, including every relevant page in page order as one invoice. Combine line items across pages. Do not duplicate repeated headers, footers, subtotals, or grand totals. Preserve every line item rawDescription and packSize exactly as printed. sourcePage is the one-based PDF page number when clear, otherwise null. normalizedName and productAttributes are interpretations, never replacements for rawDescription. Normalize invoiceDate and dueDate to YYYY-MM-DD. If a printed date omits its year, infer the current year only when clearly recent and unambiguous; otherwise return null and include the field in uncertainFields. Use null when a value or product attribute is absent or unclear. Do not infer package quantities that are not plainly printed. List field names in uncertainFields only when the document is ambiguous; do not invent confidence scores or values. Currency must be a three-letter ISO code only when shown or unambiguous. Categories are suggestions only. Today is ${new Date().toISOString().slice(0, 10)}.` }] }],
       text: { format: zodTextFormat(ExtractedInvoiceSchema, 'restaurant_invoice') },
     });
     if (!response.output_parsed) throw new Error('Extraction provider returned no structured result');

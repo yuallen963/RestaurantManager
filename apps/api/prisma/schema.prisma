@@ -520,6 +520,7 @@ model Invoice {
   restaurantLocationId   String
   vendorId               String?
   extractedVendorName    String?
+  extractedVendorAddress String?
   fileName               String
   originalFileName       String
   fileType               String
@@ -527,9 +528,12 @@ model Invoice {
   storageKey             String
   invoiceNumber          String?
   invoiceDate            DateTime?
+  dueDate                DateTime?
   subtotal               Decimal?               @db.Decimal(14, 2)
   tax                    Decimal?               @db.Decimal(14, 2)
+  otherFees              Decimal?               @db.Decimal(14, 2)
   total                  Decimal?               @db.Decimal(14, 2)
+  currency               String?
   notes                  String?
   status                 InvoiceStatus          @default(UPLOADED)
   ingestionSource        InvoiceIngestionSource @default(MANUAL_UPLOAD)
@@ -546,7 +550,10 @@ model Invoice {
   extractionConfidence   Decimal?               @db.Decimal(5, 4)
   extractionStartedAt    DateTime?
   extractionCompletedAt  DateTime?
+  extractionDurationMs   Int?
+  extractionAttemptCount Int                    @default(0)
   extractionError        String?
+  uncertainFields        String[]               @default([])
   rawExtractionJson      Json?
   extractionUsage        Json?
   reviewStatus           ReviewStatus           @default(NOT_REVIEWED)
@@ -576,10 +583,17 @@ model InvoiceLineItem {
   quantity                Decimal?               @db.Decimal(14, 3)
   unit                    String?
   packSize                String?
+  packCount               Decimal?               @db.Decimal(14, 3)
+  packUnitQuantity        Decimal?               @db.Decimal(14, 3)
+  measurementUnit         String?
+  totalPackageQuantity    Decimal?               @db.Decimal(14, 3)
+  productAttributes       Json?
+  sourcePage              Int?
   unitPrice               Decimal?               @db.Decimal(14, 2)
   extendedPrice           Decimal?               @db.Decimal(14, 2)
   category                String?
   confidence              Decimal?               @db.Decimal(5, 4)
+  uncertainFields         String[]               @default([])
   createdAt               DateTime               @default(now())
   updatedAt               DateTime               @updatedAt
   invoice                 Invoice                @relation(fields: [invoiceId], references: [id], onDelete: Cascade)

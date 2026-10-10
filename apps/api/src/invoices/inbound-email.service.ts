@@ -124,7 +124,7 @@ export class InboundEmailService {
       await this.audit.log({ userId: member.userId, organizationId: location.organizationId, action: 'invoice.attachment_accepted', entityType: 'Invoice', entityId: id, metadata: { messageId, fileType: file.mimetype, fileSize: file.size, attachmentHash: hash } });
       await this.audit.log({ userId: member.userId, organizationId: location.organizationId, action: 'invoice.created_from_email', entityType: 'Invoice', entityId: id, metadata: { messageId, restaurantLocationId: location.id } });
       if (this.extraction.isConfigured()) {
-        await this.prisma.invoice.update({ where: { id }, data: { extractionStatus: ExtractionStatus.PROCESSING, extractionStartedAt: new Date() } });
+        await this.prisma.invoice.update({ where: { id }, data: { extractionStatus: ExtractionStatus.PROCESSING, extractionStartedAt: new Date(), extractionAttemptCount: { increment: 1 } } });
         await this.audit.log({ userId: member.userId, organizationId: location.organizationId, action: 'invoice.extraction_started', entityType: 'Invoice', entityId: id });
         setImmediate(() => void this.extraction.process(id, member.userId));
       }
