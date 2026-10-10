@@ -55,7 +55,9 @@ class PlaidBankProvider implements BankProviderClient {
     return data;
   }
   async createLinkToken(userId: string, accessToken?: string) {
-    const data = await this.post('/link/token/create', { client_name: 'Profit Lens', language: 'en', country_codes: (process.env.PLAID_COUNTRY_CODES ?? 'US').split(','), products: accessToken ? undefined : (process.env.PLAID_PRODUCTS ?? 'transactions').split(','), user: { client_user_id: userId }, access_token: accessToken, webhook: process.env.PLAID_WEBHOOK_URL || undefined, transactions: accessToken ? undefined : { days_requested: 90 } });
+    const redirectUri = process.env.PLAID_REDIRECT_URI?.trim();
+    if (process.env.PLAID_ENV === 'production' && !redirectUri) throw new ServiceUnavailableException('Plaid OAuth redirect is not configured');
+    const data = await this.post('/link/token/create', { client_name: 'Profit Lens', language: 'en', country_codes: (process.env.PLAID_COUNTRY_CODES ?? 'US').split(','), products: accessToken ? undefined : (process.env.PLAID_PRODUCTS ?? 'transactions').split(','), user: { client_user_id: userId }, access_token: accessToken, redirect_uri: redirectUri || undefined, webhook: process.env.PLAID_WEBHOOK_URL || undefined, transactions: accessToken ? undefined : { days_requested: 90 } });
     return data.link_token as string;
   }
   async exchange(publicToken: string): Promise<ProviderExchange> {

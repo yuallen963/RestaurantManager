@@ -15,6 +15,7 @@ describe('Plaid bank provider', () => {
     process.env.PLAID_SECRET = 'configured-secret';
     process.env.PLAID_ENV = 'sandbox';
     process.env.PLAID_PRODUCTS = 'transactions';
+    process.env.PLAID_REDIRECT_URI = 'https://example.com/plaid/oauth';
     global.fetch = jest.fn();
   });
 
@@ -38,7 +39,16 @@ describe('Plaid bank provider', () => {
     const update = JSON.parse((global.fetch as jest.Mock).mock.calls[1][1].body);
     expect(normal).toEqual(expect.objectContaining({ products: ['transactions'], user: { client_user_id: 'user-a' } }));
     expect(update).toEqual(expect.objectContaining({ access_token: 'access-token', user: { client_user_id: 'user-a' } }));
+    expect(normal.redirect_uri).toBe('https://example.com/plaid/oauth');
+    expect(update.redirect_uri).toBe('https://example.com/plaid/oauth');
     expect(update.products).toBeUndefined();
+  });
+
+  it('requires an explicit redirect URI in production', async () => {
+    process.env.PLAID_ENV = 'production';
+    delete process.env.PLAID_REDIRECT_URI;
+    await expect(new BankProviderFactory().get('PLAID').createLinkToken('user-a')).rejects.toBeInstanceOf(ServiceUnavailableException);
+    expect(global.fetch).not.toHaveBeenCalled();
   });
 
   it('exchanges a token, imports accounts, and resolves institution metadata', async () => {

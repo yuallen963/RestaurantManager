@@ -16,5 +16,6 @@ import { SavingsIntelligenceModule } from './savings-intelligence/savings-intell
 import { PosModule } from './pos/pos.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { OnboardingModule } from './onboarding/onboarding.module';
-@Module({ imports: [ConfigModule.forRoot({ isGlobal: true }), AuthModule, OrganizationsModule, LocationsModule, DashboardModule, FinanceModule, InvoicesModule, PriceIntelligenceModule, NeedsAttentionModule, BankModule, ProductMatchesModule, SavingsIntelligenceModule, PosModule, NotificationsModule, OnboardingModule], providers: [PrismaService, AuditService] })
+import { PublicLinksController } from './public-links.controller';
+@Module({ imports: [ConfigModule.forRoot({ isGlobal: true }), AuthModule, OrganizationsModule, LocationsModule, DashboardModule, FinanceModule, InvoicesModule, PriceIntelligenceModule, NeedsAttentionModule, BankModule, ProductMatchesModule, SavingsIntelligenceModule, PosModule, NotificationsModule, OnboardingModule], controllers: [PublicLinksController], providers: [PrismaService, AuditService] })
 export class AppModule {}
