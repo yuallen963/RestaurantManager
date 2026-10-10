@@ -12,10 +12,13 @@ class NotificationItem {
     this.title,
     this.body,
     this.type,
+    this.deepLinkId,
+    this.restaurantLocationId,
     this.readAt,
     this.createdAt,
   );
   final String id, title, body, type;
+  final String? deepLinkId, restaurantLocationId;
   final DateTime? readAt;
   final DateTime createdAt;
   factory NotificationItem.fromJson(Map<String, dynamic> j) => NotificationItem(
@@ -23,6 +26,8 @@ class NotificationItem {
     j['title'],
     j['body'],
     j['type'],
+    j['deepLinkId'] as String?,
+    j['restaurantLocationId'] as String?,
     j['readAt'] == null ? null : DateTime.parse(j['readAt']),
     DateTime.parse(j['createdAt']),
   );
@@ -129,7 +134,7 @@ class NotificationCenterScreen extends ConsumerWidget {
                                 trailing: Text(
                                   '${n.createdAt.month}/${n.createdAt.day}',
                                 ),
-                                onTap: () async { try { await r.read(notificationRepoProvider).read(n.id); } catch (_) {} r.invalidate(notificationListProvider); if (c.mounted) await r.read(notificationRouterProvider).open(c, r, NotificationRouteData(id: n.id, type: n.type)); },
+                                onTap: () async { try { await r.read(notificationRepoProvider).read(n.id); } catch (_) {} r.invalidate(notificationListProvider); if (c.mounted) await r.read(notificationRouterProvider).open(c, r, NotificationRouteData(id: n.id, type: n.type, deepLinkId: n.deepLinkId, restaurantLocationId: n.restaurantLocationId)); },
                               ),
                             )
                             .toList(),
