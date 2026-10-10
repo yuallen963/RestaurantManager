@@ -11,6 +11,7 @@ import 'features/notifications/push_service.dart';
 import 'features/notifications/notification_router.dart';
 import 'features/onboarding/foundation.dart';
 import 'features/onboarding/onboarding_screen.dart';
+import 'features/auth/auth_screens.dart';
 
 const storage = FlutterSecureStorage();
 const apiBaseUrl = String.fromEnvironment(
@@ -201,6 +202,21 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
             creatingAccount ? '/auth/register' : '/auth/login',
             data: {'email': email.text, 'password': password.text},
           );
+      if (creatingAccount) {
+        final data = Map<String, dynamic>.from(response.data as Map);
+        if (mounted)
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => CheckEmailScreen(
+                email: data['email'] as String,
+                developmentToken:
+                    data['developmentVerificationToken'] as String?,
+              ),
+            ),
+          );
+        return;
+      }
       await storage.write(
         key: 'accessToken',
         value: response.data['accessToken'],
@@ -221,12 +237,24 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
           ),
         );
       }
-    } on DioException {
-      setState(
-        () => error = creatingAccount
-            ? 'Unable to create account. Use a valid email and a password of at least 12 characters.'
-            : 'Unable to sign in.',
-      );
+    } on DioException catch (exception) {
+      if (!creatingAccount && exception.response?.statusCode == 403) {
+        if (mounted)
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => CheckEmailScreen(email: email.text.trim()),
+            ),
+          );
+      } else {
+        setState(
+          () => error = creatingAccount && exception.response?.statusCode == 409
+              ? 'An account already exists. Log in or reset your password.'
+              : creatingAccount
+              ? 'Unable to create account. Use a valid email and a password of at least 12 characters.'
+              : 'Unable to sign in.',
+        );
+      }
     } finally {
       if (mounted) setState(() => busy = false);
     }
@@ -271,6 +299,18 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                     : 'New to ProfitLens? Create account',
               ),
             ),
+            if (!creatingAccount)
+              TextButton(
+                onPressed: busy
+                    ? null
+                    : () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => const ForgotPasswordScreen(),
+                        ),
+                      ),
+                child: const Text('Forgot password?'),
+              ),
           ],
         ),
       ),

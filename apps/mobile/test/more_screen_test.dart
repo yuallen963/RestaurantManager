@@ -121,7 +121,7 @@ void main() {
   testWidgets('sign out calls logout, clears credentials, and shows login', (
     tester,
   ) async {
-    await tester.binding.setSurfaceSize(const Size(800, 1000));
+    await tester.binding.setSurfaceSize(const Size(800, 1300));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     var logoutCalls = 0;
     final dio = successfulLogoutDio(onLogout: () => logoutCalls++);
@@ -129,6 +129,7 @@ void main() {
     final container = await pumpMore(tester, dio: dio);
 
     final signOut = find.text('Sign Out');
+    await tester.scrollUntilVisible(signOut, 250);
     await tester.tap(signOut);
     await tester.pumpAndSettle();
 

@@ -58,7 +58,13 @@ class MoreRepository {
   Future<void> signOut() async {
     final fcmToken = await secureStorage.read(key: 'fcmToken');
     if (fcmToken != null) {
-      try { await dio.delete('/notifications/devices/${Uri.encodeComponent(fcmToken)}'); } on DioException { /* never block local logout */ }
+      try {
+        await dio.delete(
+          '/notifications/devices/${Uri.encodeComponent(fcmToken)}',
+        );
+      } on DioException {
+        /* never block local logout */
+      }
     }
     final refreshToken = await secureStorage.read(key: 'refreshToken');
     if (refreshToken != null) {
@@ -68,6 +74,23 @@ class MoreRepository {
         // Local credentials must still be cleared if remote revocation fails.
       }
     }
+    await secureStorage.delete(key: 'accessToken');
+    await secureStorage.delete(key: 'refreshToken');
+    await secureStorage.delete(key: 'fcmToken');
+    dio.options.headers.remove('Authorization');
+  }
+
+  Future<void> signOutAll() async {
+    await dio.post('/auth/sign-out-all');
+    await _clearCredentials();
+  }
+
+  Future<void> deleteAccount(String password) async {
+    await dio.delete('/auth/account', data: {'password': password});
+    await _clearCredentials();
+  }
+
+  Future<void> _clearCredentials() async {
     await secureStorage.delete(key: 'accessToken');
     await secureStorage.delete(key: 'refreshToken');
     await secureStorage.delete(key: 'fcmToken');

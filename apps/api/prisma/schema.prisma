@@ -212,8 +212,13 @@ model User {
   lastName              String?
   createdAt             DateTime               @default(now())
   updatedAt             DateTime               @updatedAt
+  emailVerifiedAt       DateTime?
+  disabledAt            DateTime?
+  deletedAt             DateTime?
   memberships           OrganizationMember[]
   refreshTokens         RefreshToken[]
+  emailVerificationTokens EmailVerificationToken[]
+  passwordResetTokens   PasswordResetToken[]
   auditLogs             AuditLog[]
   bankConnections       BankConnection[]
   merchantRules         MerchantRule[]
@@ -231,6 +236,7 @@ model Organization {
   name                  String
   createdAt             DateTime               @default(now())
   updatedAt             DateTime               @updatedAt
+  archivedAt            DateTime?
   memberships           OrganizationMember[]
   locations             RestaurantLocation[]
   categories            ExpenseCategory[]
@@ -333,6 +339,30 @@ model RefreshToken {
   replacedByTokenId String?
   createdAt         DateTime  @default(now())
   user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+}
+
+model EmailVerificationToken {
+  id        String    @id @default(uuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+}
+
+model PasswordResetToken {
+  id        String    @id @default(uuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, expiresAt])
 }

@@ -192,12 +192,13 @@ async function main() {
 
   const user = await prisma.user.upsert({
     where: { email: demoEmail },
-    update: {},
+    update: { emailVerifiedAt: new Date(), disabledAt: null, deletedAt: null },
     create: {
       email: demoEmail,
       passwordHash: await argon2.hash('DemoProfit2026!'),
       firstName: 'Demo',
       lastName: 'Owner',
+      emailVerifiedAt: new Date(),
     },
   });
   await prisma.organization.upsert({
