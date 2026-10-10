@@ -165,8 +165,12 @@ class InvoiceRepository {
       '/invoices',
       queryParameters: {
         'restaurantLocationId': locationId,
-        'startDate': range.startDate.toIso8601String(),
-        'endDate': range.endDate.toIso8601String(),
+        'startDate': range.startDate.toUtc().toIso8601String(),
+        'endDate': range.endDate
+            .add(const Duration(days: 1))
+            .subtract(const Duration(microseconds: 1))
+            .toUtc()
+            .toIso8601String(),
       },
     );
     return (response.data as List)

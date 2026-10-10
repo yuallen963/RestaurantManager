@@ -115,6 +115,36 @@ Widget app(List<Override> overrides, Widget child) => ProviderScope(
 );
 
 void main() {
+  test('invoice repository sends explicit UTC date boundaries', () async {
+    late Map<String, dynamic> query;
+    final dio = Dio()
+      ..interceptors.add(
+        InterceptorsWrapper(
+          onRequest: (options, handler) {
+            query = options.queryParameters;
+            handler.resolve(
+              Response(requestOptions: options, statusCode: 200, data: []),
+            );
+          },
+        ),
+      );
+    final range = DateRangeState(
+      DatePreset.custom,
+      DateTime(2026, 10, 1),
+      DateTime(2026, 10, 9),
+    );
+    await InvoiceRepository(dio).list('loc-a', range);
+    expect(query['startDate'], range.startDate.toUtc().toIso8601String());
+    expect(
+      query['endDate'],
+      range.endDate
+          .add(const Duration(days: 1))
+          .subtract(const Duration(microseconds: 1))
+          .toUtc()
+          .toIso8601String(),
+    );
+  });
+
   testWidgets('invoice list shows loading state', (tester) async {
     await tester.pumpWidget(
       app([

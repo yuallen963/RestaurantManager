@@ -57,6 +57,25 @@ describe('InvoicesService', () => {
     expect(prisma.invoice.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ organizationId: 'org-a', restaurantLocationId: 'loc-a' }) }));
   });
 
+  it('preserves explicit UTC invoice-list boundaries without rounding them', async () => {
+    const { service, prisma } = setup();
+    await service.list('user-a', {
+      restaurantLocationId: 'loc-a',
+      startDate: '2026-10-01T04:00:00.000Z',
+      endDate: '2026-10-10T03:59:59.999Z',
+    });
+    expect(prisma.invoice.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          createdAt: {
+            gte: new Date('2026-10-01T04:00:00.000Z'),
+            lte: new Date('2026-10-10T03:59:59.999Z'),
+          },
+        }),
+      }),
+    );
+  });
+
   it('rejects a vendor from another organization', async () => {
     const { service } = setup();
     await expect(service.uploadIntent('user-a', { restaurantLocationId: 'loc-a', vendorId: 'vendor-b', fileName: 'x.pdf', mimeType: 'application/pdf', fileSize: 10 })).rejects.toBeInstanceOf(ForbiddenException);
