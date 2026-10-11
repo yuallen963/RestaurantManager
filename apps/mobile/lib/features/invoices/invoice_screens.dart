@@ -422,7 +422,8 @@ class InvoiceDetailScreen extends ConsumerWidget {
                 ],
                 if (invoice.extractionStatus == 'FAILED') ...[
                   Text(
-                    'Unable to extract this invoice. Your upload is safe; retry or enter the fields manually.',
+                    invoice.extractionError ??
+                        'Unable to process this invoice. Retry or enter the fields manually.',
                     style: TextStyle(
                       color: Theme.of(context).colorScheme.error,
                     ),
@@ -439,7 +440,8 @@ class InvoiceDetailScreen extends ConsumerWidget {
                   const SizedBox(height: 8),
                 ],
                 if (invoice.extractionStatus == 'NOT_STARTED' ||
-                    invoice.extractionStatus == 'FAILED')
+                    (invoice.extractionStatus == 'FAILED' &&
+                        invoice.canRetryExtraction))
                   FilledButton.icon(
                     onPressed: extractionState.isLoading
                         ? null

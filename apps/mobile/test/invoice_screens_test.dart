@@ -294,6 +294,7 @@ void main() {
       createdAt: DateTime(2026),
       extractionStatus: 'FAILED',
       extractionError: 'Unable to read document',
+      canRetryExtraction: true,
     );
     await tester.pumpWidget(
       app([
@@ -306,14 +307,36 @@ void main() {
       300,
       scrollable: find.byType(Scrollable).first,
     );
-    expect(
-      find.text(
-        'Unable to extract this invoice. Your upload is safe; retry or enter the fields manually.',
-      ),
-      findsOneWidget,
-    );
-    expect(find.text('Unable to read document'), findsNothing);
+    expect(find.text('Unable to read document'), findsOneWidget);
     expect(find.text('Retry Extraction'), findsOneWidget);
+  });
+
+  testWidgets('failed upload explains recovery without unsafe extraction retry', (
+    tester,
+  ) async {
+    final failed = InvoiceRecord(
+      id: 'invoice-a',
+      restaurantLocationId: 'loc-a',
+      fileName: 'invoice.jpg',
+      fileType: 'image/jpeg',
+      fileSize: 100,
+      status: 'FAILED',
+      createdAt: DateTime(2026),
+      extractionStatus: 'FAILED',
+      extractionError: 'Upload did not finish. Choose the file and upload it again.',
+    );
+    await tester.pumpWidget(
+      app([
+        invoiceDetailProvider('invoice-a').overrideWith((_) async => failed),
+      ], const InvoiceDetailScreen(invoiceId: 'invoice-a')),
+    );
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.text('Upload did not finish. Choose the file and upload it again.'),
+      300,
+      scrollable: find.byType(Scrollable).first,
+    );
+    expect(find.text('Retry Extraction'), findsNothing);
   });
 
   testWidgets('unavailable extraction shows a safe recoverable message', (

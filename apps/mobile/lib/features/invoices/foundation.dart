@@ -84,6 +84,8 @@ class InvoiceRecord {
     this.extractionStatus = 'NOT_STARTED',
     this.extractionConfidence,
     this.extractionError,
+    this.extractionAttemptCount = 0,
+    this.canRetryExtraction = false,
     this.reviewStatus = 'NOT_REVIEWED',
     this.ingestionSource = 'MANUAL_UPLOAD',
     this.uncertainFields = const [],
@@ -104,6 +106,8 @@ class InvoiceRecord {
   final String ingestionSource;
   final double? extractionConfidence;
   final String? extractionError;
+  final int extractionAttemptCount;
+  final bool canRetryExtraction;
   final List<String> uncertainFields;
   final InvoiceReconciliation? reconciliation;
   factory InvoiceRecord.fromJson(Map<String, dynamic> json) {
@@ -139,6 +143,8 @@ class InvoiceRecord {
       extractionStatus: json['extractionStatus'] as String? ?? 'NOT_STARTED',
       extractionConfidence: _money(json['extractionConfidence']),
       extractionError: json['extractionError'] as String?,
+      extractionAttemptCount: json['extractionAttemptCount'] as int? ?? 0,
+      canRetryExtraction: json['canRetryExtraction'] as bool? ?? false,
       reviewStatus: json['reviewStatus'] as String? ?? 'NOT_REVIEWED',
       ingestionSource: json['ingestionSource'] as String? ?? 'MANUAL_UPLOAD',
       uncertainFields: (json['uncertainFields'] as List? ?? const [])

@@ -2,7 +2,7 @@ import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { InvoicesService } from '../src/invoices/invoices.service';
 
 const location = { id: 'loc-a', organizationId: 'org-a' };
-const invoice = { id: 'invoice-a', organizationId: 'org-a', restaurantLocationId: 'loc-a', vendorId: null, storageKey: 'org/file.pdf' };
+const invoice = { id: 'invoice-a', organizationId: 'org-a', restaurantLocationId: 'loc-a', vendorId: null, storageKey: 'org/file.pdf', status: 'UPLOADED', attachmentHash: 'hash-a', reviewStatus: 'NOT_REVIEWED', extractionStatus: 'NOT_STARTED', extractionStartedAt: null, extractionAttemptCount: 0 };
 
 function setup() {
   const prisma: any = {
@@ -13,6 +13,7 @@ function setup() {
       findUnique: jest.fn().mockResolvedValue(invoice),
       findFirst: jest.fn().mockResolvedValue(null),
       findMany: jest.fn().mockResolvedValue([invoice]),
+      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       delete: jest.fn().mockResolvedValue(invoice),
     },
     vendor: { findFirst: jest.fn().mockResolvedValue(null), findMany: jest.fn().mockResolvedValue([]) },
@@ -91,6 +92,37 @@ describe('InvoicesService', () => {
     expect(prisma.invoice.delete).toHaveBeenCalledWith({ where: { id: 'invoice-a' } });
     expect(extraction.process).not.toHaveBeenCalled();
     expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({ action: 'invoice.duplicate_skipped', entityId: 'existing-invoice' }));
+  });
+
+  it('marks completion failed when the storage object is missing', async () => {
+    const { service, prisma, storage, audit } = setup();
+    storage.get.mockRejectedValue(new Error('NoSuchKey'));
+    await expect(service.complete('user-a', 'invoice-a', { etag: 'uploaded' })).rejects.toThrow('uploaded invoice file is unavailable');
+    expect(prisma.invoice.updateMany).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: 'FAILED', extractionStatus: 'FAILED' }) }));
+    expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({ action: 'invoice.upload_completion_failed', metadata: expect.objectContaining({ errorCode: 'STORAGE_OBJECT_UNAVAILABLE' }) }));
+  });
+
+  it('claims extraction once when concurrent requests arrive', async () => {
+    jest.useFakeTimers();
+    const { service, prisma, extraction } = setup();
+    extraction.isConfigured.mockReturnValue(true);
+    const processing = { ...invoice, extractionStatus: 'PROCESSING', extractionStartedAt: new Date(), extractionAttemptCount: 1 };
+    prisma.invoice.findUnique.mockResolvedValueOnce(invoice).mockResolvedValue(processing);
+    prisma.invoice.updateMany.mockResolvedValueOnce({ count: 1 }).mockResolvedValueOnce({ count: 0 });
+    await service.startExtraction('user-a', 'invoice-a');
+    await service.startExtraction('user-a', 'invoice-a');
+    jest.runAllTimers();
+    expect(extraction.process).toHaveBeenCalledTimes(1);
+    jest.useRealTimers();
+  });
+
+  it('enforces the extraction retry limit', async () => {
+    const { service, prisma, extraction } = setup();
+    extraction.isConfigured.mockReturnValue(true);
+    prisma.invoice.findUnique.mockResolvedValue({ ...invoice, extractionStatus: 'FAILED', extractionAttemptCount: 3 });
+    prisma.invoice.updateMany.mockResolvedValue({ count: 0 });
+    await expect(service.startExtraction('user-a', 'invoice-a')).rejects.toThrow('retry limit reached');
+    expect(extraction.process).not.toHaveBeenCalled();
   });
 
   it('validates non-negative metadata amounts', async () => {
