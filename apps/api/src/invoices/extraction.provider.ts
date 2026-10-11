@@ -117,7 +117,7 @@ export class InvoiceExtractionProvider {
       const usage = response.usageMetadata;
       return { data, provider: 'gemini', model, usage: usage ? { input_tokens: usage.promptTokenCount, output_tokens: usage.candidatesTokenCount, total_tokens: usage.totalTokenCount } : null };
     } catch (error) {
-      this.logger.warn(JSON.stringify({ event: 'invoice_extraction_provider_error', provider: 'gemini', errorType: error instanceof Error ? error.name : 'UnknownError', status: (error as { status?: number }).status ?? null }));
+      this.logger.warn(JSON.stringify({ event: 'invoice_extraction_provider_error', provider: 'gemini', errorType: error instanceof Error ? error.name : 'UnknownError', status: (error as { status?: number }).status ?? null, message: error instanceof Error ? error.message.slice(0, 300) : null }));
       throw error;
     }
   }
