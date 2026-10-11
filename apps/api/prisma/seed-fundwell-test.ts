@@ -84,7 +84,7 @@ async function main() {
     prisma.expense.count({ where: { restaurantLocationId: targetId, notes: marker } }),
     prisma.invoice.count({ where: { restaurantLocationId: targetId, storageKey: { startsWith: `${marker}/` } } }),
   ]);
-  const counts = { revenue: 75, expenses: 0, invoices: 30, lineItems: 0, bankTransactions: 0 };
+  const counts = { revenue: 75, expenses: 90 * 3 + 13, invoices: 30, lineItems: 30 * 6, bankTransactions: 0 };
   if (dryRun) {
     console.log(JSON.stringify({ dryRun: true, targetId, organizationId, existing, planned: counts }, null, 2));
     return;
@@ -119,7 +119,6 @@ async function main() {
       );
       if (index % 7 === 0) expenses.push({ id: stableId(`expense:rent:${index}`), organizationId, restaurantLocationId: targetId, vendorId: vendorId.get('main street properties'), expenseCategoryId: categoryId.get('rent')!, date, amount: money(3200), description: 'Restaurant occupancy', notes: marker, source: ExpenseSource.MANUAL });
     }
-    counts.expenses = expenses.length;
     await tx.expense.createMany({ data: expenses });
 
     for (let index = 0; index < 30; index += 1) {
@@ -150,7 +149,6 @@ async function main() {
           organizationId, restaurantLocationId: targetId, lineNumber: lineIndex + 1, rawDescription: line[0], normalizedName: normalize(line[0]), sku: line[1], quantity: money(line[2]), unit: line[3], packSize: line[4], unitPrice: money(line[5]), extendedPrice: money(line[2] * line[5]), confidence: money(1),
         })) },
       } });
-      counts.lineItems += lines.length;
     }
   });
   console.log(JSON.stringify({ dryRun: false, targetId, organizationId, created: counts, bankTransactions: '0 (requires real bank connection)' }, null, 2));
