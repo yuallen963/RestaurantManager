@@ -28,6 +28,10 @@
 	<true/>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Select invoice photos to upload securely.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>FundWell uses the camera so you can photograph and upload restaurant invoices and receipts.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>FundWell may use your location while the app is in use to support location-based restaurant and banking features.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
