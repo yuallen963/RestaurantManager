@@ -7,6 +7,8 @@ import '../expenses/expenses_screen.dart';
 import '../expenses/foundation.dart';
 import '../price_intelligence/price_changes_screen.dart';
 import '../vendors/vendors_screen.dart';
+import '../invoices/invoice_screens.dart';
+import '../banking/bank_screens.dart';
 import 'foundation.dart';
 
 class NeedsAttentionPreview extends ConsumerWidget {
@@ -238,6 +240,31 @@ class _AttentionCard extends ConsumerWidget {
               ),
             const SizedBox(height: 10),
             Text(item.message),
+            if (item.whyItMatters != null) ...[
+              const SizedBox(height: 10),
+              Text(
+                'Why it matters',
+                style: Theme.of(context).textTheme.labelLarge,
+              ),
+              Text(item.whyItMatters!),
+            ],
+            if (item.evidence.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              Text(
+                'Supporting evidence',
+                style: Theme.of(context).textTheme.labelLarge,
+              ),
+              for (final evidence in item.evidence)
+                Text('${evidence.label}: ${evidence.value}'),
+            ],
+            if (item.nextStep != null) ...[
+              const SizedBox(height: 10),
+              Text(
+                'What to check next',
+                style: Theme.of(context).textTheme.labelLarge,
+              ),
+              Text(item.nextStep!),
+            ],
             const SizedBox(height: 8),
             Wrap(
               spacing: 12,
@@ -259,11 +286,57 @@ class _AttentionCard extends ConsumerWidget {
                 Text(attentionDate(item.occurredAt)),
               ],
             ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                if (item.status == AttentionStatus.active)
+                  TextButton(
+                    onPressed: () =>
+                        _setStatus(context, ref, AttentionStatus.reviewed),
+                    child: const Text('Mark Reviewed'),
+                  )
+                else
+                  Chip(label: Text(item.status.name.toUpperCase())),
+                const Spacer(),
+                PopupMenuButton<AttentionStatus>(
+                  tooltip: 'Finding status',
+                  onSelected: (status) => _setStatus(context, ref, status),
+                  itemBuilder: (_) => const [
+                    PopupMenuItem(
+                      value: AttentionStatus.resolved,
+                      child: Text('Resolve'),
+                    ),
+                    PopupMenuItem(
+                      value: AttentionStatus.dismissed,
+                      child: Text('Dismiss'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ],
         ),
       ),
     ),
   );
+
+  Future<void> _setStatus(
+    BuildContext context,
+    WidgetRef ref,
+    AttentionStatus status,
+  ) async {
+    try {
+      await ref
+          .read(needsAttentionRepositoryProvider)
+          .updateStatus(item.id, status);
+      ref.invalidate(needsAttentionProvider);
+    } catch (_) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Unable to update this finding.')),
+      );
+    }
+  }
 }
 
 class SeverityBadge extends StatelessWidget {
@@ -333,6 +406,18 @@ Future<void> openAttentionAction(
       );
     case AttentionActionType.openDashboardCost:
       Navigator.pop(context);
+    case AttentionActionType.openInvoice:
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => InvoiceDetailScreen(invoiceId: item.action.targetId),
+        ),
+      );
+    case AttentionActionType.openBankTransaction:
+      await Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const BankTransactionsScreen()),
+      );
   }
 }
 

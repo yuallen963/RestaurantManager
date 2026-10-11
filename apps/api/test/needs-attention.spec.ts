@@ -1,4 +1,5 @@
 import { ForbiddenException } from '@nestjs/common';
+import { BankReconciliationStatus, InsightStatus, Prisma, ReviewStatus } from '@prisma/client';
 import { comparisonPeriod, NeedsAttentionService, severityFor, severityScore } from '../src/needs-attention/needs-attention.service';
 
 const location = { id: '00000000-0000-4000-8000-000000000002', organizationId: 'org-a', name: 'Downtown Grill' };
@@ -18,8 +19,11 @@ function setup({
   previousVendors = [{ vendorId: 'vendor-a', _sum: { amount: 8200 } }],
   currentCategories = [{ expenseCategoryId: 'category-a', _sum: { amount: 1200 }, _max: { date: new Date('2026-10-08') } }],
   previousCategories = [{ expenseCategoryId: 'category-a', _sum: { amount: 800 } }],
+  bankTransactions = [],
+  reviewedInvoices = [],
+  insightStatus = InsightStatus.ACTIVE,
   requireMember = jest.fn(),
-} = {}) {
+}: any = {}) {
   const groupBy = jest.fn()
     .mockResolvedValueOnce(currentVendors)
     .mockResolvedValueOnce(previousVendors)
@@ -30,6 +34,13 @@ function setup({
     expense: { groupBy },
     vendor: { findMany: jest.fn().mockResolvedValue([{ id: 'vendor-a', name: 'Sysco' }]) },
     expenseCategory: { findMany: jest.fn().mockResolvedValue([{ id: 'category-a', name: 'Food Supplies' }]) },
+    bankTransaction: { findMany: jest.fn().mockResolvedValue(bankTransactions) },
+    invoice: { findMany: jest.fn().mockResolvedValue(reviewedInvoices) },
+    insight: {
+      upsert: jest.fn().mockImplementation(({ create }: any) => ({ ...create, id: `insight-${create.fingerprint.slice(0, 8)}`, status: insightStatus })),
+      findUnique: jest.fn(),
+      update: jest.fn(),
+    },
   };
   const dashboardService: any = { get: jest.fn().mockResolvedValueOnce(currentDashboard).mockResolvedValueOnce(previousDashboard) };
   const priceService: any = { changes: jest.fn().mockResolvedValue({ items: prices }) };
@@ -104,6 +115,55 @@ describe('NeedsAttentionService', () => {
     const { service, prisma } = setup({ requireMember: denied });
     await expect(service.get('other-user', query)).rejects.toBeInstanceOf(ForbiddenException);
     expect(prisma.expense.groupBy).not.toHaveBeenCalled();
+  });
+
+  it('flags nearby same-merchant bank payments but not monthly recurring charges', async () => {
+    const payment = (id: string, date: string) => ({
+      id, amount: new Prisma.Decimal('249.99'), postedDate: new Date(date),
+      description: 'SUPPLIER PAYMENT', merchantNameNormalized: 'Supplier',
+      vendorId: 'vendor-a', invoiceId: null, suggestedInvoiceId: null,
+      reconciliationStatus: BankReconciliationStatus.NEEDS_REVIEW,
+      vendor: { name: 'Supplier' },
+    });
+    const duplicate = setup({
+      currentDashboard: dashboard(0, 0), previousDashboard: dashboard(0, 0), prices: [],
+      currentVendors: [], previousVendors: [], currentCategories: [], previousCategories: [],
+      bankTransactions: [payment('a', '2026-10-06'), payment('b', '2026-10-07')],
+    });
+    expect((await duplicate.service.get('user-a', query)).items.map((item: any) => item.type)).toContain('POSSIBLE_DUPLICATE_PAYMENT');
+
+    const recurring = setup({
+      currentDashboard: dashboard(0, 0), previousDashboard: dashboard(0, 0), prices: [],
+      currentVendors: [], previousVendors: [], currentCategories: [], previousCategories: [],
+      bankTransactions: [payment('a', '2026-09-07'), payment('b', '2026-10-07')],
+    });
+    expect((await recurring.service.get('user-a', { ...query, startDate: '2026-09-01T00:00:00.000Z' })).items.map((item: any) => item.type)).not.toContain('POSSIBLE_DUPLICATE_PAYMENT');
+  });
+
+  it('uses neutral unmatched invoice/payment language and preserves suggested matches', async () => {
+    const invoice = { id: 'invoice-a', invoiceNumber: 'INV-10', invoiceDate: new Date('2026-10-04'), total: new Prisma.Decimal(500), reviewStatus: ReviewStatus.REVIEWED, vendor: { name: 'Supplier' }, extractedVendorName: null };
+    const transaction = { id: 'payment-a', amount: new Prisma.Decimal(500), postedDate: new Date('2026-10-05'), description: 'Supplier payment', merchantNameNormalized: 'Supplier', vendorId: 'vendor-a', invoiceId: null, suggestedInvoiceId: 'invoice-a', reconciliationStatus: BankReconciliationStatus.NEEDS_REVIEW, vendor: { name: 'Supplier' } };
+    const { service } = setup({ currentDashboard: dashboard(0, 0), previousDashboard: dashboard(0, 0), prices: [], currentVendors: [], previousVendors: [], currentCategories: [], previousCategories: [], reviewedInvoices: [invoice], bankTransactions: [transaction] });
+    const result = await service.get('user-a', query);
+    expect(result.items.find((item: any) => item.type === 'UNMATCHED_INVOICE')).toMatchObject({ message: expect.stringContaining('possible bank match'), action: { type: 'OPEN_INVOICE', targetId: 'invoice-a' } });
+    expect(result.items.find((item: any) => item.type === 'UNMATCHED_PAYMENT')).toMatchObject({ message: expect.stringContaining('possible invoice match'), action: { type: 'OPEN_BANK_TRANSACTION', targetId: 'payment-a' } });
+    expect(result.items.map((item: any) => item.type)).not.toContain('MISSING_CREDIT');
+  });
+
+  it('suppresses dismissed evidence but allows a materially new fingerprint', async () => {
+    const dismissed = setup({ insightStatus: InsightStatus.DISMISSED });
+    const result = await dismissed.service.get('user-a', query);
+    expect(result.items).toEqual([]);
+    expect(dismissed.prisma.insight.upsert).toHaveBeenCalled();
+  });
+
+  it('updates lifecycle status only after tenant authorization', async () => {
+    const { service, prisma, requireMember } = setup();
+    prisma.insight.findUnique.mockResolvedValue({ id: 'insight-a', organizationId: 'org-a', reviewedAt: null });
+    prisma.insight.update.mockResolvedValue({ id: 'insight-a', status: InsightStatus.RESOLVED });
+    await service.updateStatus('user-a', 'insight-a', InsightStatus.RESOLVED);
+    expect(requireMember).toHaveBeenCalledWith('user-a', 'org-a');
+    expect(prisma.insight.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: InsightStatus.RESOLVED, resolvedAt: expect.any(Date) }) }));
   });
 });
 

@@ -68,6 +68,8 @@ export interface PriceChangeItem {
   packSize: string | null;
   previousUnitPrice: number;
   currentUnitPrice: number;
+  previousInvoiceId: string;
+  currentInvoiceId: string;
   absoluteChange: number;
   percentageChange: number;
   typicalMonthlyQuantity: number | null;
@@ -124,6 +126,8 @@ export function analyzePriceObservations(rows: TrustedPriceObservation[], option
       packSize: current.packSize?.trim() || null,
       previousUnitPrice: rounded(previousPrice),
       currentUnitPrice: rounded(currentPrice),
+      previousInvoiceId: previous.invoiceId,
+      currentInvoiceId: current.invoiceId,
       absoluteChange: rounded(absoluteChange),
       percentageChange: rounded(percentageChange),
       typicalMonthlyQuantity: monthlyQuantity == null ? null : rounded(monthlyQuantity, 3),

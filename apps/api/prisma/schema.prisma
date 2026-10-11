@@ -85,6 +85,7 @@ enum ImportRowStatus {
 
 enum InsightStatus {
   ACTIVE
+  REVIEWED
   DISMISSED
   RESOLVED
 }
@@ -767,9 +768,13 @@ model Insight {
   type                 String
   severity             InsightSeverity
   status               InsightStatus   @default(ACTIVE)
+  fingerprint          String          @unique
   title                String
   description          String
   metadata             Json?
+  reviewedAt           DateTime?
+  resolvedAt           DateTime?
+  dismissedAt          DateTime?
   generatedAt          DateTime        @default(now())
   createdAt            DateTime        @default(now())
   updatedAt            DateTime        @updatedAt

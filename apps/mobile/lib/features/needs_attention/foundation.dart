@@ -19,7 +19,11 @@ enum AttentionActionType {
   openDashboardCost,
   openVendor,
   openExpenseCategory,
+  openInvoice,
+  openBankTransaction,
 }
+
+enum AttentionStatus { active, reviewed, resolved, dismissed }
 
 AttentionSeverity _severity(String value) => AttentionSeverity.values
     .firstWhere((item) => item.name.toUpperCase() == value);
@@ -29,6 +33,8 @@ AttentionActionType _action(String value) => switch (value) {
   'OPEN_DASHBOARD_COST' => AttentionActionType.openDashboardCost,
   'OPEN_VENDOR' => AttentionActionType.openVendor,
   'OPEN_EXPENSE_CATEGORY' => AttentionActionType.openExpenseCategory,
+  'OPEN_INVOICE' => AttentionActionType.openInvoice,
+  'OPEN_BANK_TRANSACTION' => AttentionActionType.openBankTransaction,
   _ => throw FormatException('Unknown attention action $value'),
 };
 
@@ -59,6 +65,10 @@ class AttentionItem {
     this.percentageChange,
     this.percentagePointChange,
     this.estimatedMonthlyImpact,
+    this.whyItMatters,
+    this.nextStep,
+    this.evidence = const [],
+    this.status = AttentionStatus.active,
   });
 
   final String id, type, title, message;
@@ -67,6 +77,9 @@ class AttentionItem {
   final double currentValue, previousValue;
   final double? percentageChange, percentagePointChange;
   final double? estimatedMonthlyImpact;
+  final String? whyItMatters, nextStep;
+  final List<AttentionEvidence> evidence;
+  final AttentionStatus status;
   final DateTime occurredAt;
   final AttentionAction action;
 
@@ -81,12 +94,40 @@ class AttentionItem {
     percentageChange: _optionalNumber(json['percentageChange']),
     percentagePointChange: _optionalNumber(json['percentagePointChange']),
     estimatedMonthlyImpact: _optionalNumber(json['estimatedMonthlyImpact']),
+    whyItMatters: json['whyItMatters'] as String?,
+    nextStep: json['nextStep'] as String?,
+    evidence: (json['evidence'] as List? ?? const [])
+        .map(
+          (value) =>
+              AttentionEvidence.fromJson(Map<String, dynamic>.from(value)),
+        )
+        .toList(),
+    status: AttentionStatus.values.firstWhere(
+      (status) =>
+          status.name.toUpperCase() == (json['status'] as String? ?? 'ACTIVE'),
+    ),
     message: json['message'] as String,
     occurredAt: DateTime.parse(json['occurredAt'] as String),
     action: AttentionAction.fromJson(
       Map<String, dynamic>.from(json['action'] as Map),
     ),
   );
+}
+
+class AttentionEvidence {
+  const AttentionEvidence({
+    required this.label,
+    required this.value,
+    this.recordId,
+  });
+  final String label, value;
+  final String? recordId;
+  factory AttentionEvidence.fromJson(Map<String, dynamic> json) =>
+      AttentionEvidence(
+        label: json['label'] as String,
+        value: json['value'] as String,
+        recordId: json['recordId'] as String?,
+      );
 }
 
 class AttentionSummary {
@@ -149,6 +190,13 @@ class NeedsAttentionRepository {
     );
     return NeedsAttentionData.fromJson(
       Map<String, dynamic>.from(response.data as Map),
+    );
+  }
+
+  Future<void> updateStatus(String id, AttentionStatus status) async {
+    await dio.patch(
+      '/needs-attention/$id/status',
+      data: {'status': status.name.toUpperCase()},
     );
   }
 }

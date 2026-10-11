@@ -48,6 +48,12 @@ AttentionItem issue({
   message: type == 'REPEATED_ITEM_PRICE_INCREASE'
       ? 'Chicken Breast increased on 2 consecutive purchases.'
       : '$title compared with the previous period.',
+  whyItMatters: 'This may increase food costs.',
+  nextStep: 'Review the supporting invoice.',
+  evidence: const [
+    AttentionEvidence(label: 'Previous price', value: '\$98.00'),
+    AttentionEvidence(label: 'Current price', value: '\$106.50'),
+  ],
   occurredAt: DateTime.utc(2026, 10, 3),
   action: AttentionAction(type: action, targetId: target),
 );
@@ -105,11 +111,17 @@ class FakeNeedsRepository extends NeedsAttentionRepository {
   FakeNeedsRepository(this.loader) : super(Dio());
   final Future<NeedsAttentionData> Function(String locationId) loader;
   final calls = <String>[];
+  final statusCalls = <(String, AttentionStatus)>[];
 
   @override
   Future<NeedsAttentionData> get(String locationId, DateRangeState range) {
     calls.add(locationId);
     return loader(locationId);
+  }
+
+  @override
+  Future<void> updateStatus(String id, AttentionStatus status) async {
+    statusCalls.add((id, status));
   }
 }
 
@@ -325,6 +337,42 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Price History'), findsOneWidget);
     expect(find.text('Chicken Breast'), findsOneWidget);
+  });
+
+  testWidgets('finding explains evidence and supports reviewed lifecycle', (
+    tester,
+  ) async {
+    final repository = FakeNeedsRepository(
+      (_) async => NeedsAttentionData(
+        summary: const AttentionSummary(
+          critical: 0,
+          high: 1,
+          medium: 0,
+          low: 0,
+          estimatedMonthlyImpact: 102,
+        ),
+        items: [issue()],
+      ),
+    );
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          activeLocationProvider.overrideWithValue(downtown),
+          availableLocationsProvider.overrideWithValue([downtown]),
+          needsAttentionRepositoryProvider.overrideWithValue(repository),
+        ],
+        child: const MaterialApp(home: NeedsAttentionScreen()),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Why it matters'), findsOneWidget);
+    expect(find.text('Supporting evidence'), findsOneWidget);
+    expect(find.text('What to check next'), findsOneWidget);
+    await tester.tap(find.text('Mark Reviewed'));
+    await tester.pump();
+    expect(repository.statusCalls, [
+      ('price:item-key', AttentionStatus.reviewed),
+    ]);
   });
 
   testWidgets('vendor issue opens existing vendor detail', (tester) async {

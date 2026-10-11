@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { Prisma } from '@prisma/client';
+import { BankReconciliationStatus, InsightStatus, Prisma, ReviewStatus } from '@prisma/client';
+import { createHash } from 'crypto';
 import { DashboardService } from '../dashboard/dashboard.service';
 import { OrganizationAccessService } from '../organizations/organization-access.service';
 import { PriceChangeDirection, PriceChangeSort } from '../price-intelligence/dto';
@@ -9,8 +10,8 @@ import { PrismaService } from '../prisma.service';
 import { NeedsAttentionQuery } from './dto';
 
 export type AttentionSeverity = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
-export type AttentionType = 'ITEM_PRICE_INCREASE' | 'REPEATED_ITEM_PRICE_INCREASE' | 'FOOD_COST_DETERIORATION' | 'LABOR_COST_DETERIORATION' | 'VENDOR_SPEND_INCREASE' | 'CATEGORY_SPEND_INCREASE';
-export type AttentionActionType = 'OPEN_PRICE_HISTORY' | 'OPEN_DASHBOARD_COST' | 'OPEN_VENDOR' | 'OPEN_EXPENSE_CATEGORY';
+export type AttentionType = 'ITEM_PRICE_INCREASE' | 'REPEATED_ITEM_PRICE_INCREASE' | 'FOOD_COST_DETERIORATION' | 'LABOR_COST_DETERIORATION' | 'VENDOR_SPEND_INCREASE' | 'CATEGORY_SPEND_INCREASE' | 'POSSIBLE_DUPLICATE_PAYMENT' | 'UNMATCHED_INVOICE' | 'UNMATCHED_PAYMENT';
+export type AttentionActionType = 'OPEN_PRICE_HISTORY' | 'OPEN_DASHBOARD_COST' | 'OPEN_VENDOR' | 'OPEN_EXPENSE_CATEGORY' | 'OPEN_INVOICE' | 'OPEN_BANK_TRANSACTION';
 
 export interface SeverityInput {
   estimatedMonthlyImpact?: number | null;
@@ -82,7 +83,11 @@ export interface AttentionItem {
   percentagePointChange: number | null;
   estimatedMonthlyImpact: number | null;
   message: string;
-  sourceType: 'PRICE_INTELLIGENCE' | 'DASHBOARD' | 'VENDOR_SPEND' | 'EXPENSE_CATEGORY';
+  whyItMatters?: string;
+  nextStep?: string;
+  evidence?: Array<{ label: string; value: string; recordId?: string }>;
+  status?: InsightStatus;
+  sourceType: 'PRICE_INTELLIGENCE' | 'DASHBOARD' | 'VENDOR_SPEND' | 'EXPENSE_CATEGORY' | 'BANK_TRANSACTION' | 'INVOICE';
   sourceId: string;
   occurredAt: string;
   action: { type: AttentionActionType; targetId: string };
@@ -126,7 +131,14 @@ export class NeedsAttentionService {
 
   private item(data: Omit<AttentionItem, 'severity' | 'score'>, input: SeverityInput, thresholds: SeverityThresholds): AttentionItem {
     const score = severityScore(input);
-    return { ...data, score, severity: severityFor(score, thresholds) };
+    return {
+      ...data,
+      whyItMatters: data.whyItMatters ?? 'This change may affect restaurant costs.',
+      nextStep: data.nextStep ?? 'Review the supporting records and confirm whether action is needed.',
+      evidence: data.evidence ?? [],
+      score,
+      severity: severityFor(score, thresholds),
+    };
   }
 
   async get(userId: string, query: NeedsAttentionQuery) {
@@ -138,7 +150,7 @@ export class NeedsAttentionService {
     const dashboardQuery = { restaurantLocationId: location.id, startDate: period.start.toISOString(), endDate: period.end.toISOString() };
     const previousDashboardQuery = { restaurantLocationId: location.id, startDate: period.previousStart.toISOString(), endDate: period.previousEnd.toISOString() };
     const base = { organizationId: location.organizationId, restaurantLocationId: location.id };
-    const [currentDashboard, previousDashboard, priceData, currentVendors, previousVendors, currentCategories, previousCategories] = await Promise.all([
+    const [currentDashboard, previousDashboard, priceData, currentVendors, previousVendors, currentCategories, previousCategories, bankTransactions, reviewedInvoices] = await Promise.all([
       this.dashboard.get(userId, dashboardQuery),
       this.dashboard.get(userId, previousDashboardQuery),
       this.prices.changes(userId, { restaurantLocationId: location.id, lookbackDays: 90, sort: PriceChangeSort.LARGEST_MONTHLY_IMPACT, direction: PriceChangeDirection.INCREASE }),
@@ -146,6 +158,33 @@ export class NeedsAttentionService {
       this.prisma.expense.groupBy({ by: ['vendorId'], where: { ...base, vendorId: { not: null }, date: { gte: period.previousStart, lte: period.previousEnd } }, _sum: { amount: true } }),
       this.prisma.expense.groupBy({ by: ['expenseCategoryId'], where: { ...base, date: { gte: period.start, lte: period.end } }, _sum: { amount: true }, _max: { date: true } }),
       this.prisma.expense.groupBy({ by: ['expenseCategoryId'], where: { ...base, date: { gte: period.previousStart, lte: period.previousEnd } }, _sum: { amount: true } }),
+      this.prisma.bankTransaction.findMany({
+        where: {
+          ...base,
+          postedDate: { gte: period.start, lte: period.end },
+          amount: { gt: new Prisma.Decimal(0) },
+          pending: false,
+          removedAt: null,
+          reconciliationStatus: { not: BankReconciliationStatus.IGNORED },
+        },
+        select: {
+          id: true, amount: true, postedDate: true, description: true,
+          merchantNameNormalized: true, vendorId: true, invoiceId: true,
+          suggestedInvoiceId: true, reconciliationStatus: true,
+          vendor: { select: { name: true } },
+        },
+        orderBy: [{ postedDate: 'desc' }, { id: 'asc' }],
+      }),
+      this.prisma.invoice.findMany({
+        where: {
+          ...base,
+          reviewStatus: ReviewStatus.REVIEWED,
+          invoiceDate: { gte: period.start, lte: period.end },
+          bankTransactions: { none: { reconciliationStatus: BankReconciliationStatus.MATCHED_INVOICE } },
+        },
+        select: { id: true, invoiceNumber: true, invoiceDate: true, total: true, vendor: { select: { name: true } }, extractedVendorName: true },
+        orderBy: [{ invoiceDate: 'desc' }, { id: 'asc' }],
+      }),
     ]);
     const vendorIds = [...new Set((currentVendors as any[]).map((row) => row.vendorId).filter(Boolean))] as string[];
     const categoryIds = [...new Set((currentCategories as any[]).map((row) => row.expenseCategoryId))] as string[];
@@ -173,6 +212,13 @@ export class NeedsAttentionService {
         message: repeated
           ? `${price.displayName} increased on ${price.consecutiveIncreases} consecutive purchases.`
           : `${price.displayName} increased ${price.percentageChange.toFixed(1)}% since the previous purchase.`,
+        whyItMatters: `The reviewed unit price changed from $${price.previousUnitPrice.toFixed(2)} to $${price.currentUnitPrice.toFixed(2)} for the same vendor and package basis.`,
+        nextStep: 'Review the latest invoice or ask the supplier whether pricing changed.',
+        evidence: [
+          { label: 'Previous price', value: `$${price.previousUnitPrice.toFixed(2)}`, recordId: price.previousInvoiceId },
+          { label: 'Current price', value: `$${price.currentUnitPrice.toFixed(2)}`, recordId: price.currentInvoiceId },
+          { label: 'Vendor', value: price.vendorName },
+        ],
         sourceType: 'PRICE_INTELLIGENCE',
         sourceId: price.itemKey,
         occurredAt: price.latestSeenAt,
@@ -250,21 +296,147 @@ export class NeedsAttentionService {
       }, { estimatedMonthlyImpact: monthlyImpact, percentageChange: percentage, occurredAt: new Date(occurredAt), now: period.end }, config.severity));
     }
 
-    items.sort((a, b) => severityRank[b.severity] - severityRank[a.severity]
+    const duplicateIds = new Set<string>();
+    for (let leftIndex = 0; leftIndex < bankTransactions.length; leftIndex += 1) {
+      const left = bankTransactions[leftIndex];
+      for (let rightIndex = leftIndex + 1; rightIndex < bankTransactions.length; rightIndex += 1) {
+        const right = bankTransactions[rightIndex];
+        const sameMerchant = left.vendorId && right.vendorId
+          ? left.vendorId === right.vendorId
+          : Boolean(left.merchantNameNormalized && right.merchantNameNormalized && left.merchantNameNormalized === right.merchantNameNormalized);
+        const dayDistance = Math.abs(left.postedDate.getTime() - right.postedDate.getTime()) / 86400000;
+        if (!sameMerchant || !left.amount.equals(right.amount) || dayDistance > 2) continue;
+        if (left.invoiceId && left.invoiceId === right.invoiceId) continue;
+        const pair = [left.id, right.id].sort();
+        const signalId = `duplicate:${pair.join(':')}`;
+        if (duplicateIds.has(signalId)) continue;
+        duplicateIds.add(signalId);
+        const merchant = left.vendor?.name ?? left.merchantNameNormalized ?? left.description;
+        items.push(this.item({
+          id: signalId,
+          type: 'POSSIBLE_DUPLICATE_PAYMENT',
+          title: `Possible duplicate payment to ${merchant}`,
+          subtitle: 'Two nearby bank transactions need review',
+          currentValue: money(left.amount), previousValue: money(right.amount),
+          percentageChange: null, percentagePointChange: null,
+          estimatedMonthlyImpact: null,
+          message: `Two $${left.amount.toFixed(2)} payments to ${merchant} posted within ${Math.round(dayDistance)} day${Math.round(dayDistance) === 1 ? '' : 's'}.`,
+          whyItMatters: 'This could be a duplicate charge, but multiple legitimate purchases can share the same amount.',
+          nextStep: 'Compare the transaction references and supporting invoices before taking action.',
+          evidence: [
+            { label: 'First payment', value: left.postedDate.toISOString().slice(0, 10), recordId: left.id },
+            { label: 'Second payment', value: right.postedDate.toISOString().slice(0, 10), recordId: right.id },
+          ],
+          sourceType: 'BANK_TRANSACTION', sourceId: left.id,
+          occurredAt: left.postedDate > right.postedDate ? left.postedDate.toISOString() : right.postedDate.toISOString(),
+          action: { type: 'OPEN_BANK_TRANSACTION', targetId: left.id },
+        }, { estimatedMonthlyImpact: money(left.amount), occurredAt: left.postedDate, now: period.end }, config.severity));
+      }
+    }
+
+    for (const invoice of reviewedInvoices) {
+      const vendor = invoice.vendor?.name ?? invoice.extractedVendorName ?? 'Vendor';
+      const candidate = bankTransactions.find((transaction) => transaction.suggestedInvoiceId === invoice.id);
+      items.push(this.item({
+        id: `unmatched-invoice:${invoice.id}`,
+        type: 'UNMATCHED_INVOICE', title: 'Invoice has no linked bank payment',
+        subtitle: `${vendor}${invoice.invoiceNumber ? ` · ${invoice.invoiceNumber}` : ''}`,
+        currentValue: money(invoice.total), previousValue: 0,
+        percentageChange: null, percentagePointChange: null, estimatedMonthlyImpact: null,
+        message: candidate ? 'A possible bank match exists, but it has not been confirmed.' : 'No confirmed bank payment is linked to this reviewed invoice.',
+        whyItMatters: 'Linking supporting records helps prevent duplicate expense recognition and simplifies reconciliation.',
+        nextStep: candidate ? 'Review the suggested bank transaction and confirm it only if the records match.' : 'Check whether payment occurred outside this period or through another account.',
+        evidence: [
+          { label: 'Invoice total', value: invoice.total == null ? 'Not recorded' : `$${invoice.total.toFixed(2)}`, recordId: invoice.id },
+          ...(candidate ? [{ label: 'Potential match', value: candidate.description, recordId: candidate.id }] : []),
+        ],
+        sourceType: 'INVOICE', sourceId: invoice.id,
+        occurredAt: (invoice.invoiceDate ?? period.end).toISOString(),
+        action: { type: 'OPEN_INVOICE', targetId: invoice.id },
+      }, { occurredAt: invoice.invoiceDate ?? period.end, now: period.end }, config.severity));
+    }
+
+    const matchedDuplicateTransactionIds = new Set([...duplicateIds].flatMap((id) => id.split(':').slice(1)));
+    for (const transaction of bankTransactions) {
+      if (transaction.invoiceId || matchedDuplicateTransactionIds.has(transaction.id)) continue;
+      if (transaction.reconciliationStatus !== BankReconciliationStatus.UNMATCHED
+        && transaction.reconciliationStatus !== BankReconciliationStatus.NEEDS_REVIEW) continue;
+      const merchant = transaction.vendor?.name ?? transaction.merchantNameNormalized ?? transaction.description;
+      items.push(this.item({
+        id: `unmatched-payment:${transaction.id}`,
+        type: 'UNMATCHED_PAYMENT', title: 'Payment has no linked invoice', subtitle: merchant,
+        currentValue: money(transaction.amount), previousValue: 0,
+        percentageChange: null, percentagePointChange: null, estimatedMonthlyImpact: null,
+        message: transaction.suggestedInvoiceId ? 'A possible invoice match exists, but it has not been confirmed.' : 'This bank payment is not linked to an invoice.',
+        whyItMatters: 'Supporting invoices make spending easier to verify and categorize.',
+        nextStep: transaction.suggestedInvoiceId ? 'Review the suggested invoice and confirm it only if the records match.' : 'Check whether an invoice or receipt is available for this payment.',
+        evidence: [{ label: 'Payment', value: `$${transaction.amount.toFixed(2)} on ${transaction.postedDate.toISOString().slice(0, 10)}`, recordId: transaction.id }],
+        sourceType: 'BANK_TRANSACTION', sourceId: transaction.id, occurredAt: transaction.postedDate.toISOString(),
+        action: { type: 'OPEN_BANK_TRANSACTION', targetId: transaction.id },
+      }, { occurredAt: transaction.postedDate, now: period.end }, config.severity));
+    }
+
+    const persistedItems = await Promise.all(items.map(async (item) => {
+      const fingerprint = createHash('sha256')
+        .update(`${location.id}|${item.type}|${item.sourceId}|${item.occurredAt}|${item.currentValue}`)
+        .digest('hex');
+      const persisted = await this.prisma.insight.upsert({
+        where: { fingerprint },
+        create: {
+          organizationId: location.organizationId,
+          restaurantLocationId: location.id,
+          fingerprint,
+          type: item.type,
+          severity: item.severity,
+          title: item.title,
+          description: item.message,
+          metadata: JSON.parse(JSON.stringify(item)),
+          generatedAt: new Date(item.occurredAt),
+        },
+        update: {
+          severity: item.severity,
+          title: item.title,
+          description: item.message,
+          metadata: JSON.parse(JSON.stringify(item)),
+        },
+      });
+      return { item, persisted };
+    }));
+    const visibleItems: AttentionItem[] = persistedItems
+      .filter(({ persisted }) => persisted.status !== InsightStatus.DISMISSED && persisted.status !== InsightStatus.RESOLVED)
+      .map(({ item, persisted }) => ({ ...item, id: persisted.id, status: persisted.status }));
+
+    visibleItems.sort((a, b) => severityRank[b.severity] - severityRank[a.severity]
       || Math.abs(b.estimatedMonthlyImpact ?? 0) - Math.abs(a.estimatedMonthlyImpact ?? 0)
       || new Date(b.occurredAt).getTime() - new Date(a.occurredAt).getTime()
       || a.id.localeCompare(b.id));
     const summary = { critical: 0, high: 0, medium: 0, low: 0, estimatedMonthlyImpact: 0 };
-    for (const item of items) summary[item.severity.toLowerCase() as 'critical' | 'high' | 'medium' | 'low'] += 1;
+    for (const item of visibleItems) summary[item.severity.toLowerCase() as 'critical' | 'high' | 'medium' | 'low'] += 1;
     // Only item-level price impact is summed to avoid double-counting overlapping
     // vendor and category increases in the headline total.
-    summary.estimatedMonthlyImpact = rounded(items
+    summary.estimatedMonthlyImpact = rounded(visibleItems
       .filter((item) => item.sourceType === 'PRICE_INTELLIGENCE')
       .reduce((sum, item) => sum + Math.max(item.estimatedMonthlyImpact ?? 0, 0), 0));
     return {
       period: { startDate: period.start.toISOString(), endDate: period.end.toISOString(), previousStartDate: period.previousStart.toISOString(), previousEndDate: period.previousEnd.toISOString() },
       summary,
-      items,
+      items: visibleItems,
     };
+  }
+
+  async updateStatus(userId: string, id: string, status: InsightStatus) {
+    const insight = await this.prisma.insight.findUnique({ where: { id } });
+    if (!insight) throw new BadRequestException('Finding not found');
+    await this.access.requireMember(userId, insight.organizationId);
+    const now = new Date();
+    return this.prisma.insight.update({
+      where: { id },
+      data: {
+        status,
+        reviewedAt: status === InsightStatus.REVIEWED ? now : insight.reviewedAt,
+        resolvedAt: status === InsightStatus.RESOLVED ? now : null,
+        dismissedAt: status === InsightStatus.DISMISSED ? now : null,
+      },
+    });
   }
 }
