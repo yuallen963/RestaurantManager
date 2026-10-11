@@ -18,6 +18,7 @@ const ProductAttributesSchema = z.object({
   size: nullableText,
   packConfiguration: nullableText,
 });
+const productAttributeKeys = ['brand', 'condition', 'bone', 'skin', 'organic', 'grade', 'cut', 'size', 'packConfiguration'] as const;
 export const ExtractedInvoiceSchema = z.object({
   vendorName: nullableText,
   vendorAddress: nullableText,
@@ -113,7 +114,16 @@ export class InvoiceExtractionProvider {
       const response = await ai.models.generateContent({ model, contents: [{ role: 'user', parts: [{ inlineData: { mimeType, data: file.toString('base64') } }, { text: prompt }] }], config: { responseMimeType: 'application/json', responseSchema } });
       const text = response.text?.trim();
       if (!text) throw new Error('Extraction provider returned no structured result');
-      const data = ExtractedInvoiceSchema.parse(JSON.parse(text));
+      const parsed = JSON.parse(text) as { lineItems?: Array<{ productAttributes?: Record<string, unknown> | null }> } & Record<string, unknown>;
+      const data = ExtractedInvoiceSchema.parse({
+        ...parsed,
+        lineItems: (parsed.lineItems ?? []).map((line) => ({
+          ...line,
+          productAttributes: line.productAttributes === null || line.productAttributes === undefined
+            ? null
+            : Object.fromEntries(productAttributeKeys.map((key) => [key, line.productAttributes?.[key] ?? null])),
+        })),
+      });
       const usage = response.usageMetadata;
       return { data, provider: 'gemini', model, usage: usage ? { input_tokens: usage.promptTokenCount, output_tokens: usage.candidatesTokenCount, total_tokens: usage.totalTokenCount } : null };
     } catch (error) {

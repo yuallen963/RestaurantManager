@@ -42,6 +42,16 @@ describe('invoice extraction', () => {
     mockGenerateContent.mockReset();
   });
 
+  it('normalizes omitted optional Gemini product attributes to null', async () => {
+    const config = { get: jest.fn((key: string) => ({ INVOICE_AI_PROVIDER: 'gemini', GEMINI_API_KEY: 'secret' } as Record<string, string>)[key]) } as any;
+    const provider = new InvoiceExtractionProvider(config);
+    const partial = { ...extraction, lineItems: [{ ...extraction.lineItems[0], productAttributes: { brand: 'Atlas' } }] };
+    mockGenerateContent.mockResolvedValue({ text: JSON.stringify(partial), usageMetadata: null });
+    const result = await provider.extract(Buffer.from('image'), 'image/jpeg', 'invoice.jpeg');
+    expect(result.data.lineItems[0].productAttributes).toEqual(expect.objectContaining({ brand: 'Atlas', grade: null, packConfiguration: null }));
+    mockGenerateContent.mockReset();
+  });
+
   it('rejects malformed provider responses before persistence', () => {
     expect(() => ExtractedInvoiceSchema.parse({ vendorName: 'Sysco', lineItems: 'not-an-array' })).toThrow();
   });
