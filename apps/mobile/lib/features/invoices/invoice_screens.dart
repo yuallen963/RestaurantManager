@@ -248,6 +248,104 @@ class InvoiceUploadScreen extends ConsumerWidget {
   }
 }
 
+String _reconciliationMessage(String code) => switch (code) {
+  'TOTAL_MISMATCH' => 'Invoice total may be incorrect.',
+  'SUBTOTAL_MISMATCH' =>
+    'Invoice subtotal does not match the sum of the line items.',
+  'LINE_EXTENSION_MISMATCH' => 'One or more line-item totals may be incorrect.',
+  'LINE_MATH_MISMATCH' =>
+    'One or more item quantities and prices do not match the extended total.',
+  _ => 'Some extracted values need review.',
+};
+
+String _uncertainFieldLabel(String field) => switch (field) {
+  'TOTAL_MISMATCH' ||
+  'SUBTOTAL_MISMATCH' ||
+  'LINE_EXTENSION_MISMATCH' ||
+  'LINE_MATH_MISMATCH' => _reconciliationMessage(field),
+  'vendorName' => 'Vendor needs review',
+  'invoiceNumber' => 'Invoice number needs review',
+  'invoiceDate' => 'Invoice date needs review',
+  'dueDate' => 'Due date needs review',
+  'total' => 'Total needs review',
+  'subtotal' => 'Subtotal needs review',
+  _ => 'Extracted value needs review',
+};
+
+String _reconciliationAmount(String? value) {
+  final parsed = double.tryParse(value ?? '');
+  if (parsed == null) return value ?? 'Not available';
+  final fixed = parsed.toStringAsFixed(2);
+  final parts = fixed.split('.');
+  final whole = parts.first.replaceAllMapped(
+    RegExp(r'\B(?=(\d{3})+(?!\d))'),
+    (_) => ',',
+  );
+  return '${parsed < 0 ? '-' : ''}\$$whole.${parts.last}';
+}
+
+class _ReconciliationWarning extends StatelessWidget {
+  const _ReconciliationWarning({required this.reconciliation});
+  final InvoiceReconciliation? reconciliation;
+
+  @override
+  Widget build(BuildContext context) {
+    if (reconciliation == null || !reconciliation!.hasDiscrepancy) {
+      return const SizedBox.shrink();
+    }
+    final detailsByCode = <String, InvoiceReconciliationDetail>{
+      for (final detail in reconciliation!.details) detail.code: detail,
+    };
+    final codes = <String>{
+      ...reconciliation!.reasons,
+      ...reconciliation!.details.map((detail) => detail.code),
+    };
+    return Card(
+      color: Theme.of(context).colorScheme.errorContainer,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  Icons.warning_amber_rounded,
+                  color: Theme.of(context).colorScheme.onErrorContainer,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Check invoice totals',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              "Some extracted values do not match FundWell's calculations. Review these fields before using this invoice for cost analysis.",
+            ),
+            for (final code in codes) ...[
+              const SizedBox(height: 8),
+              Text(_reconciliationMessage(code)),
+              if (detailsByCode[code]?.expected != null &&
+                  detailsByCode[code]?.actual != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 2),
+                  child: Text(
+                    '${code == 'SUBTOTAL_MISMATCH' ? 'Extracted subtotal' : 'Extracted total'}: ${_reconciliationAmount(detailsByCode[code]!.expected)}\n'
+                    '${code == 'SUBTOTAL_MISMATCH' ? 'Calculated line-item subtotal' : 'Calculated total'}: ${_reconciliationAmount(detailsByCode[code]!.actual)}',
+                  ),
+                ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class InvoiceDetailScreen extends ConsumerWidget {
   const InvoiceDetailScreen({required this.invoiceId, super.key});
   final String invoiceId;
@@ -309,6 +407,7 @@ class InvoiceDetailScreen extends ConsumerWidget {
             return ListView(
               padding: const EdgeInsets.all(20),
               children: [
+                _ReconciliationWarning(reconciliation: invoice.reconciliation),
                 for (final row in rows)
                   ListTile(title: Text(row.key), subtitle: Text(row.value)),
                 if (invoice.extractionStatus == 'PROCESSING') ...[
@@ -454,6 +553,7 @@ class InvoiceReviewScreen extends ConsumerWidget {
             return ListView(
               padding: const EdgeInsets.all(16),
               children: [
+                _ReconciliationWarning(reconciliation: data.reconciliation),
                 Card(
                   color: issueCount > 0
                       ? Theme.of(context).colorScheme.errorContainer
@@ -643,7 +743,7 @@ class InvoiceReviewScreen extends ConsumerWidget {
                                     ? 'Medium'
                                     : 'High'}',
                                 if (item.uncertainFields.isNotEmpty)
-                                  'Check: ${item.uncertainFields.join(', ')}',
+                                  'Check: ${item.uncertainFields.map(_uncertainFieldLabel).join(', ')}',
                                 if (item.productAttributes.values.any(
                                   (value) => value != null,
                                 ))

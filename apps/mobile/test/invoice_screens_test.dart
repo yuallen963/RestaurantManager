@@ -383,6 +383,71 @@ void main() {
     expect(repository.reviewed, isTrue);
   });
 
+  testWidgets('review surfaces persisted reconciliation discrepancies', (
+    tester,
+  ) async {
+    final reconciled = InvoiceRecord(
+      id: extractedInvoice.id,
+      restaurantLocationId: extractedInvoice.restaurantLocationId,
+      fileName: extractedInvoice.fileName,
+      fileType: extractedInvoice.fileType,
+      fileSize: extractedInvoice.fileSize,
+      status: extractedInvoice.status,
+      createdAt: extractedInvoice.createdAt,
+      vendorName: extractedInvoice.vendorName,
+      invoiceNumber: extractedInvoice.invoiceNumber,
+      invoiceDate: extractedInvoice.invoiceDate,
+      subtotal: 1411,
+      total: 1411,
+      extractionStatus: 'COMPLETED',
+      reviewStatus: 'NEEDS_REVIEW',
+      reconciliation: const InvoiceReconciliation(
+        reasons: ['TOTAL_MISMATCH'],
+        details: [
+          InvoiceReconciliationDetail(
+            code: 'TOTAL_MISMATCH',
+            expected: '1411.00',
+            actual: '1411.90',
+          ),
+        ],
+      ),
+    );
+    await tester.pumpWidget(
+      app([
+        invoiceDetailProvider(
+          'invoice-a',
+        ).overrideWith((_) async => reconciled),
+        invoiceLineItemsProvider('invoice-a').overrideWith((_) async => []),
+      ], const InvoiceReviewScreen(invoiceId: 'invoice-a')),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Check invoice totals'), findsOneWidget);
+    expect(find.text('Invoice total may be incorrect.'), findsOneWidget);
+    expect(find.textContaining('Extracted total:'), findsOneWidget);
+    expect(find.textContaining('Calculated total:'), findsOneWidget);
+    expect(find.textContaining('1,411.00'), findsOneWidget);
+    expect(find.textContaining('1,411.90'), findsOneWidget);
+    expect(
+      find.textContaining('Some extracted values do not match FundWell'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('clean invoice does not show reconciliation warning', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      app([
+        invoiceDetailProvider(
+          'invoice-a',
+        ).overrideWith((_) async => extractedInvoice),
+        invoiceLineItemsProvider('invoice-a').overrideWith((_) async => []),
+      ], const InvoiceReviewScreen(invoiceId: 'invoice-a')),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Check invoice totals'), findsNothing);
+  });
+
   testWidgets('reviewed invoice remains read-only after reopening', (
     tester,
   ) async {

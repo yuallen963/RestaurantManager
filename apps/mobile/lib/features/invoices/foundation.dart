@@ -12,6 +12,53 @@ double? _money(dynamic value) {
   return double.tryParse(value.toString());
 }
 
+class InvoiceReconciliationDetail {
+  const InvoiceReconciliationDetail({
+    required this.code,
+    this.expected,
+    this.actual,
+  });
+
+  final String code;
+  final String? expected;
+  final String? actual;
+
+  factory InvoiceReconciliationDetail.fromJson(Map<String, dynamic> json) =>
+      InvoiceReconciliationDetail(
+        code: json['code']?.toString() ?? '',
+        expected: json['expected']?.toString(),
+        actual: json['actual']?.toString(),
+      );
+}
+
+class InvoiceReconciliation {
+  const InvoiceReconciliation({
+    this.reasons = const [],
+    this.details = const [],
+  });
+
+  final List<String> reasons;
+  final List<InvoiceReconciliationDetail> details;
+
+  bool get hasDiscrepancy => reasons.isNotEmpty || details.isNotEmpty;
+
+  factory InvoiceReconciliation.fromJson(Map<String, dynamic> json) {
+    final reasons = (json['reasons'] as List? ?? const [])
+        .map((value) => value.toString())
+        .where((value) => value.isNotEmpty)
+        .toList();
+    final details = (json['details'] as List? ?? const [])
+        .whereType<Map>()
+        .map(
+          (value) => InvoiceReconciliationDetail.fromJson(
+            Map<String, dynamic>.from(value),
+          ),
+        )
+        .toList();
+    return InvoiceReconciliation(reasons: reasons, details: details);
+  }
+}
+
 class InvoiceRecord {
   const InvoiceRecord({
     required this.id,
@@ -39,6 +86,7 @@ class InvoiceRecord {
     this.reviewStatus = 'NOT_REVIEWED',
     this.ingestionSource = 'MANUAL_UPLOAD',
     this.uncertainFields = const [],
+    this.reconciliation,
   });
   final String id, restaurantLocationId, fileName, fileType, status;
   final int fileSize;
@@ -56,38 +104,51 @@ class InvoiceRecord {
   final double? extractionConfidence;
   final String? extractionError;
   final List<String> uncertainFields;
-  factory InvoiceRecord.fromJson(Map<String, dynamic> json) => InvoiceRecord(
-    id: json['id'] as String,
-    restaurantLocationId: json['restaurantLocationId'] as String,
-    fileName: (json['originalFileName'] ?? json['fileName']) as String,
-    fileType: json['fileType'] as String,
-    fileSize: json['fileSize'] as int,
-    status: json['status'] as String,
-    createdAt: DateTime.parse(json['createdAt'] as String),
-    vendorId: json['vendorId'] as String?,
-    vendorName: json['vendorName'] as String?,
-    vendorAddress: json['extractedVendorAddress'] as String?,
-    invoiceNumber: json['invoiceNumber'] as String?,
-    invoiceDate: json['invoiceDate'] == null
-        ? null
-        : DateTime.parse(json['invoiceDate'] as String),
-    dueDate: json['dueDate'] == null
-        ? null
-        : DateTime.parse(json['dueDate'] as String),
-    subtotal: _money(json['subtotal']),
-    tax: _money(json['tax']),
-    otherFees: _money(json['otherFees']),
-    total: _money(json['total']),
-    currency: json['currency'] as String?,
-    notes: json['notes'] as String?,
-    extractionStatus: json['extractionStatus'] as String? ?? 'NOT_STARTED',
-    extractionConfidence: _money(json['extractionConfidence']),
-    extractionError: json['extractionError'] as String?,
-    reviewStatus: json['reviewStatus'] as String? ?? 'NOT_REVIEWED',
-    ingestionSource: json['ingestionSource'] as String? ?? 'MANUAL_UPLOAD',
-    uncertainFields: (json['uncertainFields'] as List? ?? const [])
-        .cast<String>(),
-  );
+  final InvoiceReconciliation? reconciliation;
+  factory InvoiceRecord.fromJson(Map<String, dynamic> json) {
+    final rawExtraction = json['rawExtractionJson'];
+    final rawMap = rawExtraction is Map
+        ? Map<String, dynamic>.from(rawExtraction)
+        : null;
+    final reconciliationJson = rawMap?['reconciliation'];
+    return InvoiceRecord(
+      id: json['id'] as String,
+      restaurantLocationId: json['restaurantLocationId'] as String,
+      fileName: (json['originalFileName'] ?? json['fileName']) as String,
+      fileType: json['fileType'] as String,
+      fileSize: json['fileSize'] as int,
+      status: json['status'] as String,
+      createdAt: DateTime.parse(json['createdAt'] as String),
+      vendorId: json['vendorId'] as String?,
+      vendorName: json['vendorName'] as String?,
+      vendorAddress: json['extractedVendorAddress'] as String?,
+      invoiceNumber: json['invoiceNumber'] as String?,
+      invoiceDate: json['invoiceDate'] == null
+          ? null
+          : DateTime.parse(json['invoiceDate'] as String),
+      dueDate: json['dueDate'] == null
+          ? null
+          : DateTime.parse(json['dueDate'] as String),
+      subtotal: _money(json['subtotal']),
+      tax: _money(json['tax']),
+      otherFees: _money(json['otherFees']),
+      total: _money(json['total']),
+      currency: json['currency'] as String?,
+      notes: json['notes'] as String?,
+      extractionStatus: json['extractionStatus'] as String? ?? 'NOT_STARTED',
+      extractionConfidence: _money(json['extractionConfidence']),
+      extractionError: json['extractionError'] as String?,
+      reviewStatus: json['reviewStatus'] as String? ?? 'NOT_REVIEWED',
+      ingestionSource: json['ingestionSource'] as String? ?? 'MANUAL_UPLOAD',
+      uncertainFields: (json['uncertainFields'] as List? ?? const [])
+          .cast<String>(),
+      reconciliation: reconciliationJson is Map
+          ? InvoiceReconciliation.fromJson(
+              Map<String, dynamic>.from(reconciliationJson),
+            )
+          : null,
+    );
+  }
 }
 
 class InvoiceLineItem {
