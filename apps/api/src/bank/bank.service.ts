@@ -1,5 +1,5 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
-import { BankCategorizationSource, BankConnectionStatus, BankProvider, BankReconciliationStatus, ExpenseSource, InvoiceMatchConfidence, MerchantRuleMatchType, Prisma, ReviewStatus } from '@prisma/client';
+import { BankCategorizationSource, BankConnectionStatus, BankProvider, BankReconciliationStatus, ExpenseSource, InvoiceMatchConfidence, MerchantRuleMatchType, OrganizationRole, Prisma, ReviewStatus } from '@prisma/client';
 import { AuditService } from '../audit.service';
 import { OrganizationAccessService } from '../organizations/organization-access.service';
 import { PrismaService } from '../prisma.service';
@@ -74,6 +74,7 @@ export class BankService {
 
   async assignAccount(userId: string, id: string, data: AssignBankAccountDto) {
     const account = await this.account(userId, id);
+    await this.access.requireMember(userId, account.organizationId, [OrganizationRole.OWNER, OrganizationRole.ADMIN]);
     if (data.restaurantLocationId) await this.validateLocation(account.organizationId, data.restaurantLocationId);
     const saved = await this.prisma.bankAccount.update({ where: { id }, data: { restaurantLocationId: data.restaurantLocationId, active: data.active } });
     if (data.restaurantLocationId !== undefined) await this.prisma.bankTransaction.updateMany({ where: { bankAccountId: id, reconciliationStatus: { in: [BankReconciliationStatus.UNMATCHED, BankReconciliationStatus.NEEDS_REVIEW] } }, data: { restaurantLocationId: data.restaurantLocationId ?? null, reconciliationStatus: BankReconciliationStatus.NEEDS_REVIEW } });

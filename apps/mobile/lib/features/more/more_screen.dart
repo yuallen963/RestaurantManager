@@ -9,6 +9,7 @@ import '../pos/pos_integrations_screen.dart';
 import '../notifications/notification_screen.dart';
 import 'foundation.dart';
 import 'account_security_screen.dart';
+import 'location_management_screen.dart';
 
 class MoreScreen extends ConsumerStatefulWidget {
   const MoreScreen({super.key});
@@ -191,6 +192,24 @@ class _MoreScreenState extends ConsumerState<MoreScreen> {
                         ? const Icon(Icons.chevron_right)
                         : null,
                     onTap: state.locations.length > 1 ? _selectLocation : null,
+                  ),
+                ),
+                const Divider(height: 1),
+                _InfoTile(
+                  icon: Icons.store_mall_directory_outlined,
+                  label: 'Manage Locations',
+                  value: value.role == 'OWNER' || value.role == 'ADMIN'
+                      ? 'Add, edit, and switch restaurants'
+                      : 'View and switch restaurants',
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => LocationManagementScreen(
+                        canManage:
+                            value.role == 'OWNER' || value.role == 'ADMIN',
+                      ),
+                    ),
                   ),
                 ),
               ],

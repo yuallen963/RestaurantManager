@@ -104,6 +104,16 @@ describe('bank transaction foundation', () => {
     await expect(service.sync('other-user', 'connection-a')).rejects.toBeInstanceOf(ForbiddenException);
   });
 
+  it('requires OWNER or ADMIN to reassign a bank account location', async () => {
+    const { service, prisma, access } = setup();
+    prisma.bankAccount.findUnique.mockResolvedValue({ id: 'account-a', organizationId: 'org-a' });
+    access.requireMember
+      .mockResolvedValueOnce({ role: 'MANAGER' })
+      .mockRejectedValueOnce(new ForbiddenException());
+    await expect(service.assignAccount('manager', 'account-a', { restaurantLocationId: 'location-a' })).rejects.toBeInstanceOf(ForbiddenException);
+    expect(prisma.bankAccount.update).not.toHaveBeenCalled();
+  });
+
   it('prevents concurrent sync but permits an idempotent retry afterward', async () => {
     const { service, prisma } = setup();
     prisma.bankConnection.updateMany.mockResolvedValueOnce({ count: 0 });

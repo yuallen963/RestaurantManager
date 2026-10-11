@@ -51,13 +51,25 @@ class RestaurantLocation {
     required this.id,
     required this.name,
     required this.organizationId,
+    this.addressLine1,
+    this.city,
+    this.state,
+    this.postalCode,
+    this.timezone = 'America/Detroit',
   });
   final String id, name, organizationId;
+  final String? addressLine1, city, state, postalCode;
+  final String timezone;
   factory RestaurantLocation.fromJson(Map<String, dynamic> j) =>
       RestaurantLocation(
         id: j['id'] as String,
         name: j['name'] as String,
         organizationId: j['organizationId'] as String,
+        addressLine1: j['addressLine1'] as String?,
+        city: j['city'] as String?,
+        state: j['state'] as String?,
+        postalCode: j['postalCode'] as String?,
+        timezone: j['timezone'] as String? ?? 'America/Detroit',
       );
 }
 
@@ -283,6 +295,32 @@ class LocationsRepository {
             (e) => RestaurantLocation.fromJson(Map<String, dynamic>.from(e)),
           )
           .toList();
+
+  Future<RestaurantLocation> create(
+    String organizationId,
+    Map<String, dynamic> data,
+  ) async => RestaurantLocation.fromJson(
+    Map<String, dynamic>.from(
+      (await dio.post(
+            '/organizations/$organizationId/locations',
+            data: data,
+          )).data
+          as Map,
+    ),
+  );
+
+  Future<RestaurantLocation> update(
+    RestaurantLocation location,
+    Map<String, dynamic> data,
+  ) async => RestaurantLocation.fromJson(
+    Map<String, dynamic>.from(
+      (await dio.patch(
+            '/organizations/${location.organizationId}/locations/${location.id}',
+            data: data,
+          )).data
+          as Map,
+    ),
+  );
 }
 
 class DashboardRepository {
@@ -360,7 +398,9 @@ class ActiveLocationState {
 
 class ActiveLocationController extends AsyncNotifier<ActiveLocationState> {
   @override
-  Future<ActiveLocationState> build() async {
+  Future<ActiveLocationState> build() => _load();
+
+  Future<ActiveLocationState> _load({String? preferredLocationId}) async {
     final dio = ref.read(api);
     if (kDebugMode)
       debugPrint(
@@ -379,7 +419,9 @@ class ActiveLocationController extends AsyncNotifier<ActiveLocationState> {
         .read(locationStorageProvider)
         .read(key: _locationKey);
     final active =
-        locations.where((l) => l.id == saved).firstOrNull ??
+        locations
+            .where((l) => l.id == (preferredLocationId ?? saved))
+            .firstOrNull ??
         (locations.isEmpty ? null : locations.first);
     if (active != null)
       await ref
@@ -388,6 +430,13 @@ class ActiveLocationController extends AsyncNotifier<ActiveLocationState> {
     if (kDebugMode)
       debugPrint('[DEV] Active location: ${active?.name ?? 'none'}');
     return ActiveLocationState(locations, active);
+  }
+
+  Future<void> reload({String? preferredLocationId}) async {
+    state = const AsyncLoading();
+    state = await AsyncValue.guard(
+      () => _load(preferredLocationId: preferredLocationId),
+    );
   }
 
   Future<void> select(RestaurantLocation location) async {

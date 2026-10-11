@@ -101,11 +101,12 @@ void main() {
   testWidgets('location selector opens and updates the shared location state', (
     tester,
   ) async {
+    await tester.binding.setSurfaceSize(const Size(800, 1300));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
     final container = await pumpMore(tester);
 
     await tester.scrollUntilVisible(find.text('Downtown Grill'), 250);
-    await tester.drag(find.byType(ListView), const Offset(0, -80));
-    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('Downtown Grill'));
     await tester.tap(find.text('Downtown Grill'));
     await tester.pumpAndSettle();
     expect(find.text('Select restaurant'), findsOneWidget);
