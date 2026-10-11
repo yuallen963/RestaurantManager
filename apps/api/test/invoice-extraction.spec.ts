@@ -3,10 +3,40 @@ import { ExtractionStatus, ReviewStatus } from '@prisma/client';
 import { extractionConfidence, InvoiceExtractionProcessor, normalizeExtractedDate, parsePackageSize } from '../src/invoices/extraction.processor';
 import { ExtractedInvoiceSchema } from '../src/invoices/extraction.provider';
 import { InvoicesService } from '../src/invoices/invoices.service';
+import { InvoiceExtractionProvider } from '../src/invoices/extraction.provider';
+const mockGenerateContent = jest.fn();
+jest.mock('@google/genai', () => ({ GoogleGenAI: jest.fn().mockImplementation(() => ({ models: { generateContent: mockGenerateContent } })) }));
 
 const extraction = { vendorName: 'Sysco', vendorAddress: '123 Food Way', invoiceNumber: 'INV-1', invoiceDate: '2026-10-04', dueDate: '2026-11-04', subtotal: 100, tax: 6, otherFees: 0, total: 106, currency: 'USD', uncertainFields: [], lineItems: [{ lineNumber: 1, sourcePage: 1, rawDescription: 'CHKN BRST BNLS SKLS 4/10 LB', normalizedName: 'Chicken Breast', sku: '384920', quantity: 2, unit: 'CASE', packSize: '4 x 10 lb', unitPrice: 50, extendedPrice: 100, category: 'Food' as const, productAttributes: { brand: null, condition: 'Fresh', bone: 'Boneless', skin: 'Skinless', organic: null, grade: null, cut: 'Breast', size: null, packConfiguration: '4/10 LB' }, uncertainFields: [] }] };
 
 describe('invoice extraction', () => {
+  it('selects Gemini when configured and requires its key', () => {
+    const config = { get: jest.fn((key: string) => key === 'INVOICE_AI_PROVIDER' ? 'gemini' : undefined) } as any;
+    const provider = new InvoiceExtractionProvider(config);
+    expect(provider.isConfigured()).toBe(false);
+    config.get.mockImplementation((key: string) => key === 'INVOICE_AI_PROVIDER' ? 'gemini' : key === 'GEMINI_API_KEY' ? 'secret' : undefined);
+    expect(provider.isConfigured()).toBe(true);
+  });
+
+  it('maps Gemini structured JSON and usage without changing rawDescription', async () => {
+    const config = { get: jest.fn((key: string) => ({ INVOICE_AI_PROVIDER: 'gemini', GEMINI_API_KEY: 'secret', GEMINI_INVOICE_MODEL: 'gemini-2.5-flash-lite' } as Record<string, string>)[key]) } as any;
+    const provider = new InvoiceExtractionProvider(config);
+    const response = { text: JSON.stringify(extraction), usageMetadata: { promptTokenCount: 12, candidatesTokenCount: 34, totalTokenCount: 46 } };
+    mockGenerateContent.mockResolvedValue(response);
+    const result = await provider.extract(Buffer.from('pdf'), 'application/pdf', 'invoice.pdf');
+    expect(result).toEqual({ data: extraction, provider: 'gemini', model: 'gemini-2.5-flash-lite', usage: { input_tokens: 12, output_tokens: 34, total_tokens: 46 } });
+    expect(result.data.lineItems[0].rawDescription).toBe('CHKN BRST BNLS SKLS 4/10 LB');
+    mockGenerateContent.mockReset();
+  });
+
+  it('fails safely for malformed Gemini JSON', async () => {
+    const config = { get: jest.fn((key: string) => ({ INVOICE_AI_PROVIDER: 'gemini', GEMINI_API_KEY: 'secret' } as Record<string, string>)[key]) } as any;
+    const provider = new InvoiceExtractionProvider(config);
+    mockGenerateContent.mockResolvedValue({ text: '{bad json' });
+    await expect(provider.extract(Buffer.from('pdf'), 'application/pdf', 'invoice.pdf')).rejects.toThrow();
+    mockGenerateContent.mockReset();
+  });
+
   it('rejects malformed provider responses before persistence', () => {
     expect(() => ExtractedInvoiceSchema.parse({ vendorName: 'Sysco', lineItems: 'not-an-array' })).toThrow();
   });

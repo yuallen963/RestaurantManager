@@ -2,6 +2,7 @@ import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config';
 import OpenAI from 'openai';
 import { zodTextFormat } from 'openai/helpers/zod';
+import { GoogleGenAI } from '@google/genai';
 import { z } from 'zod';
 
 const nullableText = z.string().nullable();
@@ -52,8 +53,18 @@ export class InvoiceExtractionProvider {
   private readonly logger = new Logger(InvoiceExtractionProvider.name);
 
   constructor(private readonly config: ConfigService) {}
-  isConfigured() { return Boolean(this.config.get<string>('OPENAI_API_KEY')); }
+  private provider() {
+    const value = (this.config.get<string>('INVOICE_AI_PROVIDER') ?? 'openai').trim().toLowerCase();
+    if (value !== 'openai' && value !== 'gemini') throw new ServiceUnavailableException(`Unsupported invoice AI provider: ${value}`);
+    return value;
+  }
+  isConfigured() {
+    const provider = this.provider();
+    return Boolean(this.config.get<string>(provider === 'gemini' ? 'GEMINI_API_KEY' : 'OPENAI_API_KEY'));
+  }
   async extract(file: Buffer, mimeType: string, fileName: string) {
+    const provider = this.provider();
+    if (provider === 'gemini') return this.extractGemini(file, mimeType, fileName);
     const apiKey = this.config.get<string>('OPENAI_API_KEY');
     if (!apiKey) throw new ServiceUnavailableException('Invoice extraction is not configured');
     const model = this.config.get<string>('OPENAI_INVOICE_MODEL') ?? 'gpt-4.1-mini';
@@ -77,6 +88,35 @@ export class InvoiceExtractionProvider {
     } catch (error) {
       const providerError = error as { status?: number; code?: string; type?: string; request_id?: string };
       this.logger.warn(JSON.stringify({ event: 'invoice_extraction_provider_error', errorType: error instanceof Error ? error.name : 'UnknownError', status: providerError.status ?? null, code: providerError.code ?? null, type: providerError.type ?? null, requestId: providerError.request_id ?? null }));
+      throw error;
+    }
+  }
+
+  private async extractGemini(file: Buffer, mimeType: string, fileName: string) {
+    if (!['application/pdf', 'image/jpeg', 'image/png'].includes(mimeType)) throw new Error('Unsupported invoice file type');
+    const apiKey = this.config.get<string>('GEMINI_API_KEY');
+    if (!apiKey) throw new ServiceUnavailableException('Invoice extraction is not configured');
+    const model = this.config.get<string>('GEMINI_INVOICE_MODEL') ?? 'gemini-2.5-flash-lite';
+    const ai = new GoogleGenAI({ apiKey });
+    const prompt = `Extract this restaurant vendor invoice, including every page as one invoice. Preserve every line item rawDescription and packSize exactly as printed; never rewrite rawDescription. Combine line items across pages and do not duplicate headers, footers, subtotals, or totals. sourcePage is the one-based page number when clear. normalizedName and productAttributes are interpretations only. Normalize dates to YYYY-MM-DD. Use null when absent or unclear, and list ambiguous field names in uncertainFields. Do not invent package quantities or confidence scores. Return JSON matching the requested schema. Filename: ${fileName}. Today is ${new Date().toISOString().slice(0, 10)}.`;
+    const responseSchema = {
+      type: 'object', required: ['vendorName', 'vendorAddress', 'invoiceNumber', 'invoiceDate', 'dueDate', 'subtotal', 'tax', 'otherFees', 'total', 'currency', 'uncertainFields', 'lineItems'],
+      properties: {
+        vendorName: { type: ['string', 'null'] }, vendorAddress: { type: ['string', 'null'] }, invoiceNumber: { type: ['string', 'null'] }, invoiceDate: { type: ['string', 'null'] }, dueDate: { type: ['string', 'null'] }, subtotal: { type: ['number', 'null'] }, tax: { type: ['number', 'null'] }, otherFees: { type: ['number', 'null'] }, total: { type: ['number', 'null'] }, currency: { type: ['string', 'null'] }, uncertainFields: { type: 'array', items: { type: 'string' } },
+        lineItems: { type: 'array', items: { type: 'object', required: ['lineNumber', 'sourcePage', 'rawDescription', 'normalizedName', 'sku', 'quantity', 'unit', 'packSize', 'unitPrice', 'extendedPrice', 'category', 'productAttributes', 'uncertainFields'], properties: {
+          lineNumber: { type: 'integer' }, sourcePage: { type: ['integer', 'null'] }, rawDescription: { type: 'string' }, normalizedName: { type: ['string', 'null'] }, sku: { type: ['string', 'null'] }, quantity: { type: ['number', 'null'] }, unit: { type: ['string', 'null'] }, packSize: { type: ['string', 'null'] }, unitPrice: { type: ['number', 'null'] }, extendedPrice: { type: ['number', 'null'] }, category: { type: ['string', 'null'], enum: ['Food', 'Beverage', 'Alcohol', 'Supplies', 'Cleaning', 'Packaging', 'Other', null] }, productAttributes: { type: ['object', 'null'] }, uncertainFields: { type: 'array', items: { type: 'string' } },
+        } } },
+      },
+    };
+    try {
+      const response = await ai.models.generateContent({ model, contents: [{ role: 'user', parts: [{ inlineData: { mimeType, data: file.toString('base64') } }, { text: prompt }] }], config: { responseMimeType: 'application/json', responseSchema } });
+      const text = response.text?.trim();
+      if (!text) throw new Error('Extraction provider returned no structured result');
+      const data = ExtractedInvoiceSchema.parse(JSON.parse(text));
+      const usage = response.usageMetadata;
+      return { data, provider: 'gemini', model, usage: usage ? { input_tokens: usage.promptTokenCount, output_tokens: usage.candidatesTokenCount, total_tokens: usage.totalTokenCount } : null };
+    } catch (error) {
+      this.logger.warn(JSON.stringify({ event: 'invoice_extraction_provider_error', provider: 'gemini', errorType: error instanceof Error ? error.name : 'UnknownError', status: (error as { status?: number }).status ?? null }));
       throw error;
     }
   }
