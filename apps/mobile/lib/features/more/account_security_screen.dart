@@ -2,7 +2,8 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../main.dart' show AuthScreen, demoModeProvider;
+import '../../main.dart'
+    show AuthScreen, demoModeProvider, sharedTestUserModeProvider;
 import 'foundation.dart';
 
 class AccountSecurityScreen extends ConsumerStatefulWidget {
@@ -95,7 +96,8 @@ class _AccountSecurityScreenState extends ConsumerState<AccountSecurityScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final demo = ref.watch(demoModeProvider);
+    final protectedBetaAccount =
+        ref.watch(demoModeProvider) || ref.watch(sharedTestUserModeProvider);
     return Scaffold(
       appBar: AppBar(title: const Text('Account Security')),
       body: ListView(
@@ -103,10 +105,14 @@ class _AccountSecurityScreenState extends ConsumerState<AccountSecurityScreen> {
         children: [
           ListTile(
             title: const Text('Sign out all devices'),
-            subtitle: const Text('Revokes every active session.'),
+            subtitle: Text(
+              protectedBetaAccount
+                  ? 'Unavailable for the shared beta account.'
+                  : 'Revokes every active session.',
+            ),
             trailing: FilledButton(
-              onPressed: busy ? null : signOutAll,
-              child: const Text('Sign out all'),
+              onPressed: protectedBetaAccount || busy ? null : signOutAll,
+              child: Text(protectedBetaAccount ? 'Protected' : 'Sign out all'),
             ),
           ),
           const Divider(),
@@ -115,14 +121,16 @@ class _AccountSecurityScreenState extends ConsumerState<AccountSecurityScreen> {
           TextField(
             controller: password,
             obscureText: true,
-            enabled: !demo && !busy,
+            enabled: !protectedBetaAccount && !busy,
             decoration: const InputDecoration(labelText: 'Confirm password'),
           ),
           const SizedBox(height: 12),
           FilledButton(
-            onPressed: demo || busy ? null : deleteAccount,
+            onPressed: protectedBetaAccount || busy ? null : deleteAccount,
             child: Text(
-              demo ? 'Demo account cannot be deleted' : 'Delete account',
+              protectedBetaAccount
+                  ? 'Shared beta account cannot be deleted'
+                  : 'Delete account',
             ),
           ),
           if (message != null)

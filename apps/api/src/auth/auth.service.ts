@@ -84,9 +84,16 @@ export class AuthService {
     const user = await this.prisma.user.findUnique({ where: { id: payload.sub } });
     if (!user || user.deletedAt || user.disabledAt || !user.emailVerifiedAt) throw new UnauthorizedException('Invalid refresh token');
     const stored = payload.sid ? await this.prisma.refreshToken.findUnique({ where: { id: payload.sid } }) : await this.findLegacyToken(payload.sub, rawToken);
-    if (!stored || stored.userId !== payload.sub || stored.revokedAt || stored.expiresAt <= new Date() || !(await argon2.verify(stored.tokenHash, rawToken))) throw new UnauthorizedException('Refresh token revoked');
+    if (!stored || stored.userId !== payload.sub || stored.expiresAt <= new Date() || !(await argon2.verify(stored.tokenHash, rawToken))) throw new UnauthorizedException('Refresh token revoked');
+    if (stored.revokedAt) {
+      await this.revokeReplacementChain(stored.replacedByTokenId, stored.userId);
+      throw new UnauthorizedException('Refresh token revoked');
+    }
     const claimed = await this.prisma.refreshToken.updateMany({ where: { id: stored.id, revokedAt: null, expiresAt: { gt: new Date() } }, data: { revokedAt: new Date() } });
-    if (claimed.count !== 1) throw new UnauthorizedException('Refresh token revoked');
+    if (claimed.count !== 1) {
+      await this.revokeReplacementChain(stored.replacedByTokenId, stored.userId);
+      throw new UnauthorizedException('Refresh token revoked');
+    }
     return this.issueTokens(user.id, user.email, stored.id);
   }
 
@@ -132,7 +139,8 @@ export class AuthService {
   async deleteAccount(userId: string, password: string) {
     const user = await this.prisma.user.findUnique({ where: { id: userId }, include: { memberships: true } });
     if (!user || user.deletedAt || !(await argon2.verify(user.passwordHash, password))) throw new UnauthorizedException('Password confirmation failed');
-    if (user.email === 'demo@profitlens.local') throw new ForbiddenException('The demo account cannot be deleted');
+    const protectedSharedEmail = normalizeEmail(process.env.SHARED_TEST_USER_EMAIL ?? 'test@profitlens.local');
+    if (user.email === 'demo@profitlens.local' || user.email === protectedSharedEmail) throw new ForbiddenException('The shared beta account cannot be deleted');
     const archiveOrganizationIds: string[] = [];
     for (const membership of user.memberships) {
       if (membership.role !== OrganizationRole.OWNER) continue;
@@ -177,6 +185,18 @@ export class AuthService {
     const tokens = await this.prisma.refreshToken.findMany({ where: { userId, revokedAt: null, expiresAt: { gt: new Date() } } });
     for (const token of tokens) if (await argon2.verify(token.tokenHash, rawToken)) return token;
     return null;
+  }
+
+  private async revokeReplacementChain(firstId: string | null | undefined, userId: string) {
+    let id = firstId;
+    const visited = new Set<string>();
+    while (id && !visited.has(id) && visited.size < 100) {
+      visited.add(id);
+      const replacement = await this.prisma.refreshToken.findUnique({ where: { id } });
+      if (!replacement || replacement.userId !== userId) break;
+      await this.prisma.refreshToken.updateMany({ where: { id, userId, revokedAt: null }, data: { revokedAt: new Date() } });
+      id = replacement.replacedByTokenId;
+    }
   }
 
   private async issueTokens(userId: string, email: string, replacedId?: string) {

@@ -44,6 +44,14 @@ describe('auth service', () => {
     await expect(service.sharedTestSession()).rejects.toBeInstanceOf(NotFoundException);
   });
 
+  it.each(['false', 'TRUE', '1', 'yes', ' true '])('does not enable shared mode for invalid value %s', async (value) => {
+    process.env.SHARED_TEST_USER_MODE = value;
+    const prisma: any = { user: { findFirst: jest.fn() } };
+    const service = new AuthService(prisma, {} as any, mail() as any, audit as any);
+    await expect(service.sharedTestSession()).rejects.toBeInstanceOf(NotFoundException);
+    expect(prisma.user.findFirst).not.toHaveBeenCalled();
+  });
+
   it('registers a normalized account and stores a hash of the verification token', async () => {
     const prisma: any = { user: { findUnique: jest.fn().mockResolvedValue(null), create: jest.fn(({ data }) => Promise.resolve({ id: 'user-a', ...data })) }, emailVerificationToken: { create: jest.fn() } };
     const email = mail(); const service = new AuthService(prisma, {} as any, email as any, audit as any);
@@ -62,6 +70,18 @@ describe('auth service', () => {
     const service = new AuthService(prisma, {} as any, mail() as any, audit as any);
     await expect(service.verifyEmail('x'.repeat(32))).resolves.toEqual({ verified: true });
     await expect(service.verifyEmail('x'.repeat(32))).rejects.toBeInstanceOf(UnauthorizedException);
+  });
+
+  it('rejects invalid and expired verification tokens', async () => {
+    const prisma: any = {
+      emailVerificationToken: {
+        findUnique: jest.fn().mockResolvedValueOnce(null).mockResolvedValueOnce({ id: 'expired', userId: 'user-a' }),
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+      },
+    };
+    const service = new AuthService(prisma, {} as any, mail() as any, audit as any);
+    await expect(service.verifyEmail('x'.repeat(32))).rejects.toBeInstanceOf(UnauthorizedException);
+    await expect(service.verifyEmail('y'.repeat(32))).rejects.toBeInstanceOf(UnauthorizedException);
   });
 
   it('throttles resend and skips verified users', async () => {
@@ -104,6 +124,23 @@ describe('auth service', () => {
     await expect(service.refresh(raw)).rejects.toThrow('Refresh token revoked');
   });
 
+  it('revokes a replacement session when a rotated refresh token is replayed', async () => {
+    const raw = 'replayed-refresh-token';
+    const stored = { id: 'session-a', userId: 'user-a', tokenHash: await argon2.hash(raw), expiresAt: new Date(Date.now() + 60_000), revokedAt: new Date(), replacedByTokenId: 'session-b' };
+    const replacement = { id: 'session-b', userId: 'user-a', revokedAt: null, replacedByTokenId: null };
+    const prisma: any = {
+      user: { findUnique: jest.fn().mockResolvedValue({ id: 'user-a', email: 'a@example.com', emailVerifiedAt: new Date() }) },
+      refreshToken: {
+        findUnique: jest.fn().mockResolvedValueOnce(stored).mockResolvedValueOnce(replacement),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
+    };
+    const jwt = { verifyAsync: jest.fn().mockResolvedValue({ sub: 'user-a', type: 'refresh', sid: 'session-a' }) };
+    const service = new AuthService(prisma, jwt as any, mail() as any, audit as any);
+    await expect(service.refresh(raw)).rejects.toThrow('Refresh token revoked');
+    expect(prisma.refreshToken.updateMany).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'session-b', userId: 'user-a', revokedAt: null } }));
+  });
+
   it('returns the same forgot-password response for known and unknown emails', async () => {
     const email = mail();
     const prisma: any = { user: { findUnique: jest.fn().mockResolvedValueOnce(null).mockResolvedValueOnce({ id: 'user-a', email: 'a@example.com' }) }, passwordResetToken: { findFirst: jest.fn().mockResolvedValue(null), create: jest.fn() } };
@@ -120,16 +157,32 @@ describe('auth service', () => {
     await expect(service.resetPassword('r'.repeat(32), password)).rejects.toBeInstanceOf(UnauthorizedException);
   });
 
+  it('rejects invalid and expired password reset tokens without changing the user', async () => {
+    const prisma: any = {
+      passwordResetToken: {
+        findUnique: jest.fn().mockResolvedValueOnce(null).mockResolvedValueOnce({ id: 'expired', userId: 'user-a' }),
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+      },
+      user: { update: jest.fn() },
+    };
+    const service = new AuthService(prisma, {} as any, mail() as any, audit as any);
+    await expect(service.resetPassword('x'.repeat(32), password)).rejects.toBeInstanceOf(UnauthorizedException);
+    await expect(service.resetPassword('y'.repeat(32), password)).rejects.toBeInstanceOf(UnauthorizedException);
+    expect(prisma.user.update).not.toHaveBeenCalled();
+  });
+
   it('revokes every session for the current user', async () => {
     const service = new AuthService({ refreshToken: { updateMany: jest.fn().mockResolvedValue({ count: 3 }) } } as any, {} as any, mail() as any, audit as any);
     await expect(service.signOutAll('user-a')).resolves.toEqual({ revoked: 3 });
   });
 
-  it('blocks demo deletion and unsafe ownership orphaning', async () => {
+  it('blocks demo/shared deletion and unsafe ownership orphaning', async () => {
     const hash = await argon2.hash(password);
     const prisma: any = { user: { findUnique: jest.fn().mockResolvedValue({ id: 'demo', email: 'demo@profitlens.local', passwordHash: hash, memberships: [] }) } };
     const service = new AuthService(prisma, {} as any, mail() as any, audit as any);
     await expect(service.deleteAccount('demo', password)).rejects.toBeInstanceOf(ForbiddenException);
+    prisma.user.findUnique.mockResolvedValue({ id: 'shared', email: 'test@profitlens.local', passwordHash: hash, memberships: [] });
+    await expect(service.deleteAccount('shared', password)).rejects.toBeInstanceOf(ForbiddenException);
     prisma.user.findUnique.mockResolvedValue({ id: 'owner', email: 'owner@example.com', passwordHash: hash, memberships: [{ role: 'OWNER', organizationId: 'org-a' }] });
     prisma.organizationMember = { count: jest.fn().mockResolvedValueOnce(0).mockResolvedValueOnce(2) };
     await expect(service.deleteAccount('owner', password)).rejects.toBeInstanceOf(ConflictException);

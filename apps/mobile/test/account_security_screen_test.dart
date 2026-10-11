@@ -15,21 +15,52 @@ void main() {
     }),
   );
 
-  Widget app(Dio dio, {bool demo = false}) => ProviderScope(
-    overrides: [
-      demoModeProvider.overrideWithValue(demo),
-      moreRepositoryProvider.overrideWithValue(MoreRepository(dio, storage)),
-    ],
-    child: const MaterialApp(home: AccountSecurityScreen()),
-  );
+  Widget app(Dio dio, {bool demo = false, bool shared = false}) =>
+      ProviderScope(
+        overrides: [
+          demoModeProvider.overrideWithValue(demo),
+          sharedTestUserModeProvider.overrideWithValue(shared),
+          moreRepositoryProvider.overrideWithValue(
+            MoreRepository(dio, storage),
+          ),
+        ],
+        child: const MaterialApp(home: AccountSecurityScreen()),
+      );
 
   testWidgets('demo account deletion is visibly disabled', (tester) async {
     await tester.pumpWidget(app(Dio(), demo: true));
 
     final button = tester.widget<FilledButton>(
-      find.widgetWithText(FilledButton, 'Demo account cannot be deleted'),
+      find.widgetWithText(
+        FilledButton,
+        'Shared beta account cannot be deleted',
+      ),
     );
     expect(button.onPressed, isNull);
+  });
+
+  testWidgets('shared beta account destructive actions are visibly disabled', (
+    tester,
+  ) async {
+    await tester.pumpWidget(app(Dio(), shared: true));
+
+    expect(
+      tester
+          .widget<FilledButton>(find.widgetWithText(FilledButton, 'Protected'))
+          .onPressed,
+      isNull,
+    );
+    expect(
+      tester
+          .widget<FilledButton>(
+            find.widgetWithText(
+              FilledButton,
+              'Shared beta account cannot be deleted',
+            ),
+          )
+          .onPressed,
+      isNull,
+    );
   });
 
   testWidgets('account deletion requires password and explicit confirmation', (
