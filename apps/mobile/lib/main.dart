@@ -36,6 +36,12 @@ const devAutoLoginRequested = bool.fromEnvironment('ENABLE_DEV_AUTO_LOGIN');
 final demoModeProvider = Provider<bool>(
   (_) => !kReleaseMode && devAutoLoginRequested,
 );
+const sharedTestUserModeRequested = bool.fromEnvironment(
+  'SHARED_TEST_USER_MODE',
+);
+final sharedTestUserModeProvider = Provider<bool>(
+  (_) => sharedTestUserModeRequested,
+);
 const _demoEmail = 'demo@profitlens.local';
 const _demoPassword = 'DemoProfit2026!';
 
@@ -58,6 +64,7 @@ class AuthBootstrap extends ConsumerStatefulWidget {
 class _AuthBootstrapState extends ConsumerState<AuthBootstrap> {
   String? error;
   bool get devAutoLogin => ref.read(demoModeProvider);
+  bool get sharedTestUserMode => ref.read(sharedTestUserModeProvider);
   @override
   void initState() {
     super.initState();
@@ -69,6 +76,13 @@ class _AuthBootstrapState extends ConsumerState<AuthBootstrap> {
     final access = await storage.read(key: 'accessToken');
     final refresh = await storage.read(key: 'refreshToken');
     try {
+      // Shared test mode deliberately obtains a session on every launch. This
+      // prevents an old device's saved account from leaking into this temporary
+      // single-restaurant testing environment.
+      if (sharedTestUserMode) {
+        await _sharedTestSession();
+        return;
+      }
       if (access != null) {
         client.options.headers['Authorization'] = 'Bearer $access';
         await client.get('/auth/me');
@@ -109,7 +123,18 @@ class _AuthBootstrapState extends ConsumerState<AuthBootstrap> {
           return;
         } catch (_) {}
       }
-      if (devAutoLogin) {
+      if (sharedTestUserMode) {
+        try {
+          await _sharedTestSession();
+          return;
+        } catch (_) {
+          if (mounted)
+            setState(
+              () => error =
+                  'Shared test sign-in is unavailable. Confirm shared test mode is enabled on the API.',
+            );
+        }
+      } else if (devAutoLogin) {
         try {
           final response = await client.post(
             '/auth/login',
@@ -130,6 +155,12 @@ class _AuthBootstrapState extends ConsumerState<AuthBootstrap> {
           MaterialPageRoute(builder: (_) => const AuthScreen()),
         );
     }
+  }
+
+  Future<void> _sharedTestSession() async {
+    final response = await ref.read(api).post('/auth/shared-test-session');
+    await _save(response.data as Map<String, dynamic>);
+    await _enterAuthenticatedApp(forceHome: true);
   }
 
   Future<void> _enterAuthenticatedApp({bool forceHome = false}) async {

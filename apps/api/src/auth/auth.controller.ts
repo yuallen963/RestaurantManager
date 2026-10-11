@@ -16,6 +16,7 @@ export class AuthController {
   @HttpCode(200) @Post('verify-email') verify(@Req() req: any, @Body() dto: TokenDto) { this.limit(req, 'verify'); return this.auth.verifyEmail(dto.token); }
   @HttpCode(200) @Post('resend-verification') resend(@Req() req: any, @Body() dto: EmailDto) { this.limit(req, 'resend', dto.email, 3); return this.auth.resendVerification(dto.email); }
   @HttpCode(200) @Post('login') login(@Req() req: any, @Body() dto: LoginDto) { this.limit(req, 'login', dto.email); return this.auth.login(dto.email, dto.password); }
+  @HttpCode(200) @Post('shared-test-session') sharedTestSession(@Req() req: any) { this.limit(req, 'shared-test-session', '', 30); return this.auth.sharedTestSession(); }
   @HttpCode(200) @Post('refresh') refresh(@Body() dto: RefreshDto) { return this.auth.refresh(dto.refreshToken); }
   @HttpCode(204) @Post('logout') async logout(@Body() dto: RefreshDto) { await this.auth.logout(dto.refreshToken); }
   @HttpCode(200) @Post('forgot-password') forgot(@Req() req: any, @Body() dto: EmailDto) { this.limit(req, 'forgot', dto.email, 3); return this.auth.forgotPassword(dto.email); }

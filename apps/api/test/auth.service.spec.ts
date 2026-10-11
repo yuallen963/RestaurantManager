@@ -1,4 +1,5 @@
-import { ConflictException, ForbiddenException, UnauthorizedException } from '@nestjs/common';
+import { ConflictException, ForbiddenException, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { OrganizationRole } from '@prisma/client';
 import * as argon2 from 'argon2';
 import { AuthService } from '../src/auth/auth.service';
 
@@ -7,7 +8,41 @@ const audit = { log: jest.fn().mockResolvedValue(undefined) };
 const mail = () => ({ developmentMode: false, assertConfigured: jest.fn(), sendVerification: jest.fn(), sendPasswordReset: jest.fn() });
 
 describe('auth service', () => {
+  const originalSharedMode = process.env.SHARED_TEST_USER_MODE;
+  const originalSharedEmail = process.env.SHARED_TEST_USER_EMAIL;
   beforeEach(() => jest.clearAllMocks());
+  afterEach(() => {
+    if (originalSharedMode === undefined) delete process.env.SHARED_TEST_USER_MODE;
+    else process.env.SHARED_TEST_USER_MODE = originalSharedMode;
+    if (originalSharedEmail === undefined) delete process.env.SHARED_TEST_USER_EMAIL;
+    else process.env.SHARED_TEST_USER_EMAIL = originalSharedEmail;
+  });
+
+  it('issues a session only for the configured shared test owner when enabled', async () => {
+    process.env.SHARED_TEST_USER_MODE = 'true';
+    process.env.SHARED_TEST_USER_EMAIL = 'test@profitlens.local';
+    const prisma: any = {
+      user: { findFirst: jest.fn().mockResolvedValue({ id: 'shared-user', email: 'test@profitlens.local' }) },
+      refreshToken: { create: jest.fn() },
+    };
+    const jwt = { signAsync: jest.fn().mockResolvedValueOnce('access').mockResolvedValueOnce('refresh') };
+    const service = new AuthService(prisma, jwt as any, mail() as any, audit as any);
+    await expect(service.sharedTestSession()).resolves.toMatchObject({ accessToken: 'access', refreshToken: 'refresh' });
+    expect(prisma.user.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ email: 'test@profitlens.local', memberships: { some: { role: OrganizationRole.OWNER } } }),
+    }));
+  });
+
+  it('does not expose the shared test session endpoint when the flag is disabled or account is invalid', async () => {
+    const prisma: any = { user: { findFirst: jest.fn() } };
+    const service = new AuthService(prisma, {} as any, mail() as any, audit as any);
+    delete process.env.SHARED_TEST_USER_MODE;
+    await expect(service.sharedTestSession()).rejects.toBeInstanceOf(NotFoundException);
+    expect(prisma.user.findFirst).not.toHaveBeenCalled();
+    process.env.SHARED_TEST_USER_MODE = 'true';
+    prisma.user.findFirst.mockResolvedValue(null);
+    await expect(service.sharedTestSession()).rejects.toBeInstanceOf(NotFoundException);
+  });
 
   it('registers a normalized account and stores a hash of the verification token', async () => {
     const prisma: any = { user: { findUnique: jest.fn().mockResolvedValue(null), create: jest.fn(({ data }) => Promise.resolve({ id: 'user-a', ...data })) }, emailVerificationToken: { create: jest.fn() } };

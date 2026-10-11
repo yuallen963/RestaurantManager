@@ -1,4 +1,4 @@
-import { ConflictException, ForbiddenException, Injectable, UnauthorizedException } from '@nestjs/common';
+import { ConflictException, ForbiddenException, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { OrganizationRole } from '@prisma/client';
 import * as argon2 from 'argon2';
@@ -54,6 +54,28 @@ export class AuthService {
     const user = await this.prisma.user.findUnique({ where: { email } });
     if (!user || user.deletedAt || user.disabledAt || !(await argon2.verify(user.passwordHash, password))) throw new UnauthorizedException('Invalid email or password');
     if (!user.emailVerifiedAt && email !== 'demo@profitlens.local') throw new ForbiddenException('Email verification required');
+    return this.issueTokens(user.id, user.email);
+  }
+
+  /**
+   * Temporary pre-release entry point for the one explicitly configured shared
+   * test account. It is intentionally unavailable unless the server-side flag
+   * is enabled, and it cannot authenticate an arbitrary user.
+   */
+  async sharedTestSession() {
+    if (process.env.SHARED_TEST_USER_MODE !== 'true') throw new NotFoundException();
+    const email = normalizeEmail(process.env.SHARED_TEST_USER_EMAIL ?? 'test@profitlens.local');
+    const user = await this.prisma.user.findFirst({
+      where: {
+        email,
+        emailVerifiedAt: { not: null },
+        disabledAt: null,
+        deletedAt: null,
+        memberships: { some: { role: OrganizationRole.OWNER } },
+      },
+      select: { id: true, email: true },
+    });
+    if (!user) throw new NotFoundException();
     return this.issueTokens(user.id, user.email);
   }
 
