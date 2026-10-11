@@ -27,6 +27,64 @@ const previousDashboard = DashboardData(
   DashboardSummary(90000, 81000, 9000, 10, 24300, 27, 26100, 29),
   [],
 );
+const noSources = DashboardAvailability(
+  bank: false,
+  reviewedInvoices: false,
+  revenue: false,
+  pos: false,
+  expenses: false,
+  profitability: false,
+);
+
+DashboardData adaptiveDashboard({
+  bool bank = false,
+  bool invoices = false,
+  bool revenue = false,
+  bool pos = false,
+  bool expenses = false,
+  bool profitability = false,
+}) => DashboardData(
+  DashboardSummary(
+    revenue ? 12000 : 0,
+    expenses ? 7000 : 0,
+    5000,
+    41.7,
+    0,
+    0,
+    0,
+    0,
+  ),
+  const [],
+  availability: DashboardAvailability(
+    bank: bank,
+    reviewedInvoices: invoices,
+    revenue: revenue,
+    pos: pos,
+    expenses: expenses,
+    profitability: profitability,
+  ),
+  bank: bank
+      ? const BankDashboardInsights(
+          trackedOutflows: 4200,
+          previousTrackedOutflows: 4000,
+          uncategorizedCount: 2,
+          unmatchedCount: 3,
+          matchedInvoiceCount: 1,
+          categoryBreakdown: [NamedAmount('Food', 3000)],
+          topVendors: [NamedAmount('Atlas', 2500)],
+          largestExpenses: [],
+        )
+      : null,
+  invoices: invoices
+      ? const InvoiceDashboardInsights(
+          reviewedPurchases: 3600,
+          reviewedCount: 4,
+          requiringReviewCount: 1,
+          unmatchedCount: 2,
+          topVendors: [NamedAmount('Atlas', 2400)],
+        )
+      : null,
+);
 
 void main() {
   Widget dashboardApp({
@@ -82,23 +140,22 @@ void main() {
     await tester.pumpWidget(dashboardApp());
     await tester.pumpAndSettle();
 
-    await tester.scrollUntilVisible(
-      find.byKey(const Key('food-cost-bar')),
-      250,
-    );
-    expect(find.text('Key Costs'), findsOneWidget);
-    expect(find.byKey(const Key('food-cost-bar')), findsOneWidget);
-    expect(find.byKey(const Key('labor-cost-bar')), findsOneWidget);
-    expect(find.text('30.4%'), findsOneWidget);
-    expect(find.text('33.9%'), findsOneWidget);
-
-    await tester.scrollUntilVisible(find.text('Where your money went'), 250);
-    await tester.scrollUntilVisible(find.text('Labor'), 200);
+    await tester.drag(find.byType(ListView), const Offset(0, -450));
+    await tester.pumpAndSettle();
+    expect(find.text('Where your recorded expenses went'), findsOneWidget);
     expect(find.text('Labor'), findsOneWidget);
     expect(find.text('\$31,900'), findsOneWidget);
     expect(find.text('37.1%'), findsOneWidget);
     expect(find.text('Food'), findsOneWidget);
     expect(find.text('Rent'), findsOneWidget);
+
+    await tester.drag(find.byType(ListView), const Offset(0, -600));
+    await tester.pumpAndSettle();
+    expect(find.text('Key Costs'), findsOneWidget);
+    expect(find.byKey(const Key('food-cost-bar')), findsOneWidget);
+    expect(find.byKey(const Key('labor-cost-bar')), findsOneWidget);
+    expect(find.text('30.4%'), findsOneWidget);
+    expect(find.text('33.9%'), findsOneWidget);
   });
 
   testWidgets('comparison communicates positive and negative changes', (
@@ -185,20 +242,111 @@ void main() {
     expect(find.text('Last 30 Days'), findsOneWidget);
   });
 
-  testWidgets('all-zero dashboard shows the empty state', (tester) async {
+  testWidgets('no sources shows honest setup guidance', (tester) async {
     await tester.pumpWidget(
       dashboardApp(
-        dashboard: (ref) async =>
-            const DashboardData(DashboardSummary(0, 0, 0, 0, 0, 0, 0, 0), []),
+        dashboard: (ref) async => const DashboardData(
+          DashboardSummary(0, 0, 0, 0, 0, 0, 0, 0),
+          [],
+          availability: noSources,
+        ),
       ),
     );
     await tester.pumpAndSettle();
 
     expect(
-      find.text('No financial activity found for this period.'),
+      find.text('Connect a data source to start building your dashboard.'),
       findsOneWidget,
     );
     expect(find.byKey(const Key('profit-card')), findsNothing);
+    expect(find.text('Connect Bank'), findsOneWidget);
+    expect(find.text('Connect POS'), findsOneWidget);
+  });
+
+  testWidgets('bank-only data shows outflows but not profit or revenue', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      dashboardApp(dashboard: (_) async => adaptiveDashboard(bank: true)),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Tracked bank outflows'), findsOneWidget);
+    expect(find.text('\$4,200'), findsOneWidget);
+    expect(
+      find.textContaining('not necessarily total business costs'),
+      findsOneWidget,
+    );
+    expect(find.text('Estimated Profit'), findsNothing);
+    expect(find.text('Recorded revenue'), findsNothing);
+  });
+
+  testWidgets('reviewed invoices show purchases, not paid expenses', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      dashboardApp(dashboard: (_) async => adaptiveDashboard(invoices: true)),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Reviewed invoice purchases'), findsOneWidget);
+    expect(find.text('\$3,600'), findsOneWidget);
+    expect(find.text('Purchases are not confirmed payments.'), findsOneWidget);
+    expect(find.text('Estimated Profit'), findsNothing);
+  });
+
+  testWidgets('bank and invoice values stay visibly separate', (tester) async {
+    await tester.pumpWidget(
+      dashboardApp(
+        dashboard: (_) async => adaptiveDashboard(bank: true, invoices: true),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Tracked bank outflows'), findsOneWidget);
+    await tester.drag(find.byType(ListView), const Offset(0, -650));
+    await tester.pumpAndSettle();
+    expect(find.text('Reviewed invoice purchases'), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.textContaining('not added together'),
+      250,
+    );
+    expect(find.textContaining('not added together'), findsOneWidget);
+    expect(find.text('Estimated Profit'), findsNothing);
+  });
+
+  testWidgets(
+    'POS/revenue only shows revenue and explains unavailable profit',
+    (tester) async {
+      await tester.pumpWidget(
+        dashboardApp(
+          dashboard: (_) async => adaptiveDashboard(revenue: true, pos: true),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Recorded revenue'), findsOneWidget);
+      expect(find.text('\$12,000'), findsOneWidget);
+      expect(find.text('Profit unavailable'), findsOneWidget);
+      expect(find.text('Estimated Profit'), findsNothing);
+    },
+  );
+
+  testWidgets('complete sources permit estimated profitability', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      dashboardApp(
+        dashboard: (_) async => adaptiveDashboard(
+          bank: true,
+          invoices: true,
+          revenue: true,
+          pos: true,
+          expenses: true,
+          profitability: true,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Estimated Profit'), findsOneWidget);
+    expect(find.byKey(const Key('revenue-card')), findsOneWidget);
+    expect(find.byKey(const Key('expenses-card')), findsOneWidget);
   });
 
   testWidgets('dashboard error shows a retry action', (tester) async {

@@ -68,6 +68,13 @@ double _number(Map<String, dynamic> json, String key) {
   throw FormatException('Missing numeric $key');
 }
 
+double _optionalNumber(Map<String, dynamic> json, String key) {
+  final value = json[key];
+  if (value is num) return value.toDouble();
+  if (value is String) return double.tryParse(value) ?? 0;
+  return 0;
+}
+
 class DashboardSummary {
   const DashboardSummary(
     this.revenue,
@@ -116,15 +123,154 @@ class ExpenseBreakdown {
   );
 }
 
+class DashboardAvailability {
+  const DashboardAvailability({
+    required this.bank,
+    required this.reviewedInvoices,
+    required this.revenue,
+    required this.pos,
+    required this.expenses,
+    required this.profitability,
+  });
+  final bool bank, reviewedInvoices, revenue, pos, expenses, profitability;
+
+  factory DashboardAvailability.fromJson(Map<String, dynamic> j) =>
+      DashboardAvailability(
+        bank: j['bank'] == true,
+        reviewedInvoices: j['reviewedInvoices'] == true,
+        revenue: j['revenue'] == true,
+        pos: j['pos'] == true,
+        expenses: j['expenses'] == true,
+        profitability: j['profitability'] == true,
+      );
+}
+
+class NamedAmount {
+  const NamedAmount(this.name, this.amount);
+  final String name;
+  final double amount;
+  factory NamedAmount.fromJson(Map<String, dynamic> j) =>
+      NamedAmount(j['name'] as String, _number(j, 'amount'));
+}
+
+class LargestExpense {
+  const LargestExpense(this.id, this.name, this.amount);
+  final String id, name;
+  final double amount;
+  factory LargestExpense.fromJson(Map<String, dynamic> j) => LargestExpense(
+    j['id'] as String,
+    j['name'] as String,
+    _number(j, 'amount'),
+  );
+}
+
+class BankDashboardInsights {
+  const BankDashboardInsights({
+    required this.trackedOutflows,
+    required this.previousTrackedOutflows,
+    required this.uncategorizedCount,
+    required this.unmatchedCount,
+    required this.matchedInvoiceCount,
+    required this.categoryBreakdown,
+    required this.topVendors,
+    required this.largestExpenses,
+  });
+  final double trackedOutflows, previousTrackedOutflows;
+  final int uncategorizedCount, unmatchedCount, matchedInvoiceCount;
+  final List<NamedAmount> categoryBreakdown, topVendors;
+  final List<LargestExpense> largestExpenses;
+
+  factory BankDashboardInsights.fromJson(Map<String, dynamic> j) =>
+      BankDashboardInsights(
+        trackedOutflows: _number(j, 'trackedOutflows'),
+        previousTrackedOutflows: _number(j, 'previousTrackedOutflows'),
+        uncategorizedCount: j['uncategorizedCount'] as int,
+        unmatchedCount: j['unmatchedCount'] as int,
+        matchedInvoiceCount: j['matchedInvoiceCount'] as int,
+        categoryBreakdown: _namedAmounts(j['categoryBreakdown']),
+        topVendors: _namedAmounts(j['topVendors']),
+        largestExpenses: (j['largestExpenses'] as List)
+            .map((e) => LargestExpense.fromJson(Map<String, dynamic>.from(e)))
+            .toList(),
+      );
+}
+
+class InvoiceDashboardInsights {
+  const InvoiceDashboardInsights({
+    required this.reviewedPurchases,
+    this.previousReviewedPurchases = 0,
+    required this.reviewedCount,
+    required this.requiringReviewCount,
+    required this.unmatchedCount,
+    required this.topVendors,
+  });
+  final double reviewedPurchases, previousReviewedPurchases;
+  final int reviewedCount, requiringReviewCount, unmatchedCount;
+  final List<NamedAmount> topVendors;
+
+  factory InvoiceDashboardInsights.fromJson(Map<String, dynamic> j) =>
+      InvoiceDashboardInsights(
+        reviewedPurchases: _number(j, 'reviewedPurchases'),
+        previousReviewedPurchases: _optionalNumber(
+          j,
+          'previousReviewedPurchases',
+        ),
+        reviewedCount: j['reviewedCount'] as int,
+        requiringReviewCount: j['requiringReviewCount'] as int,
+        unmatchedCount: j['unmatchedCount'] as int,
+        topVendors: _namedAmounts(j['topVendors']),
+      );
+}
+
+List<NamedAmount> _namedAmounts(dynamic value) => (value as List)
+    .map((e) => NamedAmount.fromJson(Map<String, dynamic>.from(e)))
+    .toList();
+
 class DashboardData {
-  const DashboardData(this.summary, this.breakdown);
+  const DashboardData(
+    this.summary,
+    this.breakdown, {
+    this.availability = const DashboardAvailability(
+      bank: true,
+      reviewedInvoices: true,
+      revenue: true,
+      pos: true,
+      expenses: true,
+      profitability: true,
+    ),
+    this.bank,
+    this.invoices,
+  });
   final DashboardSummary summary;
   final List<ExpenseBreakdown> breakdown;
+  final DashboardAvailability availability;
+  final BankDashboardInsights? bank;
+  final InvoiceDashboardInsights? invoices;
   factory DashboardData.fromJson(Map<String, dynamic> j) => DashboardData(
     DashboardSummary.fromJson(Map<String, dynamic>.from(j['summary'])),
     (j['expenseBreakdown'] as List)
         .map((e) => ExpenseBreakdown.fromJson(Map<String, dynamic>.from(e)))
         .toList(),
+    availability: j['availability'] == null
+        ? const DashboardAvailability(
+            bank: true,
+            reviewedInvoices: true,
+            revenue: true,
+            pos: true,
+            expenses: true,
+            profitability: true,
+          )
+        : DashboardAvailability.fromJson(
+            Map<String, dynamic>.from(j['availability']),
+          ),
+    bank: j['bank'] == null
+        ? null
+        : BankDashboardInsights.fromJson(Map<String, dynamic>.from(j['bank'])),
+    invoices: j['invoices'] == null
+        ? null
+        : InvoiceDashboardInsights.fromJson(
+            Map<String, dynamic>.from(j['invoices']),
+          ),
   );
 }
 

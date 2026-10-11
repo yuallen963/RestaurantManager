@@ -6,7 +6,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'foundation.dart';
 import '../needs_attention/needs_attention_screen.dart';
 import '../banking/bank_screens.dart';
-import '../invoice_email/invoice_email_screen.dart';
 import '../invoices/invoice_screens.dart';
 import '../pos/pos_integrations_screen.dart';
 
@@ -49,29 +48,6 @@ class HomeScreen extends ConsumerWidget {
             onRetry: () => ref.invalidate(dashboardProvider),
           );
         }
-        if (data.summary.revenue == 0 &&
-            data.summary.expenses == 0 &&
-            data.breakdown.isEmpty) {
-          return ListView(
-            padding: const EdgeInsets.all(16),
-            children: [
-              _DashboardHeader(location: location, locations: locations),
-              const SizedBox(height: 16),
-              const NeedsAttentionPreview(),
-              const SizedBox(height: 48),
-              const EmptyState(
-                message: 'No financial activity found for this period.',
-              ),
-              const SizedBox(height: 8),
-              const Text(
-                'No cost insights yet. Upload more vendor invoices to start detecting price changes.',
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 20),
-              const _FirstRunActions(),
-            ],
-          );
-        }
         return _DashboardContent(
           location: location,
           locations: locations,
@@ -86,41 +62,60 @@ class HomeScreen extends ConsumerWidget {
 class _FirstRunActions extends StatelessWidget {
   const _FirstRunActions();
   @override
-  Widget build(BuildContext context) => Wrap(
-    spacing: 8,
-    runSpacing: 8,
-    alignment: WrapAlignment.center,
+  Widget build(BuildContext context) => Column(
     children: [
-      FilledButton.icon(
-        onPressed: () => Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => const InvoiceUploadScreen()),
-        ),
-        icon: const Icon(Icons.upload_file),
-        label: const Text('Upload Invoice'),
-      ),
-      OutlinedButton(
-        onPressed: () => Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => const InvoiceEmailScreen()),
-        ),
-        child: const Text('View Invoice Email'),
-      ),
-      OutlinedButton(
-        onPressed: () => Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => const PosIntegrationsScreen()),
-        ),
-        child: const Text('Connect POS'),
-      ),
-      OutlinedButton(
+      _SetupAction(
+        title: 'Connect Bank',
+        description: 'Track spending, vendors, and recurring expenses.',
+        icon: Icons.account_balance_outlined,
         onPressed: () => Navigator.push(
           context,
           MaterialPageRoute(builder: (_) => const BankAccountsScreen()),
         ),
-        child: const Text('Connect Bank'),
+      ),
+      _SetupAction(
+        title: 'Upload Invoices',
+        description: 'Detect product price changes and purchasing trends.',
+        icon: Icons.upload_file,
+        onPressed: () => Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const InvoiceUploadScreen()),
+        ),
+      ),
+      _SetupAction(
+        title: 'Connect POS',
+        description: 'Track sales and profitability when supported.',
+        icon: Icons.point_of_sale_outlined,
+        onPressed: () => Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const PosIntegrationsScreen()),
+        ),
       ),
     ],
+  );
+}
+
+class _SetupAction extends StatelessWidget {
+  const _SetupAction({
+    required this.title,
+    required this.description,
+    required this.icon,
+    required this.onPressed,
+  });
+  final String title, description;
+  final IconData icon;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) => Card(
+    elevation: 0,
+    child: ListTile(
+      leading: Icon(icon),
+      title: Text(title),
+      subtitle: Text(description),
+      trailing: const Icon(Icons.chevron_right),
+      onTap: onPressed,
+    ),
   );
 }
 
@@ -141,8 +136,15 @@ class _DashboardContent extends StatelessWidget {
   Widget build(BuildContext context) {
     final current = dashboard.summary;
     final previousSummary = previous?.summary;
+    final availability = dashboard.availability;
     final breakdown = [...dashboard.breakdown]
       ..sort((a, b) => b.amount.compareTo(a.amount));
+    final noSources =
+        !availability.bank &&
+        !availability.reviewedInvoices &&
+        !availability.revenue &&
+        !availability.expenses &&
+        !availability.pos;
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
@@ -151,126 +153,371 @@ class _DashboardContent extends StatelessWidget {
         const SizedBox(height: 16),
         const NeedsAttentionPreview(),
         const SizedBox(height: 20),
-        Card(
-          key: const Key('profit-card'),
-          color: Theme.of(context).colorScheme.primaryContainer,
-          elevation: 0,
-          child: Padding(
-            padding: const EdgeInsets.all(20),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Estimated Profit',
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  formatCurrency(current.estimatedProfit),
-                  style: Theme.of(context).textTheme.headlineLarge?.copyWith(
-                    fontWeight: FontWeight.w700,
-                    color: Theme.of(context).colorScheme.onPrimaryContainer,
+        if (noSources) ...[
+          const EmptyState(
+            message: 'Connect a data source to start building your dashboard.',
+          ),
+          const Text(
+            'FundWell only shows financial insights supported by your connected data.',
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 20),
+          const _FirstRunActions(),
+        ],
+        if (availability.profitability) ...[
+          Card(
+            key: const Key('profit-card'),
+            color: Theme.of(context).colorScheme.primaryContainer,
+            elevation: 0,
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Estimated Profit',
+                    style: Theme.of(context).textTheme.titleMedium,
                   ),
-                ),
-                const SizedBox(height: 10),
-                PercentageChange(
-                  current: current.estimatedProfit,
-                  previous: previousSummary?.estimatedProfit,
-                ),
-              ],
+                  const SizedBox(height: 6),
+                  Text(
+                    formatCurrency(current.estimatedProfit),
+                    style: Theme.of(context).textTheme.headlineLarge?.copyWith(
+                      fontWeight: FontWeight.w700,
+                      color: Theme.of(context).colorScheme.onPrimaryContainer,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  PercentageChange(
+                    current: current.estimatedProfit,
+                    previous: previousSummary?.estimatedProfit,
+                  ),
+                ],
+              ),
             ),
           ),
-        ),
-        const SizedBox(height: 16),
-        LayoutBuilder(
-          builder: (context, constraints) {
-            final cardWidth = math.max(140.0, (constraints.maxWidth - 12) / 2);
-            return Wrap(
-              spacing: 12,
-              runSpacing: 12,
-              children: [
-                FinancialMetricCard(
-                  key: const Key('revenue-card'),
-                  width: cardWidth,
-                  label: 'Revenue',
-                  value: formatCurrency(current.revenue),
-                  current: current.revenue,
-                  previous: previousSummary?.revenue,
-                ),
-                FinancialMetricCard(
-                  key: const Key('expenses-card'),
-                  width: cardWidth,
-                  label: 'Expenses',
-                  value: formatCurrency(current.expenses),
-                  current: current.expenses,
-                  previous: previousSummary?.expenses,
-                  favorableWhenIncrease: false,
-                ),
-                FinancialMetricCard(
-                  key: const Key('margin-card'),
-                  width: cardWidth,
-                  label: 'Profit Margin',
-                  value: formatPercent(current.profitMargin),
-                  current: current.profitMargin,
-                  previous: previousSummary?.profitMargin,
-                ),
-              ],
-            );
-          },
-        ),
-        const SizedBox(height: 28),
-        Text(
-          'Key Costs',
-          style: Theme.of(
-            context,
-          ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
-        ),
-        const SizedBox(height: 12),
-        Card(
-          elevation: 0,
-          child: Padding(
-            padding: const EdgeInsets.all(16),
+          const SizedBox(height: 16),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final cardWidth = math.max(
+                140.0,
+                (constraints.maxWidth - 12) / 2,
+              );
+              return Wrap(
+                spacing: 12,
+                runSpacing: 12,
+                children: [
+                  FinancialMetricCard(
+                    key: const Key('revenue-card'),
+                    width: cardWidth,
+                    label: 'Revenue',
+                    value: formatCurrency(current.revenue),
+                    current: current.revenue,
+                    previous: previousSummary?.revenue,
+                  ),
+                  FinancialMetricCard(
+                    key: const Key('expenses-card'),
+                    width: cardWidth,
+                    label: 'Expenses',
+                    value: formatCurrency(current.expenses),
+                    current: current.expenses,
+                    previous: previousSummary?.expenses,
+                    favorableWhenIncrease: false,
+                  ),
+                  FinancialMetricCard(
+                    key: const Key('margin-card'),
+                    width: cardWidth,
+                    label: 'Profit Margin',
+                    value: formatPercent(current.profitMargin),
+                    current: current.profitMargin,
+                    previous: previousSummary?.profitMargin,
+                  ),
+                ],
+              );
+            },
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            'Estimated from recorded revenue and expenses for this period.',
+          ),
+        ] else if (!noSources) ...[
+          Text(
+            'Profit unavailable',
+            style: Theme.of(
+              context,
+            ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 6),
+          Text(_missingProfitMessage(availability)),
+        ],
+        if (availability.revenue && !availability.profitability) ...[
+          const SizedBox(height: 20),
+          _PrimaryAmountCard(
+            key: const Key('revenue-only-card'),
+            label: 'Recorded revenue',
+            amount: current.revenue,
+            note: availability.pos
+                ? 'Sales recorded from your connected revenue source.'
+                : 'Revenue recorded for this period.',
+          ),
+        ],
+        if (availability.bank && dashboard.bank != null) ...[
+          const SizedBox(height: 28),
+          _BankSection(insights: dashboard.bank!, previous: previous?.bank),
+        ],
+        if (availability.reviewedInvoices && dashboard.invoices != null) ...[
+          const SizedBox(height: 28),
+          _InvoiceSection(insights: dashboard.invoices!),
+        ],
+        if (availability.bank && availability.reviewedInvoices) ...[
+          const SizedBox(height: 12),
+          const Text(
+            'Bank outflows and invoice purchases are shown separately. Matched records represent the same purchase and are not added together.',
+          ),
+        ],
+        if (availability.expenses && !availability.profitability) ...[
+          const SizedBox(height: 28),
+          _PrimaryAmountCard(
+            label: 'Recorded expenses',
+            amount: current.expenses,
+            note: 'Expenses recorded for this period.',
+          ),
+        ],
+        if (availability.expenses && breakdown.isNotEmpty) ...[
+          const SizedBox(height: 28),
+          Text(
+            'Where your recorded expenses went',
+            style: Theme.of(
+              context,
+            ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 12),
+          Card(
+            elevation: 0,
+            clipBehavior: Clip.antiAlias,
             child: Column(
               children: [
-                CostMetricBar(
-                  key: const Key('food-cost-bar'),
-                  label: 'Food Cost',
-                  percentage: current.foodCostPercentage,
-                ),
-                const SizedBox(height: 20),
-                CostMetricBar(
-                  key: const Key('labor-cost-bar'),
-                  label: 'Labor Cost',
-                  percentage: current.laborCostPercentage,
-                ),
+                for (var index = 0; index < breakdown.length; index++) ...[
+                  ExpenseBreakdownRow(item: breakdown[index]),
+                  if (index != breakdown.length - 1)
+                    const Divider(height: 1, indent: 16, endIndent: 16),
+                ],
               ],
             ),
           ),
-        ),
-        const SizedBox(height: 28),
-        Text(
-          'Where your money went',
-          style: Theme.of(
-            context,
-          ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
-        ),
-        const SizedBox(height: 12),
-        Card(
-          elevation: 0,
-          clipBehavior: Clip.antiAlias,
-          child: Column(
-            children: [
-              for (var index = 0; index < breakdown.length; index++) ...[
-                ExpenseBreakdownRow(item: breakdown[index]),
-                if (index != breakdown.length - 1)
-                  const Divider(height: 1, indent: 16, endIndent: 16),
-              ],
-            ],
+        ],
+        if (availability.profitability) ...[
+          const SizedBox(height: 28),
+          Text(
+            'Key Costs',
+            style: Theme.of(
+              context,
+            ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
           ),
-        ),
+          const SizedBox(height: 12),
+          Card(
+            elevation: 0,
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                children: [
+                  CostMetricBar(
+                    key: const Key('food-cost-bar'),
+                    label: 'Food Cost',
+                    percentage: current.foodCostPercentage,
+                  ),
+                  const SizedBox(height: 20),
+                  CostMetricBar(
+                    key: const Key('labor-cost-bar'),
+                    label: 'Labor Cost',
+                    percentage: current.laborCostPercentage,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
       ],
     );
   }
+}
+
+String _missingProfitMessage(DashboardAvailability value) {
+  if (!value.revenue && !value.expenses) {
+    return 'Add revenue and expense data to calculate estimated profit.';
+  }
+  if (!value.revenue) {
+    return 'Revenue data is missing, so profit and margins are not shown.';
+  }
+  if (!value.expenses || !value.bank || !value.reviewedInvoices) {
+    return 'More complete cost data is needed before profit and margins can be estimated.';
+  }
+  return 'More complete financial data is needed before profit can be estimated.';
+}
+
+class _PrimaryAmountCard extends StatelessWidget {
+  const _PrimaryAmountCard({
+    required this.label,
+    required this.amount,
+    required this.note,
+    super.key,
+  });
+  final String label, note;
+  final double amount;
+
+  @override
+  Widget build(BuildContext context) => Card(
+    elevation: 0,
+    child: Padding(
+      padding: const EdgeInsets.all(18),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label, style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 6),
+          Text(
+            formatCurrency(amount),
+            style: Theme.of(
+              context,
+            ).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 8),
+          Text(note, style: Theme.of(context).textTheme.bodySmall),
+        ],
+      ),
+    ),
+  );
+}
+
+class _BankSection extends StatelessWidget {
+  const _BankSection({required this.insights, required this.previous});
+  final BankDashboardInsights insights;
+  final BankDashboardInsights? previous;
+
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Text(
+        'Bank activity',
+        style: Theme.of(
+          context,
+        ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
+      ),
+      const SizedBox(height: 10),
+      _PrimaryAmountCard(
+        key: const Key('bank-outflows-card'),
+        label: 'Tracked bank outflows',
+        amount: insights.trackedOutflows,
+        note: 'Tracked bank spending is not necessarily total business costs.',
+      ),
+      PercentageChange(
+        current: insights.trackedOutflows,
+        previous: previous?.trackedOutflows ?? insights.previousTrackedOutflows,
+        favorableWhenIncrease: false,
+      ),
+      const SizedBox(height: 10),
+      Text(
+        '${insights.uncategorizedCount} uncategorized · ${insights.unmatchedCount} unmatched · ${insights.matchedInvoiceCount} matched to invoices',
+      ),
+      if (insights.categoryBreakdown.isNotEmpty) ...[
+        const SizedBox(height: 14),
+        _NamedAmountList(
+          title: 'Bank spending by category',
+          values: insights.categoryBreakdown,
+        ),
+      ],
+      if (insights.topVendors.isNotEmpty) ...[
+        const SizedBox(height: 14),
+        _NamedAmountList(
+          title: 'Top bank vendors',
+          values: insights.topVendors,
+        ),
+      ],
+      if (insights.largestExpenses.isNotEmpty) ...[
+        const SizedBox(height: 14),
+        _NamedAmountList(
+          title: 'Largest tracked outflows',
+          values: insights.largestExpenses
+              .map((item) => NamedAmount(item.name, item.amount))
+              .toList(),
+        ),
+      ],
+    ],
+  );
+}
+
+class _InvoiceSection extends StatelessWidget {
+  const _InvoiceSection({required this.insights});
+  final InvoiceDashboardInsights insights;
+
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Text(
+        'Invoice activity',
+        style: Theme.of(
+          context,
+        ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
+      ),
+      const SizedBox(height: 10),
+      _PrimaryAmountCard(
+        key: const Key('invoice-purchases-card'),
+        label: 'Reviewed invoice purchases',
+        amount: insights.reviewedPurchases,
+        note: 'Purchases are not confirmed payments.',
+      ),
+      PercentageChange(
+        current: insights.reviewedPurchases,
+        previous: insights.previousReviewedPurchases,
+        favorableWhenIncrease: false,
+      ),
+      Text(
+        '${insights.reviewedCount} reviewed · ${insights.requiringReviewCount} need review · ${insights.unmatchedCount} unmatched',
+      ),
+      if (insights.topVendors.isNotEmpty) ...[
+        const SizedBox(height: 14),
+        _NamedAmountList(
+          title: 'Top invoice vendors',
+          values: insights.topVendors,
+        ),
+      ],
+    ],
+  );
+}
+
+class _NamedAmountList extends StatelessWidget {
+  const _NamedAmountList({required this.title, required this.values});
+  final String title;
+  final List<NamedAmount> values;
+
+  @override
+  Widget build(BuildContext context) => Card(
+    elevation: 0,
+    child: Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(title, style: Theme.of(context).textTheme.titleSmall),
+          const SizedBox(height: 8),
+          for (final value in values)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Row(
+                children: [
+                  Expanded(child: Text(value.name)),
+                  Text(
+                    formatCurrency(value.amount),
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    ),
+  );
 }
 
 class _DashboardHeader extends ConsumerWidget {
