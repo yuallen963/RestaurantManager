@@ -1,10 +1,14 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createHash } from 'crypto';
-import { ReviewStatus } from '@prisma/client';
+import { Prisma, ReviewStatus } from '@prisma/client';
 import { OrganizationAccessService } from '../organizations/organization-access.service';
 import { PrismaService } from '../prisma.service';
 import { PriceChangeDirection, PriceChangeSort, PriceHistoryQuery, PriceIntelligenceQuery } from './dto';
+import { canonicalPackageBasis } from '../product-matches/product-matches.service';
+
+type DecimalLike = Prisma.Decimal | number | string;
+const decimal = (value: DecimalLike) => value instanceof Prisma.Decimal ? value : new Prisma.Decimal(value.toString());
 
 export interface TrustedPriceObservation {
   invoiceId: string;
@@ -17,8 +21,8 @@ export interface TrustedPriceObservation {
   sku?: string | null;
   unit?: string | null;
   packSize?: string | null;
-  unitPrice?: number | null;
-  quantity?: number | null;
+  unitPrice?: DecimalLike | null;
+  quantity?: DecimalLike | null;
 }
 
 export interface PriceAnalyticsOptions {
@@ -27,7 +31,7 @@ export interface PriceAnalyticsOptions {
   absoluteThreshold: number;
 }
 
-const rounded = (value: number, places = 2) => Number(value.toFixed(places));
+const rounded = (value: Prisma.Decimal, places = 2) => Number(value.toFixed(places));
 const canonical = (value: string) => value.trim().toUpperCase().replace(/[^A-Z0-9/]+/g, ' ').replace(/\s+/g, ' ').trim();
 export const canonicalDescription = canonical;
 
@@ -43,8 +47,8 @@ function productKey(row: TrustedPriceObservation) {
 function purchasingBasis(row: TrustedPriceObservation) {
   const unit = row.unit ? canonical(row.unit) : '';
   if (!unit) return null;
-  const pack = row.packSize ? canonical(row.packSize) : '';
-  return `unit:${unit}|pack:${pack || 'UNSPECIFIED'}`;
+  const pack = row.packSize ? canonicalPackageBasis(row.packSize) : null;
+  return pack ? `unit:${unit}|pack:${pack}` : null;
 }
 
 function opaqueItemKey(vendorId: string, product: string, basis: string) {
@@ -84,7 +88,7 @@ export interface PriceChangeItem {
 export function analyzePriceObservations(rows: TrustedPriceObservation[], options: PriceAnalyticsOptions) {
   const groups = new Map<string, TrustedPriceObservation[]>();
   for (const row of rows) {
-    if (row.unitPrice == null || !Number.isFinite(row.unitPrice) || row.unitPrice <= 0) continue;
+    if (row.unitPrice == null || !decimal(row.unitPrice).isFinite() || decimal(row.unitPrice).lte(0)) continue;
     const product = productKey(row);
     const basis = purchasingBasis(row);
     if (!product || !basis) continue;
@@ -98,20 +102,20 @@ export function analyzePriceObservations(rows: TrustedPriceObservation[], option
     observations.sort((a, b) => a.invoiceDate.getTime() - b.invoiceDate.getTime() || a.invoiceId.localeCompare(b.invoiceId) || a.lineNumber - b.lineNumber);
     const previous = observations.at(-2)!;
     const current = observations.at(-1)!;
-    const previousPrice = previous.unitPrice!;
-    const currentPrice = current.unitPrice!;
-    if (previousPrice <= 0) continue;
-    const absoluteChange = currentPrice - previousPrice;
-    const percentageChange = absoluteChange / previousPrice * 100;
-    if (!Number.isFinite(percentageChange)) continue;
-    const knownQuantity = observations.filter((row) => row.quantity != null && Number.isFinite(row.quantity!) && row.quantity! >= 0);
+    const previousPrice = decimal(previous.unitPrice!);
+    const currentPrice = decimal(current.unitPrice!);
+    if (previousPrice.lte(0)) continue;
+    const absoluteChange = currentPrice.sub(previousPrice);
+    const percentageChange = absoluteChange.dividedBy(previousPrice).times(100);
+    if (!percentageChange.isFinite()) continue;
+    const knownQuantity = observations.filter((row) => row.quantity != null && decimal(row.quantity!).isFinite() && decimal(row.quantity!).gte(0));
     const monthlyQuantity = knownQuantity.length
-      ? knownQuantity.reduce((sum, row) => sum + row.quantity!, 0) * 30 / options.lookbackDays
+      ? knownQuantity.reduce((sum, row) => sum.add(decimal(row.quantity!)), new Prisma.Decimal(0)).times(30).dividedBy(options.lookbackDays)
       : null;
-    const monthlyImpact = monthlyQuantity == null ? null : absoluteChange * monthlyQuantity;
+    const monthlyImpact = monthlyQuantity == null ? null : absoluteChange.mul(monthlyQuantity);
     let consecutiveIncreases = 0;
     for (let index = observations.length - 1; index > 0; index -= 1) {
-      if (observations[index].unitPrice! <= observations[index - 1].unitPrice!) break;
+      if (decimal(observations[index].unitPrice!).lte(decimal(observations[index - 1].unitPrice!))) break;
       consecutiveIncreases += 1;
     }
     const [, product, basis] = groupKey.match(/^([^|]+)\|(.*)\|(unit:.*)$/) ?? [];
@@ -132,15 +136,15 @@ export function analyzePriceObservations(rows: TrustedPriceObservation[], option
       percentageChange: rounded(percentageChange),
       typicalMonthlyQuantity: monthlyQuantity == null ? null : rounded(monthlyQuantity, 3),
       estimatedMonthlyImpact: monthlyImpact == null ? null : rounded(monthlyImpact),
-      estimatedAnnualImpact: monthlyImpact == null ? null : rounded(monthlyImpact * 12),
+      estimatedAnnualImpact: monthlyImpact == null ? null : rounded(monthlyImpact.times(12)),
       firstSeenAt: observations[0].invoiceDate.toISOString(),
       latestSeenAt: current.invoiceDate.toISOString(),
       consecutiveIncreases,
       history: observations.map((row) => ({
         date: row.invoiceDate.toISOString(),
         invoiceId: row.invoiceId,
-        unitPrice: rounded(row.unitPrice!),
-        quantity: row.quantity == null ? null : rounded(row.quantity, 3),
+        unitPrice: rounded(decimal(row.unitPrice!)),
+        quantity: row.quantity == null ? null : rounded(decimal(row.quantity!), 3),
       })),
     });
   }
@@ -202,8 +206,8 @@ export class PriceIntelligenceService {
         sku: line.sku,
         unit: line.unit,
         packSize: line.packSize,
-        unitPrice: line.unitPrice == null ? null : Number(line.unitPrice.toString()),
-        quantity: line.quantity == null ? null : Number(line.quantity.toString()),
+        unitPrice: line.unitPrice == null ? null : line.unitPrice,
+        quantity: line.quantity == null ? null : line.quantity,
       }];
     });
   }

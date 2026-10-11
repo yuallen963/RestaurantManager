@@ -35,6 +35,7 @@ function setup({
     vendor: { findMany: jest.fn().mockResolvedValue([{ id: 'vendor-a', name: 'Sysco' }]) },
     expenseCategory: { findMany: jest.fn().mockResolvedValue([{ id: 'category-a', name: 'Food Supplies' }]) },
     bankTransaction: { findMany: jest.fn().mockResolvedValue(bankTransactions) },
+    bankConnection: { count: jest.fn().mockResolvedValue(bankTransactions.length ? 1 : 0) },
     invoice: { findMany: jest.fn().mockResolvedValue(reviewedInvoices) },
     insight: {
       upsert: jest.fn().mockImplementation(({ create }: any) => ({ ...create, id: `insight-${create.fingerprint.slice(0, 8)}`, status: insightStatus })),
@@ -148,6 +149,13 @@ describe('NeedsAttentionService', () => {
     expect(result.items.find((item: any) => item.type === 'UNMATCHED_INVOICE')).toMatchObject({ message: expect.stringContaining('possible bank match'), action: { type: 'OPEN_INVOICE', targetId: 'invoice-a' } });
     expect(result.items.find((item: any) => item.type === 'UNMATCHED_PAYMENT')).toMatchObject({ message: expect.stringContaining('possible invoice match'), action: { type: 'OPEN_BANK_TRANSACTION', targetId: 'payment-a' } });
     expect(result.items.map((item: any) => item.type)).not.toContain('MISSING_CREDIT');
+  });
+
+  it('does not call reviewed invoices unpaid when bank coverage is unavailable', async () => {
+    const invoice = { id: 'invoice-a', invoiceNumber: 'INV-10', invoiceDate: new Date('2026-10-04'), total: new Prisma.Decimal(500), reviewStatus: ReviewStatus.REVIEWED, vendor: { name: 'Supplier' }, extractedVendorName: null };
+    const { service } = setup({ prices: [], currentVendors: [], previousVendors: [], currentCategories: [], previousCategories: [], reviewedInvoices: [invoice], bankTransactions: [] });
+    const result = await service.get('user-a', query);
+    expect(result.items.some((item: any) => item.type === 'UNMATCHED_INVOICE')).toBe(false);
   });
 
   it('suppresses dismissed evidence but allows a materially new fingerprint', async () => {

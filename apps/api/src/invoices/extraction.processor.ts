@@ -42,7 +42,7 @@ export function reconcileInvoice(data: ExtractedInvoice): ReconciliationResult {
 
 export function parsePackageSize(raw: string | null): ParsedPackageSize | null {
   if (!raw) return null;
-  const normalized = raw.trim().toUpperCase().replace(/\s+/g, ' ');
+  const normalized = raw.trim().toUpperCase().replace(/×/g, 'X').replace(/\bPOUNDS?\b/g, 'LB').replace(/\s+/g, ' ');
   const packed = normalized.match(/^(\d+(?:\.\d+)?)\s*(?:\/|X)\s*(\d+(?:\.\d+)?)\s*(LB|LBS|OZ|KG|G|CT|EA)$/);
   if (packed) {
     const packCount = Number(packed[1]);

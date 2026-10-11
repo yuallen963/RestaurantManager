@@ -340,9 +340,11 @@ export class DashboardService {
         previousReviewedPurchases: money(previousInvoices._sum.total),
         reviewedCount: reviewedInvoices.length,
         requiringReviewCount: invoiceReviewCount,
-        unmatchedCount: reviewedInvoices.filter(
-          (invoice) => invoice.bankTransactions.length === 0,
-        ).length,
+        unmatchedCount: hasBankData
+          ? reviewedInvoices.filter(
+              (invoice) => invoice.bankTransactions.length === 0,
+            ).length
+          : 0,
         topVendors: this.namedAmounts(invoiceVendorTotals).slice(0, 5),
       },
     };

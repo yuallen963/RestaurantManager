@@ -162,10 +162,16 @@ void main() {
     expect(find.text('Boneless Chicken Breast'), findsOneWidget);
     expect(find.text('\$91.00 → \$106.50 / CASE'), findsOneWidget);
     expect(find.text('↑ 17.0%'), findsOneWidget);
-    expect(find.text('Est. added cost +\$186.00/month'), findsOneWidget);
+    expect(
+      find.textContaining('Est. added cost +\$186.00/month'),
+      findsOneWidget,
+    );
     expect(find.text('Cola Syrup'), findsOneWidget);
     expect(find.text('↓ 10.9%'), findsOneWidget);
-    expect(find.text('Est. savings -\$72.00/month'), findsOneWidget);
+    expect(
+      find.textContaining('Est. savings -\$72.00/month'),
+      findsOneWidget,
+    );
     expect(
       find.text('NITRILE GLOVES LARGE'),
       findsNothing,

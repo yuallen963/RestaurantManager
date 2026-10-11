@@ -1,12 +1,21 @@
 import { ForbiddenException } from '@nestjs/common';
 import { ProductMatchConfidence, ProductMatchStatus } from '@prisma/client';
-import { compareProductItems, generateProductMatchSuggestions, MatchableProductItem, ProductMatchesService } from '../src/product-matches/product-matches.service';
+import { canonicalPackageBasis, compareProductItems, generateProductMatchSuggestions, MatchableProductItem, ProductMatchesService } from '../src/product-matches/product-matches.service';
 
 const item = (overrides: Partial<MatchableProductItem> = {}): MatchableProductItem => ({
   id: 'item-a', vendorId: 'vendor-a', vendorName: 'Sysco', rawDescription: 'CHKN BRST BNLS SKLS 4/10 LB', unit: 'CASE', packSize: '4 x 10 lb', ...overrides,
 });
 
 describe('deterministic cross-vendor product matching', () => {
+  it('treats equivalent package spellings as the same measurable basis', () => {
+    expect(canonicalPackageBasis('4/10 LB')).toBe(canonicalPackageBasis('4×10 lbs'));
+    expect(compareProductItems(item({ packSize: '4/10 LB' }), item({ id: 'item-b', vendorId: 'vendor-b', packSize: '4 x 10 lb', rawDescription: 'CHICKEN BREAST B/S 40LB' }))).not.toBeNull();
+  });
+
+  it('does not equate incompatible or ambiguous packages', () => {
+    expect(canonicalPackageBasis('CS APPROX')).toBeNull();
+    expect(compareProductItems(item({ packSize: '4/10 LB' }), item({ id: 'item-b', vendorId: 'vendor-b', packSize: '40 OZ' }))).toBeNull();
+  });
   it('generates an obvious chicken match with high confidence', () => {
     const result = compareProductItems(item(), item({ id: 'item-b', vendorId: 'vendor-b', vendorName: 'US Foods', rawDescription: 'CHICKEN BREAST B/S 40LB', packSize: '40 lb' }));
     expect(result).toMatchObject({ confidence: ProductMatchConfidence.HIGH });

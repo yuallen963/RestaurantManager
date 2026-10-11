@@ -109,6 +109,10 @@ describe('invoice extraction', () => {
     expect(parsePackageSize('CS APPROX')).toBeNull();
   });
 
+  it('normalizes multiplication glyphs and worded weight units', () => {
+    expect(parsePackageSize('4×10 lbs')).toEqual({ packCount: 4, packUnitQuantity: 10, measurementUnit: 'LB', totalPackageQuantity: 40 });
+  });
+
   it('normalizes valid dates and rejects impossible or future dates', () => {
     expect(normalizeExtractedDate('2026-10-07', new Date('2026-10-09'))).toEqual(new Date('2026-10-07T00:00:00.000Z'));
     expect(normalizeExtractedDate('2026-02-31', new Date('2026-10-09'))).toBeNull();

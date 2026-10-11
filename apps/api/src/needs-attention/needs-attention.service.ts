@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { BankReconciliationStatus, InsightStatus, Prisma, ReviewStatus } from '@prisma/client';
+import { BankConnectionStatus, BankReconciliationStatus, InsightStatus, Prisma, ReviewStatus } from '@prisma/client';
 import { createHash } from 'crypto';
 import { DashboardService } from '../dashboard/dashboard.service';
 import { OrganizationAccessService } from '../organizations/organization-access.service';
@@ -150,7 +150,7 @@ export class NeedsAttentionService {
     const dashboardQuery = { restaurantLocationId: location.id, startDate: period.start.toISOString(), endDate: period.end.toISOString() };
     const previousDashboardQuery = { restaurantLocationId: location.id, startDate: period.previousStart.toISOString(), endDate: period.previousEnd.toISOString() };
     const base = { organizationId: location.organizationId, restaurantLocationId: location.id };
-    const [currentDashboard, previousDashboard, priceData, currentVendors, previousVendors, currentCategories, previousCategories, bankTransactions, reviewedInvoices] = await Promise.all([
+    const [currentDashboard, previousDashboard, priceData, currentVendors, previousVendors, currentCategories, previousCategories, bankTransactions, reviewedInvoices, bankConnectionCount] = await Promise.all([
       this.dashboard.get(userId, dashboardQuery),
       this.dashboard.get(userId, previousDashboardQuery),
       this.prices.changes(userId, { restaurantLocationId: location.id, lookbackDays: 90, sort: PriceChangeSort.LARGEST_MONTHLY_IMPACT, direction: PriceChangeDirection.INCREASE }),
@@ -184,6 +184,13 @@ export class NeedsAttentionService {
         },
         select: { id: true, invoiceNumber: true, invoiceDate: true, total: true, vendor: { select: { name: true } }, extractedVendorName: true },
         orderBy: [{ invoiceDate: 'desc' }, { id: 'asc' }],
+      }),
+      this.prisma.bankConnection.count({
+        where: {
+          organizationId: location.organizationId,
+          status: { not: BankConnectionStatus.DISCONNECTED },
+          accounts: { some: { restaurantLocationId: location.id, active: true } },
+        },
       }),
     ]);
     const vendorIds = [...new Set((currentVendors as any[]).map((row) => row.vendorId).filter(Boolean))] as string[];
@@ -334,18 +341,20 @@ export class NeedsAttentionService {
       }
     }
 
-    for (const invoice of reviewedInvoices) {
+    // Without an active bank connection there is no payment coverage to assess;
+    // showing every reviewed invoice as unmatched would imply an unpaid bill.
+    if (bankConnectionCount > 0) for (const invoice of reviewedInvoices) {
       const vendor = invoice.vendor?.name ?? invoice.extractedVendorName ?? 'Vendor';
       const candidate = bankTransactions.find((transaction) => transaction.suggestedInvoiceId === invoice.id);
       items.push(this.item({
         id: `unmatched-invoice:${invoice.id}`,
-        type: 'UNMATCHED_INVOICE', title: 'Invoice has no linked bank payment',
+        type: 'UNMATCHED_INVOICE', title: 'Invoice has no confirmed bank match',
         subtitle: `${vendor}${invoice.invoiceNumber ? ` · ${invoice.invoiceNumber}` : ''}`,
         currentValue: money(invoice.total), previousValue: 0,
         percentageChange: null, percentagePointChange: null, estimatedMonthlyImpact: null,
-        message: candidate ? 'A possible bank match exists, but it has not been confirmed.' : 'No confirmed bank payment is linked to this reviewed invoice.',
-        whyItMatters: 'Linking supporting records helps prevent duplicate expense recognition and simplifies reconciliation.',
-        nextStep: candidate ? 'Review the suggested bank transaction and confirm it only if the records match.' : 'Check whether payment occurred outside this period or through another account.',
+        message: candidate ? 'A possible bank match exists, but it has not been confirmed.' : 'No matching transaction was found in the available bank data for this period.',
+        whyItMatters: 'Bank coverage is not proof that an invoice is unpaid; confirming the supporting records prevents duplicate expense recognition.',
+        nextStep: candidate ? 'Review the suggested bank transaction and confirm it only if the records match.' : 'Check the bank coverage period or supporting payment records before taking action.',
         evidence: [
           { label: 'Invoice total', value: invoice.total == null ? 'Not recorded' : `$${invoice.total.toFixed(2)}`, recordId: invoice.id },
           ...(candidate ? [{ label: 'Potential match', value: candidate.description, recordId: candidate.id }] : []),

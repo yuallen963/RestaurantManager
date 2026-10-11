@@ -160,6 +160,8 @@ class _PriceChangeCard extends StatelessWidget {
                 ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
               ),
               Text(item.vendorName),
+              if (item.packSize != null)
+                Text('Package: ${item.packSize}'),
               const SizedBox(height: 10),
               Row(
                 children: [
@@ -191,9 +193,15 @@ class _PriceChangeCard extends StatelessWidget {
 String _impactLabel(PriceChangeItem item) {
   final impact = item.estimatedMonthlyImpact;
   if (impact == null) return 'Estimated impact unavailable';
-  return item.isIncrease
+  final basis = item.typicalMonthlyQuantity == null
+      ? 'observed volume unavailable'
+      : item.typicalMonthlyQuantity! < 1
+          ? 'limited observed volume'
+          : 'based on ~${item.typicalMonthlyQuantity!.toStringAsFixed(1)} units/month';
+  final estimate = item.isIncrease
       ? 'Est. added cost +${priceCurrency(impact)}/month'
       : 'Est. savings -${priceCurrency(impact.abs())}/month';
+  return '$estimate ($basis; estimate, not guaranteed)';
 }
 
 class PriceHistoryScreen extends ConsumerWidget {

@@ -3,6 +3,7 @@ import { ProductMatchConfidence, ProductMatchStatus, ReviewStatus } from '@prism
 import { AuditService } from '../audit.service';
 import { OrganizationAccessService } from '../organizations/organization-access.service';
 import { PrismaService } from '../prisma.service';
+import { parsePackageSize } from '../invoices/extraction.processor';
 
 export interface MatchableProductItem {
   id: string;
@@ -44,12 +45,23 @@ function normalizedUnit(value?: string | null) {
 }
 
 export function totalWeightPounds(packSize?: string | null) {
-  if (!packSize) return null;
-  const value = packSize.toUpperCase().replace(/POUNDS?/g, 'LB').replace(/LBS/g, 'LB');
-  const multiplied = value.match(/(\d+(?:\.\d+)?)\s*(?:X|\/)\s*(\d+(?:\.\d+)?)\s*LB/);
-  if (multiplied) return Number(multiplied[1]) * Number(multiplied[2]);
-  const direct = value.match(/(\d+(?:\.\d+)?)\s*LB/);
-  return direct ? Number(direct[1]) : null;
+  const parsed = parsePackageSize(packSize ?? null);
+  if (!parsed || !['LB', 'OZ', 'KG', 'G'].includes(parsed.measurementUnit)) return null;
+  const grams = parsed.totalPackageQuantity * ({ LB: 453.59237, OZ: 28.349523125, KG: 1000, G: 1 }[parsed.measurementUnit] ?? 0);
+  return grams / 453.59237;
+}
+
+/** A conservative comparable package basis. Ambiguous/unparsed packages return null. */
+export function canonicalPackageBasis(packSize?: string | null) {
+  const parsed = parsePackageSize(packSize ?? null);
+  if (!parsed) return null;
+  const weightUnits = new Set(['LB', 'OZ', 'KG', 'G']);
+  const dimension = weightUnits.has(parsed.measurementUnit) ? 'WEIGHT' : ['CT', 'EA'].includes(parsed.measurementUnit) ? 'COUNT' : null;
+  if (!dimension) return null;
+  const base = dimension === 'WEIGHT'
+    ? parsed.totalPackageQuantity * ({ LB: 453.59237, OZ: 28.349523125, KG: 1000, G: 1 }[parsed.measurementUnit] ?? 0)
+    : parsed.totalPackageQuantity;
+  return `${dimension}:${base.toFixed(6)}`;
 }
 
 function incompatibleDescriptors(a: Set<string>, b: Set<string>) {
@@ -61,9 +73,9 @@ export function compareProductItems(a: MatchableProductItem, b: MatchableProduct
   const unitA = normalizedUnit(a.unit);
   const unitB = normalizedUnit(b.unit);
   if (!unitA || !unitB || unitA !== unitB) return null;
-  const weightA = totalWeightPounds(a.packSize);
-  const weightB = totalWeightPounds(b.packSize);
-  if (weightA != null && weightB != null && Math.abs(weightA - weightB) > .01) return null;
+  const basisA = canonicalPackageBasis(a.packSize);
+  const basisB = canonicalPackageBasis(b.packSize);
+  if ((basisA == null) !== (basisB == null) || (basisA != null && basisA !== basisB)) return null;
   const tokensA = descriptionTokens(a);
   const tokensB = descriptionTokens(b);
   if (incompatibleDescriptors(tokensA, tokensB)) return null;
@@ -71,11 +83,11 @@ export function compareProductItems(a: MatchableProductItem, b: MatchableProduct
   const union = new Set([...tokensA, ...tokensB]).size;
   const similarity = union ? intersection / union : 0;
   if (intersection < 2 || similarity < .5) return null;
-  const strongBasis = weightA != null && weightB != null;
+  const strongBasis = basisA != null && basisB != null;
   const confidence = similarity >= .75 && strongBasis ? ProductMatchConfidence.HIGH : similarity >= .6 ? ProductMatchConfidence.MEDIUM : ProductMatchConfidence.LOW;
   return {
     confidence,
-    reason: `${Math.round(similarity * 100)}% normalized description overlap; same ${unitA}${strongBasis ? ` and ${weightA} lb total weight` : ''}`,
+    reason: `${Math.round(similarity * 100)}% normalized description overlap; same ${unitA}${strongBasis ? ` and comparable package basis` : ''}`,
   };
 }
 

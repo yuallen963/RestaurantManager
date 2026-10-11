@@ -53,7 +53,7 @@ describe('DashboardService adaptive dashboard', () => {
     } });
     const result = await new DashboardService(prisma, access()).get('user-a', query);
     expect(result.availability).toMatchObject({ reviewedInvoices: true, profitability: false });
-    expect(result.invoices).toMatchObject({ reviewedPurchases: 300, reviewedCount: 1, requiringReviewCount: 1, unmatchedCount: 1 });
+    expect(result.invoices).toMatchObject({ reviewedPurchases: 300, reviewedCount: 1, requiringReviewCount: 1, unmatchedCount: 0 });
   });
 
   it('keeps matched bank outflows and invoice purchases separate', async () => {
