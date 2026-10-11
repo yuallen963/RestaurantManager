@@ -97,7 +97,7 @@ export class InvoiceExtractionProvider {
     if (!['application/pdf', 'image/jpeg', 'image/png'].includes(mimeType)) throw new Error('Unsupported invoice file type');
     const apiKey = this.config.get<string>('GEMINI_API_KEY');
     if (!apiKey) throw new ServiceUnavailableException('Invoice extraction is not configured');
-    const model = this.config.get<string>('GEMINI_INVOICE_MODEL') ?? 'gemini-2.5-flash-lite';
+    const model = this.config.get<string>('GEMINI_INVOICE_MODEL') ?? 'gemini-3.5-flash-lite';
     const ai = new GoogleGenAI({ apiKey });
     const prompt = `Extract this restaurant vendor invoice, including every page as one invoice. Preserve every line item rawDescription and packSize exactly as printed; never rewrite rawDescription. Combine line items across pages and do not duplicate headers, footers, subtotals, or totals. sourcePage is the one-based page number when clear. normalizedName and productAttributes are interpretations only. Normalize dates to YYYY-MM-DD. Use null when absent or unclear, and list ambiguous field names in uncertainFields. Do not invent package quantities or confidence scores. Return JSON matching the requested schema. Filename: ${fileName}. Today is ${new Date().toISOString().slice(0, 10)}.`;
     const responseSchema = {

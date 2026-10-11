@@ -24,12 +24,12 @@ describe('invoice extraction', () => {
   });
 
   it('maps Gemini structured JSON and usage without changing rawDescription', async () => {
-    const config = { get: jest.fn((key: string) => ({ INVOICE_AI_PROVIDER: 'gemini', GEMINI_API_KEY: 'secret', GEMINI_INVOICE_MODEL: 'gemini-2.5-flash-lite' } as Record<string, string>)[key]) } as any;
+    const config = { get: jest.fn((key: string) => ({ INVOICE_AI_PROVIDER: 'gemini', GEMINI_API_KEY: 'secret', GEMINI_INVOICE_MODEL: 'gemini-3.5-flash-lite' } as Record<string, string>)[key]) } as any;
     const provider = new InvoiceExtractionProvider(config);
     const response = { text: JSON.stringify(extraction), usageMetadata: { promptTokenCount: 12, candidatesTokenCount: 34, totalTokenCount: 46 } };
     mockGenerateContent.mockResolvedValue(response);
     const result = await provider.extract(Buffer.from('pdf'), 'application/pdf', 'invoice.pdf');
-    expect(result).toEqual({ data: extraction, provider: 'gemini', model: 'gemini-2.5-flash-lite', usage: { input_tokens: 12, output_tokens: 34, total_tokens: 46 } });
+    expect(result).toEqual({ data: extraction, provider: 'gemini', model: 'gemini-3.5-flash-lite', usage: { input_tokens: 12, output_tokens: 34, total_tokens: 46 } });
     expect(result.data.lineItems[0].rawDescription).toBe('CHKN BRST BNLS SKLS 4/10 LB');
     mockGenerateContent.mockReset();
   });
