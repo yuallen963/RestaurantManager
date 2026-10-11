@@ -18,6 +18,11 @@ describe('invoice extraction', () => {
     expect(provider.isConfigured()).toBe(true);
   });
 
+  it('falls back to Gemini when only a Gemini key is available', () => {
+    const config = { get: jest.fn((key: string) => key === 'GEMINI_API_KEY' ? 'secret' : undefined) } as any;
+    expect(new InvoiceExtractionProvider(config).isConfigured()).toBe(true);
+  });
+
   it('maps Gemini structured JSON and usage without changing rawDescription', async () => {
     const config = { get: jest.fn((key: string) => ({ INVOICE_AI_PROVIDER: 'gemini', GEMINI_API_KEY: 'secret', GEMINI_INVOICE_MODEL: 'gemini-2.5-flash-lite' } as Record<string, string>)[key]) } as any;
     const provider = new InvoiceExtractionProvider(config);

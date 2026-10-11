@@ -54,7 +54,8 @@ export class InvoiceExtractionProvider {
 
   constructor(private readonly config: ConfigService) {}
   private provider() {
-    const value = (this.config.get<string>('INVOICE_AI_PROVIDER') ?? 'openai').trim().toLowerCase();
+    const configured = this.config.get<string>('INVOICE_AI_PROVIDER')?.trim().toLowerCase();
+    const value = configured || (this.config.get<string>('GEMINI_API_KEY') && !this.config.get<string>('OPENAI_API_KEY') ? 'gemini' : 'openai');
     if (value !== 'openai' && value !== 'gemini') throw new ServiceUnavailableException(`Unsupported invoice AI provider: ${value}`);
     return value;
   }
