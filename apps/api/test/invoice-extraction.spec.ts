@@ -18,6 +18,7 @@ describe('invoice extraction', () => {
   it('flags subtotal and final-total discrepancies without changing extracted values', () => {
     expect(reconcileInvoice({ ...extraction, subtotal: 99 }).reasons).toEqual(['SUBTOTAL_MISMATCH', 'LINE_EXTENSION_MISMATCH', 'TOTAL_MISMATCH']);
     expect(reconcileInvoice({ ...extraction, subtotal: 100, tax: 6, otherFees: 0, total: 105 }).reasons).toContain('TOTAL_MISMATCH');
+    expect(reconcileInvoice({ ...extraction, subtotal: 1320, tax: 91.9, otherFees: null, total: 1411 }).reasons).toContain('TOTAL_MISMATCH');
     expect(reconcileInvoice({ ...extraction, subtotal: null, tax: null, otherFees: null, total: null }).reasons).toEqual([]);
   });
 

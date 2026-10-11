@@ -17,6 +17,7 @@ function setup() {
       delete: jest.fn().mockResolvedValue(invoice),
     },
     vendor: { findFirst: jest.fn().mockResolvedValue(null), findMany: jest.fn().mockResolvedValue([]) },
+    invoiceLineItem: { findFirst: jest.fn().mockResolvedValue(null) },
   };
   const access: any = { requireMember: jest.fn().mockResolvedValue({ role: 'OWNER' }) };
   const audit: any = { log: jest.fn().mockResolvedValue({}) };
@@ -128,6 +129,27 @@ describe('InvoicesService', () => {
   it('validates non-negative metadata amounts', async () => {
     const { service } = setup();
     await expect(service.update('user-a', 'invoice-a', { total: '-1' })).rejects.toThrow('Total cannot be negative');
+  });
+
+  it('preserves omitted financial fields during a partial metadata update', async () => {
+    const { service, prisma } = setup();
+    await service.update('user-a', 'invoice-a', { status: 'COMPLETED' as any });
+    expect(prisma.invoice.update).toHaveBeenCalledWith({
+      where: { id: 'invoice-a' },
+      data: expect.objectContaining({ subtotal: undefined, tax: undefined, total: undefined, status: 'COMPLETED' }),
+    });
+  });
+
+  it('sets the terminal invoice status when approval marks an invoice reviewed', async () => {
+    const { service, prisma } = setup();
+    prisma.invoice.update
+      .mockResolvedValueOnce({ ...invoice, extractedVendorName: 'Vendor', invoiceDate: new Date('2026-10-01'), total: '100' })
+      .mockResolvedValueOnce({ ...invoice, status: 'COMPLETED', reviewStatus: 'REVIEWED' });
+    await service.review('user-a', 'invoice-a', { markReviewed: true });
+    expect(prisma.invoice.update).toHaveBeenLastCalledWith({
+      where: { id: 'invoice-a' },
+      data: expect.objectContaining({ status: 'COMPLETED', reviewStatus: 'REVIEWED' }),
+    });
   });
 
   it('authorizes deletion, removes the row and storage object, and audits it', async () => {

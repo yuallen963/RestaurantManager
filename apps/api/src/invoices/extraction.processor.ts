@@ -23,8 +23,9 @@ export function reconcileInvoice(data: ExtractedInvoice): ReconciliationResult {
     const subtotal = money(data.subtotal);
     if (!matches(sum, subtotal)) { reasons.push('SUBTOTAL_MISMATCH', 'LINE_EXTENSION_MISMATCH'); details.push({ code: 'SUBTOTAL_MISMATCH', expected: subtotal.toFixed(2), actual: sum.toFixed(2) }); }
   }
-  if (data.subtotal !== null && data.tax !== null && data.otherFees !== null && data.total !== null) {
-    const calculated = money(data.subtotal).add(money(data.tax)).add(money(data.otherFees));
+  if (data.subtotal !== null && data.tax !== null && data.total !== null) {
+    // Preserve the raw null, but reconcile it as no separately extracted fee.
+    const calculated = money(data.subtotal).add(money(data.tax)).add(money(data.otherFees ?? 0));
     const total = money(data.total);
     if (!matches(calculated, total)) { reasons.push('TOTAL_MISMATCH'); details.push({ code: 'TOTAL_MISMATCH', expected: total.toFixed(2), actual: calculated.toFixed(2) }); }
   }
