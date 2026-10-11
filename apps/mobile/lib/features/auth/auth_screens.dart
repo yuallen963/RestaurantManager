@@ -4,6 +4,48 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../main.dart' show AuthScreen, api;
 
+class VerifyEmailLinkScreen extends ConsumerStatefulWidget {
+  const VerifyEmailLinkScreen({super.key, required this.token});
+  final String token;
+  @override
+  ConsumerState<VerifyEmailLinkScreen> createState() =>
+      _VerifyEmailLinkScreenState();
+}
+
+class _VerifyEmailLinkScreenState extends ConsumerState<VerifyEmailLinkScreen> {
+  bool complete = false;
+  String? error;
+  @override
+  void initState() {
+    super.initState();
+    verify();
+  }
+
+  Future<void> verify() async {
+    try {
+      await ref.read(api).post('/auth/verify-email', data: {'token': widget.token});
+      if (mounted) setState(() => complete = true);
+    } on DioException {
+      if (mounted) setState(() => error = 'Verification link is invalid or expired.');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(title: const Text('Verify email')),
+    body: Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: error != null
+            ? Text(error!, textAlign: TextAlign.center)
+            : complete
+            ? const Text('Email verified. You can continue using FundWell.')
+            : const CircularProgressIndicator(),
+      ),
+    ),
+  );
+}
+
 class CheckEmailScreen extends ConsumerStatefulWidget {
   const CheckEmailScreen({
     super.key,

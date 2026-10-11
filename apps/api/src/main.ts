@@ -9,6 +9,8 @@ async function bootstrap() {
     exclude: [
       { path: '.well-known/apple-app-site-association', method: RequestMethod.GET },
       { path: 'plaid/oauth', method: RequestMethod.GET },
+      { path: 'verify-email', method: RequestMethod.GET },
+      { path: 'reset-password', method: RequestMethod.GET },
     ],
   });
   app.enableCors({ origin: process.env.CORS_ORIGIN?.split(',') ?? true, credentials: true });

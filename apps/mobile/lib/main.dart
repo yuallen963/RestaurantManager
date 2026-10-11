@@ -12,6 +12,7 @@ import 'features/notifications/notification_router.dart';
 import 'features/onboarding/foundation.dart';
 import 'features/onboarding/onboarding_screen.dart';
 import 'features/auth/auth_screens.dart';
+import 'features/auth/auth_links.dart';
 
 const storage = FlutterSecureStorage();
 const apiBaseUrl = String.fromEnvironment(
@@ -45,18 +46,39 @@ final sharedTestUserModeProvider = Provider<bool>(
 const _demoEmail = 'demo@profitlens.local';
 const _demoPassword = 'DemoProfit2026!';
 
-class ProfitApp extends StatelessWidget {
+class ProfitApp extends StatefulWidget {
   const ProfitApp({super.key});
   @override
+  State<ProfitApp> createState() => _ProfitAppState();
+}
+
+class _ProfitAppState extends State<ProfitApp> {
+  final navigatorKey = GlobalKey<NavigatorState>();
+  late final AuthLinkCoordinator links = AuthLinkCoordinator(
+    navigatorKey: navigatorKey,
+  );
+  @override
+  void initState() {
+    super.initState();
+    links.start();
+  }
+  @override
+  void dispose() {
+    links.dispose();
+    super.dispose();
+  }
+  @override
   Widget build(BuildContext context) => MaterialApp(
+    navigatorKey: navigatorKey,
     title: 'Profit Lens',
     theme: ThemeData(useMaterial3: true),
-    home: const AuthBootstrap(),
+    home: AuthBootstrap(onReady: links.ready),
   );
 }
 
 class AuthBootstrap extends ConsumerStatefulWidget {
-  const AuthBootstrap({super.key});
+  const AuthBootstrap({super.key, this.onReady});
+  final VoidCallback? onReady;
   @override
   ConsumerState<AuthBootstrap> createState() => _AuthBootstrapState();
 }
@@ -111,6 +133,7 @@ class _AuthBootstrapState extends ConsumerState<AuthBootstrap> {
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(builder: (_) => const AuthScreen()),
         );
+      widget.onReady?.call();
     } catch (_) {
       if (refresh != null) {
         try {
@@ -133,6 +156,7 @@ class _AuthBootstrapState extends ConsumerState<AuthBootstrap> {
               () => error =
                   'Shared test sign-in is unavailable. Confirm shared test mode is enabled on the API.',
             );
+          widget.onReady?.call();
         }
       } else if (devAutoLogin) {
         try {
@@ -149,11 +173,13 @@ class _AuthBootstrapState extends ConsumerState<AuthBootstrap> {
               () => error =
                   'Development auto-login failed. Start the API and seed the demo account.',
             );
+          widget.onReady?.call();
         }
       } else if (mounted)
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(builder: (_) => const AuthScreen()),
         );
+      if (!sharedTestUserMode && !devAutoLogin) widget.onReady?.call();
     }
   }
 
@@ -174,6 +200,7 @@ class _AuthBootstrapState extends ConsumerState<AuthBootstrap> {
         builder: (_) => completed ? const Home() : const Onboarding(),
       ),
     );
+    widget.onReady?.call();
   }
 
   Future<void> _save(Map<String, dynamic> data) async {

@@ -26,6 +26,12 @@ describe('AuthEmailService', () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
+  it('requires a fixed HTTPS public link origin', () => {
+    const values = { NODE_ENV: 'production', AUTH_EMAIL_PROVIDER: 'resend', RESEND_API_KEY: 'secret', AUTH_FROM_EMAIL: 'FundWell <auth@example.com>' };
+    expect(() => service({ ...values, AUTH_PUBLIC_BASE_URL: 'http://app.example.com' }).assertConfigured()).toThrow('public URL is invalid');
+    expect(() => service({ ...values, AUTH_PUBLIC_BASE_URL: 'https://app.example.com?redirect=https://evil.example' }).assertConfigured()).toThrow('public URL is invalid');
+  });
+
   it('generates production-safe verification and reset links through Resend', async () => {
     const fetch = jest.fn().mockResolvedValue({ ok: true });
     global.fetch = fetch as any;

@@ -11,8 +11,15 @@ export class AuthEmailService {
 
   assertConfigured() {
     if (this.developmentMode) return;
-    if (this.config.get<string>('AUTH_EMAIL_PROVIDER') !== 'resend' || !this.config.get<string>('RESEND_API_KEY') || !this.config.get<string>('AUTH_FROM_EMAIL') || !this.config.get<string>('AUTH_PUBLIC_BASE_URL')) {
+    const publicBaseUrl = this.config.get<string>('AUTH_PUBLIC_BASE_URL');
+    if (this.config.get<string>('AUTH_EMAIL_PROVIDER') !== 'resend' || !this.config.get<string>('RESEND_API_KEY') || !this.config.get<string>('AUTH_FROM_EMAIL') || !publicBaseUrl) {
       throw new ServiceUnavailableException('Transactional email delivery is not configured');
+    }
+    try {
+      const url = new URL(publicBaseUrl);
+      if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) throw new Error();
+    } catch {
+      throw new ServiceUnavailableException('Transactional email public URL is invalid');
     }
   }
 
