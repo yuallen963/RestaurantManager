@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../main.dart' show api;
 import '../dashboard/foundation.dart';
+import 'invoice_upload.dart';
 
 double? _money(dynamic value) {
   if (value == null) return null;
@@ -216,8 +217,18 @@ class InvoiceLineItem {
 }
 
 class InvoiceRepository {
-  InvoiceRepository(this.dio);
+  InvoiceRepository(this.dio, {Dio? storageDio})
+    : _storageDio =
+          storageDio ??
+          Dio(
+            BaseOptions(
+              connectTimeout: const Duration(seconds: 15),
+              sendTimeout: const Duration(seconds: 90),
+              receiveTimeout: const Duration(seconds: 30),
+            ),
+          );
   final Dio dio;
+  final Dio _storageDio;
   Future<List<InvoiceRecord>> list(
     String locationId,
     DateRangeState range,
@@ -256,34 +267,119 @@ class InvoiceRepository {
     required Uint8List bytes,
     ProgressCallback? onProgress,
   }) async {
-    final intent = await dio.post(
-      '/invoices/upload-intent',
-      data: {
-        'restaurantLocationId': locationId,
-        'fileName': fileName,
-        'mimeType': mimeType,
-        'fileSize': bytes.length,
-      },
-    );
+    late final Response<dynamic> intent;
+    try {
+      intent = await dio.post(
+        '/invoices/upload-intent',
+        data: {
+          'restaurantLocationId': locationId,
+          'fileName': fileName,
+          'mimeType': mimeType,
+          'fileSize': bytes.length,
+        },
+      );
+    } on DioException catch (error) {
+      throw _uploadFailure(error, stage: 'upload_intent');
+    }
     final body = Map<String, dynamic>.from(intent.data as Map);
     final invoice = InvoiceRecord.fromJson(
       Map<String, dynamic>.from(body['invoice'] as Map),
     );
-    await Dio().put(
-      body['uploadUrl'] as String,
-      data: Stream.fromIterable([bytes]),
-      options: Options(
-        headers: Map<String, dynamic>.from(body['headers'] as Map),
-        contentType: mimeType,
-      ),
-      onSendProgress: onProgress,
-    );
-    final complete = await dio.post(
-      '/invoices/${invoice.id}/upload-complete',
-      data: {'etag': 'uploaded'},
-    );
+    try {
+      final headers = Map<String, dynamic>.from(body['headers'] as Map)
+        ..['Content-Type'] = mimeType
+        ..['Content-Length'] = bytes.length;
+      await _storageDio.put(
+        body['uploadUrl'] as String,
+        // A Uint8List gives Dio an explicit content length. The previous
+        // unknown-length Stream used chunked transfer encoding, which the
+        // S3-compatible presigned endpoint rejects before creating an object.
+        data: bytes,
+        options: Options(headers: headers, contentType: mimeType),
+        onSendProgress: onProgress,
+      );
+    } on DioException catch (error) {
+      await _cancelIncomplete(invoice.id);
+      throw _uploadFailure(error, stage: 'storage_upload');
+    }
+    late final Response<dynamic> complete;
+    try {
+      complete = await dio.post(
+        '/invoices/${invoice.id}/upload-complete',
+        data: {'etag': 'uploaded'},
+      );
+    } on DioException catch (error) {
+      // A response timeout can occur after completion committed. Check before
+      // deleting or asking the user to retry, avoiding duplicate records.
+      try {
+        final current = await detail(invoice.id);
+        if (current.status != 'PROCESSING') return current;
+        await _cancelIncomplete(invoice.id);
+      } catch (_) {
+        // Preserve the original categorized completion failure.
+      }
+      throw _uploadFailure(error, stage: 'upload_complete');
+    }
     return InvoiceRecord.fromJson(
       Map<String, dynamic>.from(complete.data as Map),
+    );
+  }
+
+  Future<void> _cancelIncomplete(String id) async {
+    try {
+      await dio.delete('/invoices/$id');
+    } catch (_) {
+      // Best effort only. Never replace the useful upload-stage error.
+    }
+  }
+
+  InvoiceUploadFailure _uploadFailure(
+    DioException error, {
+    required String stage,
+  }) {
+    final status = error.response?.statusCode;
+    final data = error.response?.data;
+    final safeCode = data is Map ? data['code']?.toString() : null;
+    final timeout =
+        error.type == DioExceptionType.connectionTimeout ||
+        error.type == DioExceptionType.sendTimeout ||
+        error.type == DioExceptionType.receiveTimeout;
+    final category = timeout
+        ? InvoiceUploadErrorCategory.networkTimeout
+        : status == 401
+        ? InvoiceUploadErrorCategory.unauthorized
+        : stage == 'storage_upload' && status == 403
+        ? InvoiceUploadErrorCategory.authorizationExpired
+        : stage == 'storage_upload'
+        ? InvoiceUploadErrorCategory.storageFailed
+        : stage == 'upload_complete'
+        ? InvoiceUploadErrorCategory.completionFailed
+        : InvoiceUploadErrorCategory.intentFailed;
+    final message = switch (category) {
+      InvoiceUploadErrorCategory.networkTimeout =>
+        'The upload connection timed out. Check your connection and try again.',
+      InvoiceUploadErrorCategory.unauthorized =>
+        'Your session expired. Restart FundWell and try again.',
+      InvoiceUploadErrorCategory.authorizationExpired =>
+        'The upload authorization expired. Please try the upload again.',
+      InvoiceUploadErrorCategory.storageFailed =>
+        'The photo could not be uploaded to secure storage. Please try again.',
+      InvoiceUploadErrorCategory.completionFailed =>
+        'The photo uploaded, but invoice registration failed. Please try again.',
+      _ => 'Unable to start the invoice upload. Please try again.',
+    };
+    logInvoiceUpload(
+      stage: stage,
+      category: category.name,
+      statusCode: status,
+      safeCode: safeCode,
+    );
+    return InvoiceUploadFailure(
+      category,
+      message,
+      stage: stage,
+      statusCode: status,
+      safeCode: safeCode,
     );
   }
 
@@ -389,6 +485,22 @@ class InvoiceUploadController extends StateNotifier<InvoiceUploadState> {
   final Ref ref;
   void selecting() =>
       state = const InvoiceUploadState(InvoiceUploadPhase.selecting);
+  void fail(
+    InvoiceUploadFailure error, {
+    int? fileSize,
+    InvoiceFileFormat? format,
+  }) {
+    logInvoiceUpload(
+      stage: error.stage,
+      category: error.category.name,
+      statusCode: error.statusCode,
+      safeCode: error.safeCode,
+      fileSize: fileSize,
+      format: format,
+    );
+    state = InvoiceUploadState(InvoiceUploadPhase.failed, error: error.message);
+  }
+
   Future<InvoiceRecord?> upload({
     required String locationId,
     required String fileName,
@@ -420,7 +532,25 @@ class InvoiceUploadController extends StateNotifier<InvoiceUploadState> {
       );
       ref.invalidate(invoiceListProvider);
       return invoice;
+    } on InvoiceUploadFailure catch (error) {
+      logInvoiceUpload(
+        stage: error.stage,
+        category: error.category.name,
+        statusCode: error.statusCode,
+        safeCode: error.safeCode,
+        fileSize: bytes.length,
+      );
+      state = InvoiceUploadState(
+        InvoiceUploadPhase.failed,
+        error: error.message,
+      );
+      return null;
     } catch (_) {
+      logInvoiceUpload(
+        stage: 'unknown',
+        category: 'unexpected',
+        fileSize: bytes.length,
+      );
       state = const InvoiceUploadState(
         InvoiceUploadPhase.failed,
         error: 'Unable to upload invoice. Please try again.',

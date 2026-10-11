@@ -4,12 +4,12 @@ import 'package:dio/dio.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:image_picker/image_picker.dart';
 
 import '../dashboard/foundation.dart';
 import '../dashboard/home_screen.dart' show formatCurrency;
 import '../expenses/foundation.dart';
 import 'foundation.dart';
+import 'invoice_upload.dart';
 
 class InvoiceListScreen extends ConsumerWidget {
   const InvoiceListScreen({super.key});
@@ -101,91 +101,94 @@ class InvoiceUploadScreen extends ConsumerWidget {
 
   Future<void> _pickFile(BuildContext context, WidgetRef ref) async {
     ref.read(invoiceUploadProvider.notifier).selecting();
-    final result = await FilePicker.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: const ['pdf', 'jpg', 'jpeg', 'png'],
-      withData: true,
-    );
-    if (result == null) {
-      ref.read(invoiceUploadProvider.notifier).reset();
-      return;
+    try {
+      final result = await FilePicker.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: const ['pdf', 'jpg', 'jpeg', 'png'],
+        withData: true,
+      );
+      if (result == null) {
+        ref.read(invoiceUploadProvider.notifier).reset();
+        return;
+      }
+      final file = result.files.single;
+      final prepared = prepareInvoiceFile(
+        originalName: file.name,
+        bytes: file.bytes ?? Uint8List(0),
+      );
+      if (!context.mounted) return;
+      await _upload(context, ref, file: prepared);
+    } on InvoiceUploadFailure catch (error) {
+      ref.read(invoiceUploadProvider.notifier).fail(error);
+    } catch (_) {
+      ref
+          .read(invoiceUploadProvider.notifier)
+          .fail(
+            const InvoiceUploadFailure(
+              InvoiceUploadErrorCategory.unreadablePhoto,
+              'Unable to read the selected file. Please choose it again.',
+              stage: 'file_read',
+            ),
+          );
     }
-    final file = result.files.single;
-    if (!context.mounted) return;
-    await _upload(
-      context,
-      ref,
-      fileName: file.name,
-      extension: file.extension,
-      bytes: file.bytes,
-    );
   }
 
   Future<void> _pickPhoto(BuildContext context, WidgetRef ref) async {
     ref.read(invoiceUploadProvider.notifier).selecting();
-    final file = await ImagePicker().pickImage(source: ImageSource.gallery);
-    if (file == null) {
-      ref.read(invoiceUploadProvider.notifier).reset();
-      return;
+    try {
+      final file = await ref.read(invoicePhotoSourceProvider).pick();
+      if (file == null) {
+        ref.read(invoiceUploadProvider.notifier).reset();
+        return;
+      }
+      // Copy the temporary picker result into memory immediately. This avoids
+      // losing access when iOS reclaims the security-scoped temporary file.
+      final bytes = await file.readAsBytes();
+      final prepared = prepareInvoiceFile(
+        originalName: file.name,
+        bytes: bytes,
+        pickedFromPhotoLibrary: true,
+      );
+      logInvoiceUpload(
+        stage: 'file_prepared',
+        category: 'success',
+        format: prepared.format,
+        fileSize: prepared.bytes.length,
+      );
+      if (!context.mounted) return;
+      await _upload(context, ref, file: prepared);
+    } on InvoiceUploadFailure catch (error) {
+      ref.read(invoiceUploadProvider.notifier).fail(error);
+    } catch (_) {
+      ref
+          .read(invoiceUploadProvider.notifier)
+          .fail(
+            const InvoiceUploadFailure(
+              InvoiceUploadErrorCategory.unreadablePhoto,
+              'Unable to read the selected photo. Please choose it again.',
+              stage: 'file_read',
+            ),
+          );
     }
-    final bytes = await file.readAsBytes();
-    if (!context.mounted) return;
-    await _upload(
-      context,
-      ref,
-      fileName: file.name,
-      extension: file.name.split('.').last,
-      bytes: bytes,
-    );
   }
 
   Future<void> _upload(
     BuildContext context,
     WidgetRef ref, {
-    required String fileName,
-    required String? extension,
-    required List<int>? bytes,
+    required PreparedInvoiceFile file,
   }) async {
     final location = ref.read(activeLocationProvider);
     if (location == null) {
       ref.read(invoiceUploadProvider.notifier).reset();
       return;
     }
-    final mime = switch (extension?.toLowerCase()) {
-      'pdf' => 'application/pdf',
-      'png' => 'image/png',
-      'jpg' || 'jpeg' => 'image/jpeg',
-      _ => null,
-    };
-    if (bytes == null || mime == null) {
-      ref.read(invoiceUploadProvider.notifier).reset();
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Select a PDF, JPG, JPEG, or PNG file.'),
-          ),
-        );
-      }
-      return;
-    }
-    if (bytes.length > 15 * 1024 * 1024) {
-      ref.read(invoiceUploadProvider.notifier).reset();
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Invoice files must be 15 MB or smaller.'),
-          ),
-        );
-      }
-      return;
-    }
     final invoice = await ref
         .read(invoiceUploadProvider.notifier)
         .upload(
           locationId: location.id,
-          fileName: fileName,
-          mimeType: mime,
-          bytes: Uint8List.fromList(bytes),
+          fileName: file.fileName,
+          mimeType: file.mimeType,
+          bytes: file.bytes,
         );
     if (invoice != null && context.mounted) {
       Navigator.pushReplacement(
