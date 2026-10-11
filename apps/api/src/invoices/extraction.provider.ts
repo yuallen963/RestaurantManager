@@ -111,7 +111,18 @@ export class InvoiceExtractionProvider {
       },
     };
     try {
-      const response = await ai.models.generateContent({ model, contents: [{ role: 'user', parts: [{ inlineData: { mimeType, data: file.toString('base64') } }, { text: prompt }] }], config: { responseMimeType: 'application/json', responseSchema } });
+      let response;
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        try {
+          response = await ai.models.generateContent({ model, contents: [{ role: 'user', parts: [{ inlineData: { mimeType, data: file.toString('base64') } }, { text: prompt }] }], config: { responseMimeType: 'application/json', responseSchema } });
+          break;
+        } catch (error) {
+          const status = (error as { status?: number }).status;
+          if (![429, 500, 502, 503, 504].includes(status ?? 0) || attempt === 2) throw error;
+          await new Promise((resolve) => setTimeout(resolve, 500 * (2 ** attempt)));
+        }
+      }
+      if (!response) throw new Error('Extraction provider returned no response');
       const text = response.text?.trim();
       if (!text) throw new Error('Extraction provider returned no structured result');
       const parsed = JSON.parse(text) as { lineItems?: Array<{ productAttributes?: Record<string, unknown> | null }> } & Record<string, unknown>;

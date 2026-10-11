@@ -8,6 +8,37 @@ import { InvoiceStorageService } from './storage.service';
 
 const clamp = (value: number) => Math.max(0, Math.min(1, value));
 export type ParsedPackageSize = { packCount: number | null; packUnitQuantity: number | null; measurementUnit: string; totalPackageQuantity: number };
+export const MONEY_TOLERANCE = new Prisma.Decimal('0.01');
+
+export type ReconciliationResult = { reasons: string[]; details: Array<{ code: string; expected: string; actual: string }> };
+const money = (value: number) => new Prisma.Decimal(value);
+const matches = (a: Prisma.Decimal, b: Prisma.Decimal) => a.sub(b).abs().lte(MONEY_TOLERANCE);
+
+export function reconcileInvoice(data: ExtractedInvoice): ReconciliationResult {
+  const reasons: string[] = [];
+  const details: ReconciliationResult['details'] = [];
+  const extended = data.lineItems.map((line) => line.extendedPrice).filter((value): value is number => value !== null);
+  if (data.subtotal !== null && extended.length > 0 && extended.length === data.lineItems.length) {
+    const sum = extended.reduce((total, value) => total.add(money(value)), new Prisma.Decimal(0));
+    const subtotal = money(data.subtotal);
+    if (!matches(sum, subtotal)) { reasons.push('SUBTOTAL_MISMATCH', 'LINE_EXTENSION_MISMATCH'); details.push({ code: 'SUBTOTAL_MISMATCH', expected: subtotal.toFixed(2), actual: sum.toFixed(2) }); }
+  }
+  if (data.subtotal !== null && data.tax !== null && data.otherFees !== null && data.total !== null) {
+    const calculated = money(data.subtotal).add(money(data.tax)).add(money(data.otherFees));
+    const total = money(data.total);
+    if (!matches(calculated, total)) { reasons.push('TOTAL_MISMATCH'); details.push({ code: 'TOTAL_MISMATCH', expected: total.toFixed(2), actual: calculated.toFixed(2) }); }
+  }
+  for (const line of data.lineItems) {
+    // Case/package prices are commonly extended at the case level; only check
+    // intrinsically countable units where quantity × unit price is unambiguous.
+    const unit = line.unit?.trim().toUpperCase();
+    if (line.quantity !== null && line.unitPrice !== null && line.extendedPrice !== null && unit && ['EA', 'EACH', 'UNIT', 'CT', 'COUNT'].includes(unit)) {
+      const calculated = money(line.quantity).mul(money(line.unitPrice));
+      if (!matches(calculated, money(line.extendedPrice))) reasons.push('LINE_MATH_MISMATCH');
+    }
+  }
+  return { reasons: [...new Set(reasons)], details };
+}
 
 export function parsePackageSize(raw: string | null): ParsedPackageSize | null {
   if (!raw) return null;
@@ -76,6 +107,8 @@ export class InvoiceExtractionProcessor {
       const uncertainFields = new Set(result.data.uncertainFields);
       if (result.data.invoiceDate && !invoiceDate) uncertainFields.add('invoiceDate');
       if (result.data.dueDate && !dueDate) uncertainFields.add('dueDate');
+      const reconciliation = reconcileInvoice(result.data);
+      reconciliation.reasons.forEach((reason) => uncertainFields.add(reason));
       const confidence = extractionConfidence({ ...result.data, invoiceDate: invoiceDate ? result.data.invoiceDate : null, uncertainFields: [...uncertainFields] });
       const vendor = result.data.vendorName ? await this.prisma.vendor.findFirst({ where: { organizationId: invoice.organizationId, normalizedName: result.data.vendorName.trim().toLowerCase().replace(/\s+/g, ' ') } }) : null;
       let applied = false;
@@ -88,7 +121,7 @@ export class InvoiceExtractionProcessor {
           const parsedPackage = parsePackageSize(line.packSize);
           return { invoiceId, organizationId: invoice.organizationId, restaurantLocationId: invoice.restaurantLocationId, lineNumber: line.lineNumber || index + 1, sourcePage: line.sourcePage, rawDescription: line.rawDescription, normalizedName: line.normalizedName, sku: line.sku, quantity: line.quantity === null ? null : new Prisma.Decimal(line.quantity), unit: line.unit, packSize: line.packSize, packCount: parsedPackage?.packCount == null ? null : new Prisma.Decimal(parsedPackage.packCount), packUnitQuantity: parsedPackage?.packUnitQuantity == null ? null : new Prisma.Decimal(parsedPackage.packUnitQuantity), measurementUnit: parsedPackage?.measurementUnit ?? null, totalPackageQuantity: parsedPackage ? new Prisma.Decimal(parsedPackage.totalPackageQuantity) : null, unitPrice: line.unitPrice === null ? null : new Prisma.Decimal(line.unitPrice), extendedPrice: line.extendedPrice === null ? null : new Prisma.Decimal(line.extendedPrice), category: line.category, productAttributes: line.productAttributes ? line.productAttributes as Prisma.InputJsonValue : Prisma.DbNull, uncertainFields: line.uncertainFields, confidence: new Prisma.Decimal(confidence.lines[index].toFixed(4)) };
         }) });
-        await tx.invoice.update({ where: { id: invoiceId }, data: { vendorId: vendor?.id, extractedVendorName: result.data.vendorName, extractedVendorAddress: result.data.vendorAddress, invoiceNumber: result.data.invoiceNumber, invoiceDate, dueDate, subtotal: result.data.subtotal === null ? null : new Prisma.Decimal(result.data.subtotal), tax: result.data.tax === null ? null : new Prisma.Decimal(result.data.tax), otherFees: result.data.otherFees === null ? null : new Prisma.Decimal(result.data.otherFees), total: result.data.total === null ? null : new Prisma.Decimal(result.data.total), currency: result.data.currency, extractionStatus: ExtractionStatus.COMPLETED, extractionProvider: result.provider, extractionModel: result.model, extractionConfidence: new Prisma.Decimal(confidence.overall.toFixed(4)), extractionCompletedAt: new Date(), extractionDurationMs: Date.now() - startedAt, extractionError: null, uncertainFields: [...uncertainFields], rawExtractionJson: result.data as Prisma.InputJsonValue, extractionUsage: result.usage ? result.usage as Prisma.InputJsonValue : Prisma.DbNull, reviewStatus: confidence.needsReview ? ReviewStatus.NEEDS_REVIEW : ReviewStatus.NOT_REVIEWED } });
+        await tx.invoice.update({ where: { id: invoiceId }, data: { vendorId: vendor?.id, extractedVendorName: result.data.vendorName, extractedVendorAddress: result.data.vendorAddress, invoiceNumber: result.data.invoiceNumber, invoiceDate, dueDate, subtotal: result.data.subtotal === null ? null : new Prisma.Decimal(result.data.subtotal), tax: result.data.tax === null ? null : new Prisma.Decimal(result.data.tax), otherFees: result.data.otherFees === null ? null : new Prisma.Decimal(result.data.otherFees), total: result.data.total === null ? null : new Prisma.Decimal(result.data.total), currency: result.data.currency, extractionStatus: ExtractionStatus.COMPLETED, extractionProvider: result.provider, extractionModel: result.model, extractionConfidence: new Prisma.Decimal(confidence.overall.toFixed(4)), extractionCompletedAt: new Date(), extractionDurationMs: Date.now() - startedAt, extractionError: null, uncertainFields: [...uncertainFields], rawExtractionJson: { ...result.data, reconciliation } as Prisma.InputJsonValue, extractionUsage: result.usage ? result.usage as Prisma.InputJsonValue : Prisma.DbNull, reviewStatus: confidence.needsReview ? ReviewStatus.NEEDS_REVIEW : ReviewStatus.NOT_REVIEWED } });
       });
       if (!applied) {
         await this.audit.log({ userId, organizationId: invoice.organizationId, action: 'invoice.extraction_discarded_reviewed', entityType: 'Invoice', entityId: invoiceId, metadata: { model: result.model, durationMs: Date.now() - startedAt } });

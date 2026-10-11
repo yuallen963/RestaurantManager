@@ -1,6 +1,6 @@
 import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { ExtractionStatus, ReviewStatus } from '@prisma/client';
-import { extractionConfidence, InvoiceExtractionProcessor, normalizeExtractedDate, parsePackageSize } from '../src/invoices/extraction.processor';
+import { extractionConfidence, InvoiceExtractionProcessor, normalizeExtractedDate, parsePackageSize, reconcileInvoice } from '../src/invoices/extraction.processor';
 import { ExtractedInvoiceSchema } from '../src/invoices/extraction.provider';
 import { InvoicesService } from '../src/invoices/invoices.service';
 import { InvoiceExtractionProvider } from '../src/invoices/extraction.provider';
@@ -10,6 +10,20 @@ jest.mock('@google/genai', () => ({ GoogleGenAI: jest.fn().mockImplementation(()
 const extraction = { vendorName: 'Sysco', vendorAddress: '123 Food Way', invoiceNumber: 'INV-1', invoiceDate: '2026-10-04', dueDate: '2026-11-04', subtotal: 100, tax: 6, otherFees: 0, total: 106, currency: 'USD', uncertainFields: [], lineItems: [{ lineNumber: 1, sourcePage: 1, rawDescription: 'CHKN BRST BNLS SKLS 4/10 LB', normalizedName: 'Chicken Breast', sku: '384920', quantity: 2, unit: 'CASE', packSize: '4 x 10 lb', unitPrice: 50, extendedPrice: 100, category: 'Food' as const, productAttributes: { brand: null, condition: 'Fresh', bone: 'Boneless', skin: 'Skinless', organic: null, grade: null, cut: 'Breast', size: null, packConfiguration: '4/10 LB' }, uncertainFields: [] }] };
 
 describe('invoice extraction', () => {
+  it('reconciles complete invoice totals and tolerates cent rounding', () => {
+    expect(reconcileInvoice({ ...extraction }).reasons).toEqual([]);
+    expect(reconcileInvoice({ ...extraction, subtotal: 100.005, tax: 0, otherFees: 0, total: 100.005 }).reasons).toEqual([]);
+  });
+
+  it('flags subtotal and final-total discrepancies without changing extracted values', () => {
+    expect(reconcileInvoice({ ...extraction, subtotal: 99 }).reasons).toEqual(['SUBTOTAL_MISMATCH', 'LINE_EXTENSION_MISMATCH', 'TOTAL_MISMATCH']);
+    expect(reconcileInvoice({ ...extraction, subtotal: 100, tax: 6, otherFees: 0, total: 105 }).reasons).toContain('TOTAL_MISMATCH');
+    expect(reconcileInvoice({ ...extraction, subtotal: null, tax: null, otherFees: null, total: null }).reasons).toEqual([]);
+  });
+
+  it('does not apply line math to case/package quantities', () => {
+    expect(reconcileInvoice({ ...extraction, lineItems: [{ ...extraction.lineItems[0], unit: 'CS', quantity: 2, unitPrice: 50, extendedPrice: 100 }] }).reasons).toEqual([]);
+  });
   it('selects Gemini when configured and requires its key', () => {
     const config = { get: jest.fn((key: string) => key === 'INVOICE_AI_PROVIDER' ? 'gemini' : undefined) } as any;
     const provider = new InvoiceExtractionProvider(config);
@@ -49,6 +63,25 @@ describe('invoice extraction', () => {
     mockGenerateContent.mockResolvedValue({ text: JSON.stringify(partial), usageMetadata: null });
     const result = await provider.extract(Buffer.from('image'), 'image/jpeg', 'invoice.jpeg');
     expect(result.data.lineItems[0].productAttributes).toEqual(expect.objectContaining({ brand: 'Atlas', grade: null, packConfiguration: null }));
+    mockGenerateContent.mockReset();
+  });
+
+  it('retries temporary Gemini failures with a bounded retry count', async () => {
+    const config = { get: jest.fn((key: string) => ({ INVOICE_AI_PROVIDER: 'gemini', GEMINI_API_KEY: 'secret' } as Record<string, string>)[key]) } as any;
+    const provider = new InvoiceExtractionProvider(config);
+    const temporary = Object.assign(new Error('busy'), { status: 503 });
+    mockGenerateContent.mockRejectedValueOnce(temporary).mockRejectedValueOnce(temporary).mockResolvedValueOnce({ text: JSON.stringify(extraction), usageMetadata: null });
+    await expect(provider.extract(Buffer.from('image'), 'image/jpeg', 'invoice.jpeg')).resolves.toEqual(expect.objectContaining({ provider: 'gemini' }));
+    expect(mockGenerateContent).toHaveBeenCalledTimes(3);
+    mockGenerateContent.mockReset();
+  });
+
+  it('does not retry permanent Gemini failures', async () => {
+    const config = { get: jest.fn((key: string) => ({ INVOICE_AI_PROVIDER: 'gemini', GEMINI_API_KEY: 'secret' } as Record<string, string>)[key]) } as any;
+    const provider = new InvoiceExtractionProvider(config);
+    mockGenerateContent.mockRejectedValue(Object.assign(new Error('bad request'), { status: 400 }));
+    await expect(provider.extract(Buffer.from('image'), 'image/jpeg', 'invoice.jpeg')).rejects.toThrow('bad request');
+    expect(mockGenerateContent).toHaveBeenCalledTimes(1);
     mockGenerateContent.mockReset();
   });
 
