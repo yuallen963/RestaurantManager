@@ -1,4 +1,6 @@
 .env
+.env.testflight
+*.p8
 .dart_tool/
 .idea/
 node_modules/

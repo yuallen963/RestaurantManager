@@ -1,0 +1,66 @@
+name: FundWell Internal TestFlight
+
+on:
+  workflow_dispatch:
+    inputs:
+      marketing_version:
+        description: "App Store version (must already exist in App Store Connect)"
+        required: true
+        default: "1.0.0"
+      changelog:
+        description: "What internal testers should know"
+        required: true
+        default: "Internal TestFlight build."
+  push:
+    tags:
+      - "ios-v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fundwell-testflight
+  cancel-in-progress: false
+
+jobs:
+  upload-internal-testflight:
+    runs-on: macos-15
+    timeout-minutes: 60
+    environment: testflight-production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+          bundler-cache: true
+          working-directory: apps/mobile
+      - name: Install signing certificate
+        uses: apple-actions/import-codesign-certs@v3
+        with:
+          p12-file-base64: ${{ secrets.IOS_DISTRIBUTION_CERTIFICATE_P12_BASE64 }}
+          p12-password: ${{ secrets.IOS_DISTRIBUTION_CERTIFICATE_PASSWORD }}
+      - name: Install App Store provisioning profile
+        env:
+          IOS_APP_STORE_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_APP_STORE_PROVISIONING_PROFILE_BASE64 }}
+        run: |
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+          echo "$IOS_APP_STORE_PROVISIONING_PROFILE_BASE64" | base64 --decode > "$HOME/Library/MobileDevice/Provisioning Profiles/FundWell_AppStore.mobileprovision"
+      - name: Install Ruby dependencies
+        working-directory: apps/mobile
+        run: bundle install --jobs 4 --retry 3
+      - name: Build and upload to the internal TestFlight group
+        working-directory: apps/mobile
+        env:
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          APP_STORE_CONNECT_API_KEY_P8: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8_BASE64 }}
+          TESTFLIGHT_INTERNAL_GROUP: ${{ vars.TESTFLIGHT_INTERNAL_GROUP }}
+          IOS_MARKETING_VERSION: ${{ inputs.marketing_version || '1.0.0' }}
+          TESTFLIGHT_CHANGELOG: ${{ inputs.changelog || 'Automated internal TestFlight build.' }}
+        run: bundle exec fastlane ios testflight_internal
