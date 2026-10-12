@@ -24,13 +24,40 @@ concurrency:
 
 jobs:
   upload-internal-testflight:
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 60
     environment: testflight-production
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Select and verify Xcode 26 toolchain
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: "26"
+      - name: Verify Xcode and iOS SDK versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          sdk_version="$(xcrun --sdk iphoneos --show-sdk-version)"
+          xcode_version="$(xcodebuild -version | awk '/^Xcode / {print $2; exit}')"
+          xcode_major="${xcode_version%%.*}"
+          sdk_major="${sdk_version%%.*}"
+          if [[ ! "$xcode_major" =~ ^[0-9]+$ || "$xcode_major" -lt 26 ]]; then
+            echo "Xcode 26 or newer is required; found $xcode_version" >&2
+            exit 1
+          fi
+          if [[ ! "$sdk_major" =~ ^[0-9]+$ || "$sdk_major" -lt 26 ]]; then
+            echo "iOS SDK 26 or newer is required; found $sdk_version" >&2
+            exit 1
+          fi
+          selected_xcode="$(xcode-select -p)"
+          echo "Selected Xcode: $selected_xcode"
+          [[ "$selected_xcode" == */Xcode.app/Contents/Developer ]] || {
+            echo "xcode-select is not pointing at an Xcode developer directory" >&2
+            exit 1
+          }
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
