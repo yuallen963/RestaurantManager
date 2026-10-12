@@ -87,7 +87,6 @@ platform :ios do
       app_identifier: app_identifier,
       ipa: ipa_path,
       distribute_external: false,
-      groups: [ENV.fetch("TESTFLIGHT_INTERNAL_GROUP")],
       skip_waiting_for_build_processing: false,
       changelog: ENV.fetch("TESTFLIGHT_CHANGELOG", "Automated internal TestFlight build."),
     )
