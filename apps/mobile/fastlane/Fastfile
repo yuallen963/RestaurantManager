@@ -1,5 +1,7 @@
 require "plist"
 require "tempfile"
+require "open3"
+require "rbconfig"
 
 default_platform(:ios)
 
@@ -42,7 +44,6 @@ platform :ios do
       targets: ["Runner"],
     )
 
-    ipa_path = File.join(mobile_root, "build/ios/ipa/Runner.ipa")
     Tempfile.create(["FundWellExportOptions", ".plist"]) do |export_options|
       export_options.write(Plist::Emit.dump({
         "method" => "app-store-connect",
@@ -69,6 +70,17 @@ platform :ios do
            "--dart-define=SHARED_TEST_USER_MODE=true")
       end
     end
+
+    ipa_directory = File.join(mobile_root, "build/ios/ipa")
+    discovery_script = File.join(mobile_root, "scripts/find_signed_ipa.rb")
+    ipa_output, ipa_error, ipa_status = Open3.capture3(
+      RbConfig.ruby,
+      discovery_script,
+      ipa_directory,
+      app_identifier,
+    )
+    UI.user_error!(ipa_error.strip.empty? ? ipa_output.strip : ipa_error.strip) unless ipa_status.success?
+    ipa_path = ipa_output.strip
 
     upload_to_testflight(
       api_key: api_key,
