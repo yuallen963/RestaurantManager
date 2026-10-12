@@ -54,6 +54,13 @@ jobs:
       - name: Install Ruby dependencies
         working-directory: apps/mobile
         run: bundle install --jobs 4 --retry 3
+      - name: Verify CocoaPods from Bundler
+        working-directory: apps/mobile
+        run: |
+          flutter pub get
+          bundle exec pod --version
+          cd ios
+          bundle exec pod install
       - name: Build and upload to the internal TestFlight group
         working-directory: apps/mobile
         env:
