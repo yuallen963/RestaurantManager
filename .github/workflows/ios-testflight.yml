@@ -54,7 +54,7 @@ jobs:
           fi
           selected_xcode="$(xcode-select -p)"
           echo "Selected Xcode: $selected_xcode"
-          [[ "$selected_xcode" == */Xcode.app/Contents/Developer ]] || {
+          [[ "$selected_xcode" == */*.app/Contents/Developer ]] || {
             echo "xcode-select is not pointing at an Xcode developer directory" >&2
             exit 1
           }
