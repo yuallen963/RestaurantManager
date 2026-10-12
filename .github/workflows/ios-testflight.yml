@@ -51,6 +51,14 @@ jobs:
         run: |
           mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
           echo "$IOS_APP_STORE_PROVISIONING_PROFILE_BASE64" | base64 --decode > "$HOME/Library/MobileDevice/Provisioning Profiles/FundWell_AppStore.mobileprovision"
+      - name: Verify iOS distribution signing assets
+        working-directory: apps/mobile
+        run: |
+          scripts/verify_ios_distribution_signing.sh \
+            "$HOME/Library/MobileDevice/Provisioning Profiles/FundWell_AppStore.mobileprovision" \
+            "4R7CXGD5WK" \
+            "com.restaurantprofit.restaurantProfitMobile" \
+            "ios/Runner/Runner.entitlements" >> "$GITHUB_ENV"
       - name: Install Ruby dependencies
         working-directory: apps/mobile
         run: bundle install --jobs 4 --retry 3

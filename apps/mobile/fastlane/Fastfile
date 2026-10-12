@@ -1,3 +1,6 @@
+require "plist"
+require "tempfile"
+
 default_platform(:ios)
 
 platform :ios do
@@ -25,17 +28,46 @@ platform :ios do
     pubspec = File.join(mobile_root, "pubspec.yaml")
     UI.user_error!("Flutter project root is invalid: #{mobile_root}") unless File.file?(pubspec)
 
+    profile_name = ENV.fetch("IOS_PROVISIONING_PROFILE_NAME")
+    profile_uuid = ENV.fetch("IOS_PROVISIONING_PROFILE_UUID")
+    update_code_signing_settings(
+      use_automatic_signing: false,
+      path: File.join(mobile_root, "ios/Runner.xcodeproj"),
+      team_id: "4R7CXGD5WK",
+      code_sign_identity: "Apple Distribution",
+      profile_name: profile_name,
+      profile_uuid: profile_uuid,
+      bundle_identifier: app_identifier,
+      build_configurations: ["Release"],
+      targets: ["Runner"],
+    )
+
     ipa_path = File.join(mobile_root, "build/ios/ipa/Runner.ipa")
-    Dir.chdir(mobile_root) do
-      sh("flutter pub get")
-      analysis_paths = %w[lib test]
-      analysis_paths << "integration_test" if Dir.exist?("integration_test")
-      sh("flutter analyze #{analysis_paths.join(' ')}")
-      sh("flutter test")
-      sh("flutter build ipa --release " \
-         "--build-name=#{version} --build-number=#{build_number} " \
-         "--dart-define=API_BASE_URL=https://restaurantmanager-production-6231.up.railway.app/api/v1 " \
-         "--dart-define=SHARED_TEST_USER_MODE=true")
+    Tempfile.create(["FundWellExportOptions", ".plist"]) do |export_options|
+      export_options.write(Plist::Emit.dump({
+        "method" => "app-store-connect",
+        "destination" => "export",
+        "signingStyle" => "manual",
+        "signingCertificate" => "Apple Distribution",
+        "teamID" => "4R7CXGD5WK",
+        "provisioningProfiles" => { app_identifier => profile_name },
+        "manageAppVersionAndBuildNumber" => false,
+        "uploadSymbols" => true,
+      }))
+      export_options.flush
+
+      Dir.chdir(mobile_root) do
+        sh("flutter pub get")
+        analysis_paths = %w[lib test]
+        analysis_paths << "integration_test" if Dir.exist?("integration_test")
+        sh("flutter analyze #{analysis_paths.join(' ')}")
+        sh("flutter test")
+        sh("flutter build ipa --release " \
+           "--build-name=#{version} --build-number=#{build_number} " \
+           "--export-options-plist=#{export_options.path} " \
+           "--dart-define=API_BASE_URL=https://restaurantmanager-production-6231.up.railway.app/api/v1 " \
+           "--dart-define=SHARED_TEST_USER_MODE=true")
+      end
     end
 
     upload_to_testflight(
