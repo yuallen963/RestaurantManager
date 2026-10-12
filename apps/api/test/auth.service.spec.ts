@@ -10,12 +10,18 @@ const mail = () => ({ developmentMode: false, assertConfigured: jest.fn(), sendV
 describe('auth service', () => {
   const originalSharedMode = process.env.SHARED_TEST_USER_MODE;
   const originalSharedEmail = process.env.SHARED_TEST_USER_EMAIL;
+  const originalPrivateEmail = process.env.PRIVATE_BETA_USER_EMAIL;
+  const originalPrivateHash = process.env.PRIVATE_BETA_ACCESS_CODE_HASH;
   beforeEach(() => jest.clearAllMocks());
   afterEach(() => {
     if (originalSharedMode === undefined) delete process.env.SHARED_TEST_USER_MODE;
     else process.env.SHARED_TEST_USER_MODE = originalSharedMode;
     if (originalSharedEmail === undefined) delete process.env.SHARED_TEST_USER_EMAIL;
     else process.env.SHARED_TEST_USER_EMAIL = originalSharedEmail;
+    if (originalPrivateEmail === undefined) delete process.env.PRIVATE_BETA_USER_EMAIL;
+    else process.env.PRIVATE_BETA_USER_EMAIL = originalPrivateEmail;
+    if (originalPrivateHash === undefined) delete process.env.PRIVATE_BETA_ACCESS_CODE_HASH;
+    else process.env.PRIVATE_BETA_ACCESS_CODE_HASH = originalPrivateHash;
   });
 
   it('issues a session only for the configured shared test owner when enabled', async () => {
@@ -50,6 +56,36 @@ describe('auth service', () => {
     const service = new AuthService(prisma, {} as any, mail() as any, audit as any);
     await expect(service.sharedTestSession()).rejects.toBeInstanceOf(NotFoundException);
     expect(prisma.user.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when private account configuration is missing', async () => {
+    delete process.env.PRIVATE_BETA_USER_EMAIL;
+    delete process.env.PRIVATE_BETA_ACCESS_CODE_HASH;
+    const service = new AuthService({} as any, {} as any, mail() as any, audit as any);
+    await expect(service.privateSession('anything')).rejects.toThrow('not configured');
+  });
+
+  it('verifies the private code server-side and issues a normal user-bound session', async () => {
+    process.env.PRIVATE_BETA_USER_EMAIL = 'private@profitlens.local';
+    process.env.PRIVATE_BETA_ACCESS_CODE_HASH = await argon2.hash('configured-secret');
+    const user = {
+      id: 'private-user', email: 'private@profitlens.local', emailVerifiedAt: new Date(), disabledAt: null, deletedAt: null,
+      memberships: [{ role: OrganizationRole.OWNER, organization: { locations: [{ id: 'private-location' }] } }],
+    };
+    const prisma: any = { user: { findFirst: jest.fn().mockResolvedValue(user) }, refreshToken: { create: jest.fn() } };
+    const jwt = { signAsync: jest.fn().mockResolvedValueOnce('private-access').mockResolvedValueOnce('private-refresh') };
+    const service = new AuthService(prisma, jwt as any, mail() as any, audit as any);
+    await expect(service.privateSession('wrong')).rejects.toBeInstanceOf(UnauthorizedException);
+    await expect(service.privateSession('configured-secret')).resolves.toMatchObject({ accessToken: 'private-access', refreshToken: 'private-refresh', accountMode: 'private' });
+    expect(prisma.user.findFirst).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ email: 'private@profitlens.local' }) }));
+  });
+
+  it('refuses a private identity without exactly one owned organization and location', async () => {
+    process.env.PRIVATE_BETA_USER_EMAIL = 'private@profitlens.local';
+    process.env.PRIVATE_BETA_ACCESS_CODE_HASH = await argon2.hash('configured-secret');
+    const prisma: any = { user: { findFirst: jest.fn().mockResolvedValue({ id: 'private-user', memberships: [] }) } };
+    const service = new AuthService(prisma, {} as any, mail() as any, audit as any);
+    await expect(service.privateSession('configured-secret')).rejects.toThrow('not provisioned correctly');
   });
 
   it('registers a normalized account and stores a hash of the verification token', async () => {

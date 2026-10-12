@@ -12,7 +12,8 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:seed": "tsx prisma/seed.ts",
-    "seed:fundwell-test": "tsx prisma/seed-fundwell-test.ts"
+    "seed:fundwell-test": "tsx prisma/seed-fundwell-test.ts",
+    "setup:private-beta": "tsx prisma/setup-private-beta.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

@@ -23,6 +23,7 @@ const lakeside = RestaurantLocation(
 const account = MoreAccountData(
   email: 'demo@profitlens.local',
   organizationName: 'Demo Restaurant Group',
+  accountMode: AccountSessionMode.standard,
   role: 'OWNER',
 );
 const metadata = AppMetadata(version: '1.2.3', buildNumber: '45');
@@ -165,6 +166,74 @@ void main() {
     );
     expect(find.text('Unable to load account information'), findsOneWidget);
     expect(find.text('Retry'), findsNWidgets(2));
+  });
+
+  testWidgets('private entry is at the bottom and opens an obscured password dialog', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(800, 1500));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await pumpMore(tester);
+    final entry = find.text('Private Account');
+    await tester.scrollUntilVisible(entry.last, 300);
+    await tester.tap(entry.last);
+    await tester.pumpAndSettle();
+    expect(find.byType(AlertDialog), findsOneWidget);
+    final field = tester.widget<TextField>(find.byType(TextField));
+    expect(field.obscureText, isTrue);
+    expect(find.text('Submit'), findsOneWidget);
+    expect(find.text('Cancel'), findsOneWidget);
+  });
+
+  testWidgets('incorrect private code shows an error and does not switch sessions', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(800, 1500));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final dio = Dio()
+      ..interceptors.add(InterceptorsWrapper(onRequest: (options, handler) {
+        handler.reject(DioException(
+          requestOptions: options,
+          response: Response(requestOptions: options, statusCode: 401),
+        ));
+      }));
+    final container = await pumpMore(tester, dio: dio);
+    final entry = find.text('Private Account');
+    await tester.scrollUntilVisible(entry.last, 300);
+    await tester.tap(entry.last);
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), 'wrong');
+    await tester.tap(find.text('Submit'));
+    await tester.pumpAndSettle();
+    expect(find.text('Incorrect password.'), findsOneWidget);
+    expect(container.read(accountSessionModeProvider), AccountSessionMode.standard);
+  });
+
+  test('private and beta session switches replace secure credentials', () async {
+    final paths = <String>[];
+    final dio = Dio()
+      ..interceptors.add(InterceptorsWrapper(onRequest: (options, handler) {
+        paths.add(options.path);
+        if (options.path == '/auth/private-session') {
+          return handler.resolve(Response(
+            requestOptions: options,
+            statusCode: 200,
+            data: {'accessToken': 'private-access', 'refreshToken': 'private-refresh', 'accountMode': 'private'},
+          ));
+        }
+        if (options.path == '/auth/shared-test-session') {
+          return handler.resolve(Response(
+            requestOptions: options,
+            statusCode: 200,
+            data: {'accessToken': 'beta-access', 'refreshToken': 'beta-refresh'},
+          ));
+        }
+        return handler.resolve(Response<void>(requestOptions: options, statusCode: 204));
+      }));
+    final repository = MoreRepository(dio, storage);
+    await repository.unlockPrivate('server-verified-only');
+    expect(await storage.read(key: 'accessToken'), 'private-access');
+    expect(await storage.read(key: sessionModeStorageKey), 'private');
+    await repository.returnToBeta();
+    expect(paths, containsAllInOrder(['/auth/private-session', '/auth/logout', '/auth/shared-test-session']));
+    expect(await storage.read(key: 'accessToken'), 'beta-access');
+    expect(await storage.read(key: sessionModeStorageKey), 'standard');
   });
 }
 

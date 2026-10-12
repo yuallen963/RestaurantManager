@@ -3,18 +3,25 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
-import '../../main.dart' show api, storage;
+import '../../main.dart'
+    show
+        AccountSessionMode,
+        api,
+        sessionModeStorageKey,
+        storage;
 import '../dashboard/foundation.dart';
 
 class MoreAccountData {
   const MoreAccountData({
     required this.email,
     required this.organizationName,
+    required this.accountMode,
     this.role,
   });
 
   final String email;
   final String organizationName;
+  final AccountSessionMode accountMode;
   final String? role;
 }
 
@@ -51,8 +58,51 @@ class MoreRepository {
     return MoreAccountData(
       email: profile['email'] as String,
       organizationName: organization['name'] as String,
+      accountMode: profile['accountMode'] == 'private'
+          ? AccountSessionMode.private
+          : AccountSessionMode.standard,
       role: role,
     );
+  }
+
+  Future<void> unlockPrivate(String accessCode) async {
+    final response = await dio.post(
+      '/auth/private-session',
+      data: {'accessCode': accessCode},
+    );
+    await _installSession(
+      Map<String, dynamic>.from(response.data as Map),
+      AccountSessionMode.private,
+    );
+  }
+
+  Future<void> returnToBeta() async {
+    final privateRefresh = await secureStorage.read(key: 'refreshToken');
+    if (privateRefresh != null) {
+      try {
+        await dio.post('/auth/logout', data: {'refreshToken': privateRefresh});
+      } on DioException {
+        // Replacing local private credentials must not expose stale private data.
+      }
+    }
+    dio.options.headers.remove('Authorization');
+    final response = await dio.post('/auth/shared-test-session');
+    await _installSession(
+      Map<String, dynamic>.from(response.data as Map),
+      AccountSessionMode.standard,
+    );
+  }
+
+  Future<void> _installSession(
+    Map<String, dynamic> data,
+    AccountSessionMode mode,
+  ) async {
+    final accessToken = data['accessToken'] as String;
+    final refreshToken = data['refreshToken'] as String;
+    await secureStorage.write(key: 'accessToken', value: accessToken);
+    await secureStorage.write(key: 'refreshToken', value: refreshToken);
+    await secureStorage.write(key: sessionModeStorageKey, value: mode.name);
+    dio.options.headers['Authorization'] = 'Bearer $accessToken';
   }
 
   Future<void> signOut() async {
@@ -77,6 +127,7 @@ class MoreRepository {
     await secureStorage.delete(key: 'accessToken');
     await secureStorage.delete(key: 'refreshToken');
     await secureStorage.delete(key: 'fcmToken');
+    await secureStorage.delete(key: sessionModeStorageKey);
     dio.options.headers.remove('Authorization');
   }
 
@@ -94,6 +145,7 @@ class MoreRepository {
     await secureStorage.delete(key: 'accessToken');
     await secureStorage.delete(key: 'refreshToken');
     await secureStorage.delete(key: 'fcmToken');
+    await secureStorage.delete(key: sessionModeStorageKey);
     dio.options.headers.remove('Authorization');
   }
 }
@@ -107,6 +159,10 @@ final moreAccountProvider = FutureProvider<MoreAccountData>((ref) async {
   if (location == null) throw StateError('No active restaurant location');
   return ref.watch(moreRepositoryProvider).load(location);
 });
+
+final privateAccountRepositoryProvider = Provider(
+  (ref) => MoreRepository(ref.watch(api), storage),
+);
 
 final appMetadataProvider = FutureProvider<AppMetadata>((_) async {
   final info = await PackageInfo.fromPlatform();

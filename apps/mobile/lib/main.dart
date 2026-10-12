@@ -43,6 +43,11 @@ const sharedTestUserModeRequested = bool.fromEnvironment(
 final sharedTestUserModeProvider = Provider<bool>(
   (_) => sharedTestUserModeRequested,
 );
+enum AccountSessionMode { standard, private }
+const sessionModeStorageKey = 'accountSessionMode';
+final accountSessionModeProvider = StateProvider<AccountSessionMode>(
+  (_) => AccountSessionMode.standard,
+);
 const _demoEmail = 'demo@profitlens.local';
 const _demoPassword = 'DemoProfit2026!';
 
@@ -97,17 +102,25 @@ class _AuthBootstrapState extends ConsumerState<AuthBootstrap> {
     final client = ref.read(api);
     final access = await storage.read(key: 'accessToken');
     final refresh = await storage.read(key: 'refreshToken');
+    final storedMode = await storage.read(key: sessionModeStorageKey);
+    final privateSession = storedMode == AccountSessionMode.private.name;
+    ref.read(accountSessionModeProvider.notifier).state = privateSession
+        ? AccountSessionMode.private
+        : AccountSessionMode.standard;
     try {
       // Shared test mode deliberately obtains a session on every launch. This
       // prevents an old device's saved account from leaking into this temporary
       // single-restaurant testing environment.
-      if (sharedTestUserMode) {
+      if (sharedTestUserMode && !privateSession) {
         await _sharedTestSession();
         return;
       }
       if (access != null) {
         client.options.headers['Authorization'] = 'Bearer $access';
-        await client.get('/auth/me');
+        final profile = await client.get('/auth/me');
+        if (privateSession && profile.data['accountMode'] != 'private') {
+          throw StateError('Stored private session identity is invalid');
+        }
         await _enterAuthenticatedApp();
         return;
       }
@@ -116,7 +129,18 @@ class _AuthBootstrapState extends ConsumerState<AuthBootstrap> {
           '/auth/refresh',
           data: {'refreshToken': refresh},
         );
-        await _save(response.data as Map<String, dynamic>);
+        await _save(
+          response.data as Map<String, dynamic>,
+          mode: privateSession
+              ? AccountSessionMode.private
+              : AccountSessionMode.standard,
+        );
+        if (privateSession) {
+          final profile = await client.get('/auth/me');
+          if (profile.data['accountMode'] != 'private') {
+            throw StateError('Refreshed private session identity is invalid');
+          }
+        }
         await _enterAuthenticatedApp();
         return;
       }
@@ -141,10 +165,27 @@ class _AuthBootstrapState extends ConsumerState<AuthBootstrap> {
             '/auth/refresh',
             data: {'refreshToken': refresh},
           );
-          await _save(response.data as Map<String, dynamic>);
+          await _save(
+            response.data as Map<String, dynamic>,
+            mode: privateSession
+                ? AccountSessionMode.private
+                : AccountSessionMode.standard,
+          );
+          if (privateSession) {
+            final profile = await client.get('/auth/me');
+            if (profile.data['accountMode'] != 'private') throw StateError('Private session expired');
+          }
           await _enterAuthenticatedApp();
           return;
         } catch (_) {}
+      }
+      if (privateSession) {
+        await storage.delete(key: 'accessToken');
+        await storage.delete(key: 'refreshToken');
+        await storage.delete(key: sessionModeStorageKey);
+        client.options.headers.remove('Authorization');
+        ref.read(accountSessionModeProvider.notifier).state =
+            AccountSessionMode.standard;
       }
       if (sharedTestUserMode) {
         try {
@@ -185,7 +226,10 @@ class _AuthBootstrapState extends ConsumerState<AuthBootstrap> {
 
   Future<void> _sharedTestSession() async {
     final response = await ref.read(api).post('/auth/shared-test-session');
-    await _save(response.data as Map<String, dynamic>);
+    await _save(
+      response.data as Map<String, dynamic>,
+      mode: AccountSessionMode.standard,
+    );
     await _enterAuthenticatedApp(forceHome: true);
   }
 
@@ -203,7 +247,10 @@ class _AuthBootstrapState extends ConsumerState<AuthBootstrap> {
     widget.onReady?.call();
   }
 
-  Future<void> _save(Map<String, dynamic> data) async {
+  Future<void> _save(
+    Map<String, dynamic> data, {
+    AccountSessionMode mode = AccountSessionMode.standard,
+  }) async {
     await storage.write(
       key: 'accessToken',
       value: data['accessToken'] as String,
@@ -214,6 +261,8 @@ class _AuthBootstrapState extends ConsumerState<AuthBootstrap> {
       key: 'refreshToken',
       value: data['refreshToken'] as String,
     );
+    await storage.write(key: sessionModeStorageKey, value: mode.name);
+    ref.read(accountSessionModeProvider.notifier).state = mode;
   }
 
   @override

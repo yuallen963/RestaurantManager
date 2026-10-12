@@ -79,6 +79,38 @@ void main() {
     expect(find.widgetWithText(FilledButton, 'Log in'), findsOneWidget);
     expect(find.byType(Home), findsNothing);
   });
+
+  testWidgets('shared beta bootstrap preserves a valid private session across restart', (tester) async {
+    FlutterSecureStorage.setMockInitialValues({
+      'accessToken': 'private-access',
+      'refreshToken': 'private-refresh',
+      sessionModeStorageKey: 'private',
+    });
+    var sharedSessionCalls = 0;
+    final dio = _dio((options) {
+      if (options.path == '/auth/shared-test-session') {
+        sharedSessionCalls++;
+      }
+      if (options.path == '/auth/me') {
+        return {'id': 'private-user', 'accountMode': 'private'};
+      }
+      if (options.path == '/onboarding') {
+        return {
+          'onboardingCompletedAt': '2026-10-11T00:00:00.000Z',
+          'currentStep': 5,
+          'selectedDataSources': <String>[],
+        };
+      }
+      return <String, dynamic>{};
+    });
+
+    await pumpBootstrap(tester, dio, sharedMode: true);
+
+    expect(sharedSessionCalls, 0);
+    expect(find.byType(Home), findsOneWidget);
+    expect(await storage.read(key: 'accessToken'), 'private-access');
+    expect(await storage.read(key: sessionModeStorageKey), 'private');
+  });
 }
 
 Dio _dio(Map<String, dynamic> Function(RequestOptions options) response) =>

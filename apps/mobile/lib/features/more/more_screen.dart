@@ -1,8 +1,24 @@
 import 'package:flutter/material.dart';
+import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../main.dart' show AuthScreen, demoModeProvider;
+import '../../main.dart'
+    show
+        AccountSessionMode,
+        AuthBootstrap,
+        AuthScreen,
+        accountSessionModeProvider,
+        demoModeProvider;
 import '../dashboard/foundation.dart';
+import '../expenses/foundation.dart';
+import '../invoices/foundation.dart';
+import '../revenue/foundation.dart';
+import '../vendors/foundation.dart';
+import '../needs_attention/foundation.dart';
+import '../savings/foundation.dart';
+import '../price_intelligence/foundation.dart';
+import '../product_matches/foundation.dart';
+import '../banking/foundation.dart';
 import '../banking/bank_screens.dart';
 import '../invoice_email/invoice_email_screen.dart';
 import '../pos/pos_integrations_screen.dart';
@@ -20,6 +36,73 @@ class MoreScreen extends ConsumerStatefulWidget {
 
 class _MoreScreenState extends ConsumerState<MoreScreen> {
   bool _signingOut = false;
+  bool _switchingAccount = false;
+
+  void _clearAccountState() {
+    ref.read(activeLocationControllerProvider.notifier).clear();
+    ref.invalidate(activeLocationControllerProvider);
+    ref.invalidate(moreAccountProvider);
+    ref.invalidate(dashboardProvider);
+    ref.invalidate(previousDashboardProvider);
+    ref.invalidate(expenseLookupsProvider);
+    ref.invalidate(expenseListProvider);
+    ref.invalidate(expenseDetailProvider);
+    ref.invalidate(invoiceListProvider);
+    ref.invalidate(invoiceDetailProvider);
+    ref.invalidate(invoiceLineItemsProvider);
+    ref.invalidate(revenueListProvider);
+    ref.invalidate(revenueDetailProvider);
+    ref.invalidate(vendorListProvider);
+    ref.invalidate(vendorDetailProvider);
+    ref.invalidate(needsAttentionProvider);
+    ref.invalidate(savingsOpportunitiesProvider);
+    ref.invalidate(priceChangesProvider);
+    ref.invalidate(priceHistoryProvider);
+    ref.invalidate(productMatchCandidatesProvider);
+    ref.invalidate(productGroupsProvider);
+    ref.invalidate(bankConnectionsProvider);
+    ref.invalidate(bankTransactionsProvider);
+    ref.invalidate(notificationListProvider);
+    ref.invalidate(notificationPreferenceProvider);
+  }
+
+  Future<void> _enterPrivateAccount() async {
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => _PrivateAccountDialog(
+        onSubmit: (code) async {
+          await ref.read(privateAccountRepositoryProvider).unlockPrivate(code);
+          ref.read(accountSessionModeProvider.notifier).state =
+              AccountSessionMode.private;
+          _clearAccountState();
+        },
+      ),
+    );
+    if (!mounted || ref.read(accountSessionModeProvider) != AccountSessionMode.private) return;
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const AuthBootstrap()),
+      (_) => false,
+    );
+  }
+
+  Future<void> _returnToBeta() async {
+    if (_switchingAccount) return;
+    setState(() => _switchingAccount = true);
+    try {
+      await ref.read(privateAccountRepositoryProvider).returnToBeta();
+      ref.read(accountSessionModeProvider.notifier).state =
+          AccountSessionMode.standard;
+      _clearAccountState();
+      if (!mounted) return;
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const AuthBootstrap()),
+        (_) => false,
+      );
+    } finally {
+      if (mounted) setState(() => _switchingAccount = false);
+    }
+  }
 
   Future<void> _selectLocation() async {
     final locations = ref.read(availableLocationsProvider);
@@ -81,6 +164,7 @@ class _MoreScreenState extends ConsumerState<MoreScreen> {
     final account = ref.watch(moreAccountProvider);
     final metadata = ref.watch(appMetadataProvider);
     final demoMode = ref.watch(demoModeProvider);
+    final sessionMode = ref.watch(accountSessionModeProvider);
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(20, 20, 20, 32),
@@ -299,9 +383,113 @@ class _MoreScreenState extends ConsumerState<MoreScreen> {
             ),
           ),
         ),
+        const SizedBox(height: 20),
+        _Section(
+          title: sessionMode == AccountSessionMode.private
+              ? 'Private Account'
+              : 'Private Access',
+          child: _InfoTile(
+            icon: sessionMode == AccountSessionMode.private
+                ? Icons.lock_open_outlined
+                : Icons.lock_outline,
+            label: sessionMode == AccountSessionMode.private
+                ? 'Return to Beta Account'
+                : 'Private Account',
+            value: sessionMode == AccountSessionMode.private
+                ? 'Leave the private account and restore beta access'
+                : 'Password-protected private access',
+            trailing: _switchingAccount
+                ? const SizedBox.square(
+                    dimension: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.chevron_right),
+            onTap: _switchingAccount
+                ? null
+                : sessionMode == AccountSessionMode.private
+                ? _returnToBeta
+                : _enterPrivateAccount,
+          ),
+        ),
       ],
     );
   }
+}
+
+class _PrivateAccountDialog extends StatefulWidget {
+  const _PrivateAccountDialog({required this.onSubmit});
+  final Future<void> Function(String code) onSubmit;
+
+  @override
+  State<_PrivateAccountDialog> createState() => _PrivateAccountDialogState();
+}
+
+class _PrivateAccountDialogState extends State<_PrivateAccountDialog> {
+  final controller = TextEditingController();
+  bool submitting = false;
+  String? error;
+
+  @override
+  void dispose() {
+    controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> submit() async {
+    if (submitting || controller.text.isEmpty) return;
+    setState(() { submitting = true; error = null; });
+    try {
+      await widget.onSubmit(controller.text);
+      if (mounted) Navigator.pop(context);
+    } on DioException catch (exception) {
+      if (!mounted) return;
+      setState(() {
+        error = exception.response?.statusCode == 503
+            ? 'Private account access is not configured.'
+            : 'Incorrect password.';
+        submitting = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() { error = 'Unable to open the private account.'; submitting = false; });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: const Text('Private Account'),
+    content: Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        TextField(
+          controller: controller,
+          obscureText: true,
+          enabled: !submitting,
+          autofocus: true,
+          decoration: InputDecoration(
+            labelText: 'Password',
+            errorText: error,
+          ),
+          onSubmitted: (_) => submit(),
+        ),
+      ],
+    ),
+    actions: [
+      TextButton(
+        onPressed: submitting ? null : () => Navigator.pop(context),
+        child: const Text('Cancel'),
+      ),
+      FilledButton(
+        onPressed: submitting ? null : submit,
+        child: submitting
+            ? const SizedBox.square(
+                dimension: 18,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            : const Text('Submit'),
+      ),
+    ],
+  );
 }
 
 String _formatRole(String role) {

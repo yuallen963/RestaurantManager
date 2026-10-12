@@ -6,3 +6,4 @@ export class EmailDto { @IsEmail() email!: string; }
 export class TokenDto { @IsString() @MinLength(32) token!: string; }
 export class ResetPasswordDto extends TokenDto { @IsString() @MinLength(12) password!: string; }
 export class DeleteAccountDto { @IsString() password!: string; }
+export class PrivateSessionDto { @IsString() @MinLength(1) accessCode!: string; }

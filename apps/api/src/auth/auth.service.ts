@@ -1,4 +1,4 @@
-import { ConflictException, ForbiddenException, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { ConflictException, ForbiddenException, Injectable, NotFoundException, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { OrganizationRole } from '@prisma/client';
 import * as argon2 from 'argon2';
@@ -77,6 +77,23 @@ export class AuthService {
     });
     if (!user) throw new NotFoundException();
     return this.issueTokens(user.id, user.email);
+  }
+
+  async privateSession(accessCode: string) {
+    const accessCodeHash = process.env.PRIVATE_BETA_ACCESS_CODE_HASH?.trim();
+    const configuredEmail = process.env.PRIVATE_BETA_USER_EMAIL?.trim();
+    if (!accessCodeHash || !configuredEmail) throw new ServiceUnavailableException('Private account access is not configured');
+    let valid = false;
+    try { valid = await argon2.verify(accessCodeHash, accessCode); } catch { throw new ServiceUnavailableException('Private account access is not configured'); }
+    if (!valid) throw new UnauthorizedException('Invalid private account access code');
+    const email = normalizeEmail(configuredEmail);
+    const user = await this.prisma.user.findFirst({
+      where: { email, emailVerifiedAt: { not: null }, disabledAt: null, deletedAt: null },
+      include: { memberships: { include: { organization: { include: { locations: true } } } } },
+    });
+    const ownerMemberships = user?.memberships.filter((membership) => membership.role === OrganizationRole.OWNER) ?? [];
+    if (!user || ownerMemberships.length !== 1 || ownerMemberships[0].organization.locations.length !== 1) throw new ServiceUnavailableException('Private account is not provisioned correctly');
+    return { ...(await this.issueTokens(user.id, user.email)), accountMode: 'private' as const };
   }
 
   async refresh(rawToken: string) {
@@ -164,7 +181,9 @@ export class AuthService {
   }
 
   async profile(userId: string) {
-    return this.prisma.user.findFirstOrThrow({ where: { id: userId, disabledAt: null, deletedAt: null }, select: { id: true, email: true, firstName: true, lastName: true, emailVerifiedAt: true, createdAt: true } });
+    const user = await this.prisma.user.findFirstOrThrow({ where: { id: userId, disabledAt: null, deletedAt: null }, select: { id: true, email: true, firstName: true, lastName: true, emailVerifiedAt: true, createdAt: true } });
+    const privateEmail = process.env.PRIVATE_BETA_USER_EMAIL?.trim().toLowerCase();
+    return { ...user, accountMode: privateEmail && user.email === privateEmail ? 'private' : 'standard' };
   }
 
   private async createVerificationToken(userId: string) {
