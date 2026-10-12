@@ -3,7 +3,7 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { BankService } from './bank.service';
-import { AssignBankAccountDto, BankTransactionQuery, ConfirmInvoiceMatchDto, ExchangeBankTokenDto, OrganizationDto, ReviewBankTransactionDto } from './dto';
+import { AssignBankAccountDto, BankSyncStatusQuery, BankTransactionQuery, ConfirmInvoiceMatchDto, ExchangeBankTokenDto, OrganizationDto, ReviewBankTransactionDto } from './dto';
 
 @ApiTags('banking') @ApiBearerAuth() @UseGuards(JwtAuthGuard) @Controller()
 export class BankController {
@@ -13,6 +13,7 @@ export class BankController {
   @Post('bank/connections/:id/reauthenticated') reauthenticated(@CurrentUser() u: { sub: string }, @Param('id') id: string) { return this.service.completeReauthentication(u.sub, id); }
   @Post('bank/exchange-token') exchange(@CurrentUser() u: { sub: string }, @Body() d: ExchangeBankTokenDto) { return this.service.exchange(u.sub, d); }
   @Get('bank/connections') connections(@CurrentUser() u: { sub: string }, @Query('organizationId') organizationId: string) { return this.service.connections(u.sub, organizationId); }
+  @Get('bank/sync-status') syncStatus(@CurrentUser() u: { sub: string }, @Query() q: BankSyncStatusQuery) { return this.service.syncStatus(u.sub, q.organizationId, q.restaurantLocationId); }
   @Patch('bank/accounts/:id') account(@CurrentUser() u: { sub: string }, @Param('id') id: string, @Body() d: AssignBankAccountDto) { return this.service.assignAccount(u.sub, id, d); }
   @Post('bank/connections/:id/sync') sync(@CurrentUser() u: { sub: string }, @Param('id') id: string) { return this.service.sync(u.sub, id); }
   @HttpCode(204) @Delete('bank/connections/:id') disconnect(@CurrentUser() u: { sub: string }, @Param('id') id: string) { return this.service.disconnect(u.sub, id); }

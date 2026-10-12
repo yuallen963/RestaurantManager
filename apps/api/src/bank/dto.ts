@@ -2,6 +2,7 @@ import { BankReconciliationStatus, MerchantRuleMatchType } from '@prisma/client'
 import { IsBoolean, IsEnum, IsOptional, IsString, IsUUID } from 'class-validator';
 
 export class OrganizationDto { @IsUUID() organizationId!: string; }
+export class BankSyncStatusQuery extends OrganizationDto { @IsUUID() restaurantLocationId!: string; }
 export class ExchangeBankTokenDto extends OrganizationDto { @IsString() publicToken!: string; @IsOptional() @IsUUID() restaurantLocationId?: string; }
 export class AssignBankAccountDto { @IsOptional() @IsUUID() restaurantLocationId?: string | null; @IsOptional() @IsBoolean() active?: boolean; }
 export class BankTransactionQuery extends OrganizationDto { @IsOptional() @IsUUID() restaurantLocationId?: string; @IsOptional() @IsEnum(BankReconciliationStatus) status?: BankReconciliationStatus; }

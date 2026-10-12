@@ -65,6 +65,55 @@ class BankConnectionData {
   );
 }
 
+enum BankImportState {
+  none,
+  pending,
+  importing,
+  partiallyComplete,
+  complete,
+  failed,
+}
+
+class BankSyncStatus {
+  const BankSyncStatus({
+    required this.state,
+    required this.connectionCount,
+    required this.transactionCount,
+    required this.canRetry,
+    this.lastSyncAt,
+    this.message,
+  });
+
+  final BankImportState state;
+  final int connectionCount, transactionCount;
+  final bool canRetry;
+  final DateTime? lastSyncAt;
+  final String? message;
+
+  bool get inProgress =>
+      state == BankImportState.pending ||
+      state == BankImportState.importing ||
+      state == BankImportState.partiallyComplete;
+
+  factory BankSyncStatus.fromJson(Map<String, dynamic> json) => BankSyncStatus(
+    state: switch (json['state'] as String) {
+      'PENDING' => BankImportState.pending,
+      'IMPORTING' => BankImportState.importing,
+      'PARTIALLY_COMPLETE' => BankImportState.partiallyComplete,
+      'COMPLETE' => BankImportState.complete,
+      'FAILED' => BankImportState.failed,
+      _ => BankImportState.none,
+    },
+    connectionCount: json['connectionCount'] as int? ?? 0,
+    transactionCount: json['transactionCount'] as int? ?? 0,
+    canRetry: json['canRetry'] as bool? ?? false,
+    lastSyncAt: json['lastSyncAt'] == null
+        ? null
+        : DateTime.parse(json['lastSyncAt'] as String),
+    message: json['message'] as String?,
+  );
+}
+
 class SuggestedInvoiceData {
   const SuggestedInvoiceData(this.id, this.number, this.total);
   final String id;
@@ -201,6 +250,22 @@ class BankingRepository {
                 BankConnectionData.fromJson(Map<String, dynamic>.from(item)),
           )
           .toList();
+  Future<BankSyncStatus> syncStatus(
+    String organizationId,
+    String locationId,
+  ) async {
+    final response = await dio.get(
+      '/bank/sync-status',
+      queryParameters: {
+        'organizationId': organizationId,
+        'restaurantLocationId': locationId,
+      },
+    );
+    return BankSyncStatus.fromJson(
+      Map<String, dynamic>.from(response.data as Map),
+    );
+  }
+
   Future<void> assignAccount(String id, String? locationId) => dio.patch(
     '/bank/accounts/$id',
     data: {'restaurantLocationId': locationId},
@@ -266,6 +331,33 @@ final bankConnectionsProvider = FutureProvider<List<BankConnectionData>>((
   return ref
       .watch(bankingRepositoryProvider)
       .connections(location.organizationId);
+});
+final bankSyncPollIntervalProvider = Provider<Duration>(
+  (_) => const Duration(seconds: 5),
+);
+final bankSyncStatusProvider = StreamProvider.autoDispose<BankSyncStatus>((
+  ref,
+) async* {
+  final location = ref.watch(activeLocationProvider);
+  if (location == null) {
+    yield const BankSyncStatus(
+      state: BankImportState.none,
+      connectionCount: 0,
+      transactionCount: 0,
+      canRetry: false,
+    );
+    return;
+  }
+  var disposed = false;
+  ref.onDispose(() => disposed = true);
+  while (!disposed) {
+    final status = await ref
+        .read(bankingRepositoryProvider)
+        .syncStatus(location.organizationId, location.id);
+    yield status;
+    if (!status.inProgress) return;
+    await Future<void>.delayed(ref.read(bankSyncPollIntervalProvider));
+  }
 });
 final bankTransactionsProvider = FutureProvider<List<BankTransactionData>>((
   ref,

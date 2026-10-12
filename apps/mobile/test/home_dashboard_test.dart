@@ -1,6 +1,9 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:restaurant_profit_mobile/features/banking/foundation.dart';
 import 'package:restaurant_profit_mobile/features/dashboard/foundation.dart';
 import 'package:restaurant_profit_mobile/features/needs_attention/foundation.dart';
 import 'package:restaurant_profit_mobile/features/tabs.dart';
@@ -90,6 +93,7 @@ void main() {
   Widget dashboardApp({
     Future<DashboardData?> Function(Ref ref)? dashboard,
     Future<DashboardData?> Function(Ref ref)? previous,
+    Stream<BankSyncStatus> Function(Ref ref)? bankSync,
   }) => ProviderScope(
     overrides: [
       activeLocationProvider.overrideWithValue(downtown),
@@ -99,6 +103,17 @@ void main() {
       ),
       previousDashboardProvider.overrideWith(
         previous ?? (ref) async => previousDashboard,
+      ),
+      bankSyncStatusProvider.overrideWith(
+        bankSync ??
+            (_) => Stream.value(
+              const BankSyncStatus(
+                state: BankImportState.complete,
+                connectionCount: 1,
+                transactionCount: 12,
+                canRetry: false,
+              ),
+            ),
       ),
       needsAttentionProvider.overrideWith(
         (_) async => const NeedsAttentionData(
@@ -360,6 +375,96 @@ void main() {
     expect(find.text('Unable to load dashboard'), findsOneWidget);
     expect(find.widgetWithText(FilledButton, 'Retry'), findsOneWidget);
   });
+
+  testWidgets(
+    'delayed bank import is nonblocking and refreshes dashboard on completion',
+    (tester) async {
+      final statuses = StreamController<BankSyncStatus>();
+      addTearDown(statuses.close);
+      var dashboardLoads = 0;
+      await tester.pumpWidget(
+        dashboardApp(
+          dashboard: (_) async {
+            dashboardLoads++;
+            return currentDashboard;
+          },
+          bankSync: (_) => statuses.stream,
+        ),
+      );
+      statuses.add(
+        const BankSyncStatus(
+          state: BankImportState.importing,
+          connectionCount: 1,
+          transactionCount: 0,
+          canRetry: false,
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+      expect(
+        find.textContaining('Importing bank transactions'),
+        findsOneWidget,
+      );
+      expect(find.text('Estimated Profit'), findsOneWidget);
+
+      statuses.add(
+        const BankSyncStatus(
+          state: BankImportState.complete,
+          connectionCount: 1,
+          transactionCount: 8,
+          canRetry: false,
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+      expect(dashboardLoads, 2);
+      expect(find.byKey(const Key('bank-sync-banner')), findsNothing);
+    },
+  );
+
+  testWidgets('failed bank import shows an actionable error', (tester) async {
+    await tester.pumpWidget(
+      dashboardApp(
+        bankSync: (_) => Stream.value(
+          const BankSyncStatus(
+            state: BankImportState.failed,
+            connectionCount: 1,
+            transactionCount: 0,
+            canRetry: true,
+            message: 'Reconnect your bank to continue syncing.',
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.text('Reconnect your bank to continue syncing.'),
+      findsOneWidget,
+    );
+    expect(find.widgetWithText(TextButton, 'Manage'), findsOneWidget);
+  });
+
+  testWidgets(
+    'completed empty bank history is distinct from an unfinished import',
+    (tester) async {
+      await tester.pumpWidget(
+        dashboardApp(
+          bankSync: (_) => Stream.value(
+            const BankSyncStatus(
+              state: BankImportState.complete,
+              connectionCount: 1,
+              transactionCount: 0,
+              canRetry: false,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.textContaining('sync is complete'), findsOneWidget);
+      expect(find.textContaining('No transactions were found'), findsOneWidget);
+      expect(find.textContaining('Importing bank transactions'), findsNothing);
+    },
+  );
 
   testWidgets('dashboard fits a small iPhone width without overflow', (
     tester,

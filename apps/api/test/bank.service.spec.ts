@@ -10,7 +10,7 @@ function setup(overrides: { rules?: any[]; vendors?: any[]; invoices?: any[] } =
   const prisma: any = {
     bankConnection: { findUnique: jest.fn().mockResolvedValue(connection), update: jest.fn().mockImplementation(({ data }: any) => Promise.resolve({ ...connection, ...data })), updateMany: jest.fn().mockResolvedValue({ count: 1 }), create: jest.fn(), findMany: jest.fn() },
     bankAccount: { findUnique: jest.fn(), update: jest.fn() },
-    bankTransaction: { create: jest.fn().mockResolvedValue({}), updateMany: jest.fn().mockResolvedValue({ count: 0 }), delete: jest.fn().mockResolvedValue({}), findUnique: jest.fn().mockResolvedValue(null), findFirst: jest.fn().mockResolvedValue(null), findMany: jest.fn().mockResolvedValue([]), update: jest.fn().mockResolvedValue({}) },
+    bankTransaction: { create: jest.fn().mockResolvedValue({}), updateMany: jest.fn().mockResolvedValue({ count: 0 }), delete: jest.fn().mockResolvedValue({}), findUnique: jest.fn().mockResolvedValue(null), findFirst: jest.fn().mockResolvedValue(null), findMany: jest.fn().mockResolvedValue([]), count: jest.fn().mockResolvedValue(0), update: jest.fn().mockResolvedValue({}) },
     merchantRule: { findMany: jest.fn().mockResolvedValue(overrides.rules ?? []), findFirst: jest.fn().mockResolvedValue(null), create: jest.fn(), update: jest.fn() },
     vendor: { findMany: jest.fn().mockResolvedValue(overrides.vendors ?? [{ id: 'sysco', normalizedName: 'sysco' }]), findFirst: jest.fn() },
     expenseCategory: { findFirst: jest.fn().mockResolvedValue({ id: 'category-a' }) },
@@ -104,6 +104,36 @@ describe('bank transaction foundation', () => {
     await expect(service.sync('other-user', 'connection-a')).rejects.toBeInstanceOf(ForbiddenException);
   });
 
+  it('reports delayed initial synchronization without claiming completion', async () => {
+    const { service, prisma } = setup();
+    prisma.bankConnection.findMany.mockResolvedValue([{ id: 'connection-a', status: BankConnectionStatus.SYNCING, lastSyncAt: null, lastError: null }]);
+    prisma.bankTransaction.count.mockResolvedValue(0);
+    await expect(service.syncStatus('user-a', 'org-a', 'location-a')).resolves.toEqual(expect.objectContaining({ state: 'IMPORTING', transactionCount: 0 }));
+  });
+
+  it('reports a partially complete import after location transactions arrive', async () => {
+    const { service, prisma } = setup();
+    prisma.bankConnection.findMany.mockResolvedValue([{ id: 'connection-a', status: BankConnectionStatus.SYNCING, lastSyncAt: null, lastError: null }]);
+    prisma.bankTransaction.count.mockResolvedValue(7);
+    await expect(service.syncStatus('user-a', 'org-a', 'location-a')).resolves.toEqual(expect.objectContaining({ state: 'PARTIALLY_COMPLETE', transactionCount: 7 }));
+  });
+
+  it('reports actionable synchronization failures', async () => {
+    const { service, prisma } = setup();
+    prisma.bankConnection.findMany.mockResolvedValue([{ id: 'connection-a', status: BankConnectionStatus.ERROR, lastSyncAt: null, lastError: 'Unable to sync this connection. Try again.' }]);
+    await expect(service.syncStatus('user-a', 'org-a', 'location-a')).resolves.toEqual(expect.objectContaining({ state: 'FAILED', canRetry: true, message: 'Unable to sync this connection. Try again.' }));
+  });
+
+  it('distinguishes a completed empty history and scopes counts to the requested location', async () => {
+    const { service, prisma } = setup();
+    const completedAt = new Date('2026-10-12T12:00:00Z');
+    prisma.bankConnection.findMany.mockResolvedValue([{ id: 'connection-a', status: BankConnectionStatus.CONNECTED, lastSyncAt: completedAt, lastError: null }]);
+    prisma.bankTransaction.count.mockResolvedValue(0);
+    await expect(service.syncStatus('user-a', 'org-a', 'location-a')).resolves.toEqual(expect.objectContaining({ state: 'COMPLETE', transactionCount: 0, lastSyncAt: completedAt }));
+    expect(prisma.bankConnection.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ organizationId: 'org-a', accounts: { some: { restaurantLocationId: 'location-a', active: true } } }) }));
+    expect(prisma.bankTransaction.count).toHaveBeenCalledWith({ where: expect.objectContaining({ organizationId: 'org-a', restaurantLocationId: 'location-a' }) });
+  });
+
   it('requires OWNER or ADMIN to reassign a bank account location', async () => {
     const { service, prisma, access } = setup();
     prisma.bankAccount.findUnique.mockResolvedValue({ id: 'account-a', organizationId: 'org-a' });
@@ -145,8 +175,10 @@ describe('bank transaction foundation', () => {
     provider.exchange.mockResolvedValue({ accessToken: 'new-token', itemId: 'item-a', institutionName: 'Sandbox Bank', accounts: [] });
     prisma.bankConnection.findUnique.mockResolvedValueOnce(connection).mockResolvedValueOnce(connection).mockResolvedValue(connection);
     await service.exchange('user-a', { organizationId: 'org-a', publicToken: 'public', restaurantLocationId: 'location-a' });
+    await new Promise<void>((resolve) => setImmediate(resolve));
     expect(prisma.bankConnection.create).not.toHaveBeenCalled();
     expect(prisma.bankConnection.update).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'connection-a' }, data: expect.objectContaining({ status: BankConnectionStatus.CONNECTED }) }));
+    expect(provider.sync).toHaveBeenCalled();
   });
 
   it('rejects a provider item already attached to another tenant', async () => {
@@ -196,8 +228,10 @@ describe('bank transaction foundation', () => {
     expect(provider.createLinkToken).toHaveBeenCalledWith('user-a', 'provider-token');
     provider.sync.mockResolvedValue({ added: [], modified: [], removed: [], cursor: 'cursor' });
     await service.completeReauthentication('user-a', 'connection-a');
+    await new Promise<void>((resolve) => setImmediate(resolve));
     expect(prisma.bankConnection.create).not.toHaveBeenCalled();
     expect(prisma.bankConnection.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: BankConnectionStatus.CONNECTED }) }));
+    expect(provider.sync).toHaveBeenCalled();
   });
 
   it('disconnects remotely, deactivates sync, and does not delete transaction history', async () => {

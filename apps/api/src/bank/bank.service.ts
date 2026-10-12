@@ -46,9 +46,10 @@ export class BankService {
   async completeReauthentication(userId: string, id: string) {
     const connection = await this.connection(userId, id);
     if (connection.status === BankConnectionStatus.DISCONNECTED) throw new BadRequestException('Bank connection is disconnected');
-    await this.prisma.bankConnection.update({ where: { id }, data: { status: BankConnectionStatus.CONNECTED, lastError: null } });
+    const saved = await this.prisma.bankConnection.update({ where: { id }, data: { status: BankConnectionStatus.CONNECTED, lastError: null } });
     await this.audit.log({ userId, organizationId: connection.organizationId, action: 'bank.reauthenticated', entityType: 'BankConnection', entityId: id });
-    return this.sync(userId, id);
+    this.scheduleSync(userId, id);
+    return this.safeConnection(saved);
   }
 
   async exchange(userId: string, data: ExchangeBankTokenDto) {
@@ -62,14 +63,62 @@ export class BankService {
       ? await this.prisma.bankConnection.update({ where: { id: existing.id }, data: { encryptedAccessToken: this.encryption.encrypt(exchanged.accessToken), institutionId: exchanged.institutionId, institutionName: exchanged.institutionName, status: BankConnectionStatus.CONNECTED, lastError: null, accounts: { upsert: exchanged.accounts.map((account) => ({ where: { bankConnectionId_providerAccountId: { bankConnectionId: existing.id, providerAccountId: account.id } }, create: { organizationId: data.organizationId, restaurantLocationId: data.restaurantLocationId, providerAccountId: account.id, name: account.name, mask: account.mask?.slice(-4), subtype: account.subtype, type: account.type }, update: { name: account.name, mask: account.mask?.slice(-4), subtype: account.subtype, type: account.type, active: true } })) } }, include: { accounts: true } })
       : await this.prisma.bankConnection.create({ data: { organizationId: data.organizationId, provider: provider.name as BankProvider, providerItemId: exchanged.itemId, encryptedAccessToken: this.encryption.encrypt(exchanged.accessToken), institutionId: exchanged.institutionId, institutionName: exchanged.institutionName, createdByUserId: userId, accounts: { create: exchanged.accounts.map((account) => ({ organizationId: data.organizationId, restaurantLocationId: data.restaurantLocationId, providerAccountId: account.id, name: account.name, mask: account.mask?.slice(-4), subtype: account.subtype, type: account.type })) } }, include: { accounts: true } });
     await this.audit.log({ userId, organizationId: data.organizationId, action: 'bank.connected', entityType: 'BankConnection', entityId: connection.id, metadata: { provider: provider.name, accountCount: exchanged.accounts.length } });
-    await this.sync(userId, connection.id);
-    return this.safeConnection(await this.prisma.bankConnection.findUnique({ where: { id: connection.id }, include: { accounts: true } }));
+    this.scheduleSync(userId, connection.id);
+    return this.safeConnection(connection);
+  }
+
+  private scheduleSync(userId: string, connectionId: string) {
+    setImmediate(() => void this.sync(userId, connectionId).catch(() => undefined));
   }
 
   async connections(userId: string, organizationId: string) {
     await this.organization(userId, organizationId);
     const rows = await this.prisma.bankConnection.findMany({ where: { organizationId }, include: { accounts: { include: { restaurantLocation: { select: { id: true, name: true } } } } }, orderBy: { createdAt: 'desc' } });
     return rows.map((row) => this.safeConnection(row));
+  }
+
+  async syncStatus(userId: string, organizationId: string, restaurantLocationId: string) {
+    await this.organization(userId, organizationId);
+    await this.validateLocation(organizationId, restaurantLocationId);
+    const connections = await this.prisma.bankConnection.findMany({
+      where: {
+        organizationId,
+        status: { not: BankConnectionStatus.DISCONNECTED },
+        accounts: { some: { restaurantLocationId, active: true } },
+      },
+      select: { id: true, status: true, lastSyncAt: true, lastError: true },
+    });
+    if (!connections.length) {
+      return { state: 'NONE', connectionCount: 0, transactionCount: 0, lastSyncAt: null, message: null, canRetry: false };
+    }
+    const transactionCount = await this.prisma.bankTransaction.count({
+      where: {
+        organizationId,
+        restaurantLocationId,
+        removedAt: null,
+        bankAccount: { bankConnectionId: { in: connections.map((connection) => connection.id) } },
+      },
+    });
+    const failed = connections.find((connection) => connection.status === BankConnectionStatus.ERROR || connection.status === BankConnectionStatus.NEEDS_ATTENTION);
+    const syncing = connections.filter((connection) => connection.status === BankConnectionStatus.SYNCING);
+    const pending = connections.filter((connection) => connection.status === BankConnectionStatus.CONNECTED && connection.lastSyncAt == null);
+    const completed = connections.filter((connection) => connection.status === BankConnectionStatus.CONNECTED && connection.lastSyncAt != null);
+    const lastSyncAt = completed.map((connection) => connection.lastSyncAt!).sort((a, b) => b.getTime() - a.getTime())[0] ?? null;
+    if (failed) {
+      return {
+        state: 'FAILED', connectionCount: connections.length, transactionCount, lastSyncAt,
+        message: failed.lastError ?? (failed.status === BankConnectionStatus.NEEDS_ATTENTION ? 'Reconnect your bank to continue syncing.' : 'Bank synchronization failed. Try again from Bank Accounts.'),
+        canRetry: true,
+      };
+    }
+    if (syncing.length || pending.length) {
+      const partial = transactionCount > 0 || completed.length > 0;
+      return {
+        state: partial ? 'PARTIALLY_COMPLETE' : syncing.length ? 'IMPORTING' : 'PENDING',
+        connectionCount: connections.length, transactionCount, lastSyncAt, message: null, canRetry: false,
+      };
+    }
+    return { state: 'COMPLETE', connectionCount: connections.length, transactionCount, lastSyncAt, message: null, canRetry: false };
   }
 
   async assignAccount(userId: string, id: string, data: AssignBankAccountDto) {

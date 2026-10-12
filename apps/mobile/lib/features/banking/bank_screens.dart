@@ -91,6 +91,9 @@ class _BankAccountsScreenState extends ConsumerState<BankAccountsScreen> {
   Future<void> refresh() async {
     ref.invalidate(bankConnectionsProvider);
     ref.invalidate(bankTransactionsProvider);
+    ref.invalidate(bankSyncStatusProvider);
+    ref.invalidate(dashboardProvider);
+    ref.invalidate(previousDashboardProvider);
     try {
       await ref.read(bankConnectionsProvider.future);
     } catch (_) {
@@ -191,6 +194,9 @@ class _ConnectionCardState extends ConsumerState<_ConnectionCard> {
       await action();
       ref.invalidate(bankConnectionsProvider);
       ref.invalidate(bankTransactionsProvider);
+      ref.invalidate(bankSyncStatusProvider);
+      ref.invalidate(dashboardProvider);
+      ref.invalidate(previousDashboardProvider);
     } catch (_) {
       if (mounted) {
         setState(

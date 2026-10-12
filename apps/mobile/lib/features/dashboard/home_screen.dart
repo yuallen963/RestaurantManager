@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'foundation.dart';
+import '../banking/foundation.dart';
 import '../needs_attention/needs_attention_screen.dart';
 import '../banking/bank_screens.dart';
 import '../invoices/invoice_screens.dart';
@@ -32,7 +33,17 @@ class HomeScreen extends ConsumerWidget {
 
     final dashboard = ref.watch(dashboardProvider);
     final previousDashboard = ref.watch(previousDashboardProvider);
-    return dashboard.when(
+    final bankSync = ref.watch(bankSyncStatusProvider);
+    ref.listen(bankSyncStatusProvider, (previous, next) {
+      final before = previous?.valueOrNull;
+      final after = next.valueOrNull;
+      if (before?.inProgress == true &&
+          after?.state == BankImportState.complete) {
+        ref.invalidate(dashboardProvider);
+        ref.invalidate(previousDashboardProvider);
+      }
+    });
+    final dashboardBody = dashboard.when<Widget>(
       loading: () => const LoadingState(label: 'Loading dashboard...'),
       error: (_, _) => ErrorState(
         message: 'Unable to load dashboard',
@@ -55,6 +66,118 @@ class HomeScreen extends ConsumerWidget {
           previous: previousDashboard.valueOrNull,
         );
       },
+    );
+    return Column(
+      children: [
+        bankSync.when(
+          loading: () => const SizedBox.shrink(),
+          error: (_, _) => const _BankSyncBanner(
+            icon: Icons.cloud_off_outlined,
+            message: 'Unable to check bank synchronization status.',
+            isError: true,
+          ),
+          data: (status) => _BankSyncStatusBanner(status: status),
+        ),
+        Expanded(child: dashboardBody),
+      ],
+    );
+  }
+}
+
+class _BankSyncStatusBanner extends StatelessWidget {
+  const _BankSyncStatusBanner({required this.status});
+  final BankSyncStatus status;
+
+  @override
+  Widget build(BuildContext context) {
+    return switch (status.state) {
+      BankImportState.pending => const _BankSyncBanner(
+        icon: Icons.schedule_outlined,
+        message: 'Bank connected. Transaction import is waiting to start.',
+      ),
+      BankImportState.importing => const _BankSyncBanner(
+        icon: Icons.sync,
+        message:
+            'Importing bank transactions. Your dashboard will update automatically.',
+        showProgress: true,
+      ),
+      BankImportState.partiallyComplete => _BankSyncBanner(
+        icon: Icons.sync,
+        message:
+            '${status.transactionCount} transactions imported so far. Import is still running.',
+        showProgress: true,
+      ),
+      BankImportState.failed => _BankSyncBanner(
+        icon: Icons.error_outline,
+        message:
+            status.message ??
+            'Bank synchronization failed. Open Bank Accounts to retry.',
+        isError: true,
+        showAction: status.canRetry,
+      ),
+      BankImportState.complete when status.transactionCount == 0 =>
+        const _BankSyncBanner(
+          icon: Icons.check_circle_outline,
+          message:
+              'Bank sync is complete. No transactions were found for this restaurant.',
+        ),
+      _ => const SizedBox.shrink(),
+    };
+  }
+}
+
+class _BankSyncBanner extends StatelessWidget {
+  const _BankSyncBanner({
+    required this.icon,
+    required this.message,
+    this.showProgress = false,
+    this.isError = false,
+    this.showAction = false,
+  });
+  final IconData icon;
+  final String message;
+  final bool showProgress, isError, showAction;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return Material(
+      key: const Key('bank-sync-banner'),
+      color: isError ? colors.errorContainer : colors.secondaryContainer,
+      child: SafeArea(
+        bottom: false,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          child: Row(
+            children: [
+              if (showProgress)
+                const SizedBox.square(
+                  dimension: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              else
+                Icon(
+                  icon,
+                  color: isError
+                      ? colors.onErrorContainer
+                      : colors.onSecondaryContainer,
+                ),
+              const SizedBox(width: 12),
+              Expanded(child: Text(message)),
+              if (showAction)
+                TextButton(
+                  onPressed: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const BankAccountsScreen(),
+                    ),
+                  ),
+                  child: const Text('Manage'),
+                ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
