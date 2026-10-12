@@ -22,7 +22,9 @@ platform :ios do
     build_number = latest_build + 1
 
     sh("flutter pub get")
-    sh("flutter analyze")
+    analysis_paths = %w[lib test]
+    analysis_paths << "integration_test" if Dir.exist?("integration_test")
+    sh("flutter analyze #{analysis_paths.join(' ')}")
     sh("flutter test")
     sh("flutter build ipa --release " \
        "--build-name=#{version} --build-number=#{build_number} " \
