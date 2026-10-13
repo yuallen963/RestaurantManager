@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../dashboard/foundation.dart';
 import '../dashboard/home_screen.dart';
+import '../banking/foundation.dart';
 import 'foundation.dart';
 
 class RevenueScreen extends ConsumerStatefulWidget {
@@ -167,6 +168,40 @@ class RevenueHeader extends ConsumerWidget {
               .select(selected),
         ),
         const SizedBox(height: 16),
+        Consumer(
+          builder: (context, ref, _) {
+            final deposits =
+                ref.watch(unverifiedBankDepositsProvider).valueOrNull ??
+                const [];
+            if (deposits.isEmpty) return const SizedBox.shrink();
+            return Card(
+              key: const Key('unverified-bank-deposits'),
+              color: Theme.of(context).colorScheme.secondaryContainer,
+              child: ExpansionTile(
+                title: const Text('Unverified Bank Deposits'),
+                subtitle: Text(
+                  '${deposits.length} deposits are excluded from verified revenue until reviewed.',
+                ),
+                children: [
+                  for (final deposit in deposits.take(5))
+                    ListTile(
+                      title: Text(deposit.merchant),
+                      subtitle: Text(
+                        '${formatDate(deposit.postedDate)} · Needs review',
+                      ),
+                      trailing: Text(formatCurrency(deposit.amount.abs())),
+                    ),
+                ],
+              ),
+            );
+          },
+        ),
+        if ((ref
+                .watch(unverifiedBankDepositsProvider)
+                .valueOrNull
+                ?.isNotEmpty ??
+            false))
+          const SizedBox(height: 12),
         Card(
           key: const Key('revenue-total-card'),
           color: Theme.of(context).colorScheme.primaryContainer,

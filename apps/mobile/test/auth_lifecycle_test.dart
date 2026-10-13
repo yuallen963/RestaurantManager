@@ -1,13 +1,19 @@
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:restaurant_profit_mobile/features/auth/auth_screens.dart';
 import 'package:restaurant_profit_mobile/main.dart';
 
 void main() {
+  setUp(() => FlutterSecureStorage.setMockInitialValues({}));
+
   Widget app(Dio dio, {Widget home = const AuthScreen()}) => ProviderScope(
-    overrides: [api.overrideWithValue(dio)],
+    overrides: [
+      api.overrideWithValue(dio),
+      authDeviceIdProvider.overrideWith((_) async => 'test-device'),
+    ],
     child: MaterialApp(home: home),
   );
 
@@ -70,6 +76,33 @@ void main() {
     expect(find.text('Check your email'), findsOneWidget);
     expect(find.text('Resend verification'), findsOneWidget);
   });
+
+  testWidgets(
+    'login challenge is persisted and shown before a session exists',
+    (tester) async {
+      final dio = stubDio((options) {
+        expect(options.path, '/auth/login');
+        return {
+          'challengeRequired': true,
+          'challengeId': 'challenge-1',
+          'method': 'EMAIL',
+          'expiresInSeconds': 300,
+        };
+      });
+      await tester.pumpWidget(app(dio));
+      await tester.enterText(
+        find.widgetWithText(TextField, 'Email'),
+        'owner@example.com',
+      );
+      await tester.tap(find.text('Log in'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Verify sign-in'), findsOneWidget);
+      expect(find.text('Verify and sign in'), findsOneWidget);
+      expect(await storage.read(key: 'accessToken'), isNull);
+      expect(await storage.read(key: pendingAuthChallengeKey), 'challenge-1');
+    },
+  );
 
   testWidgets('forgot password always shows the neutral response', (
     tester,

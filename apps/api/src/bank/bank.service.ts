@@ -4,7 +4,7 @@ import { AuditService } from '../audit.service';
 import { OrganizationAccessService } from '../organizations/organization-access.service';
 import { PrismaService } from '../prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
-import { AssignBankAccountDto, BankTransactionQuery, ConfirmInvoiceMatchDto, ExchangeBankTokenDto, ReviewBankTransactionDto } from './dto';
+import { AssignBankAccountDto, BankTransactionQuery, BulkReviewBankTransactionsDto, ConfirmInvoiceMatchDto, ExchangeBankTokenDto, ReviewBankTransactionDto, UpdateMerchantRuleDto } from './dto';
 import { BankTokenEncryptionService } from './encryption.service';
 import { BankProviderFactory, ProviderTransaction } from './bank.provider';
 
@@ -140,7 +140,7 @@ export class BankService {
     try {
       const updates = await this.providers.get(connection.provider).sync(this.encryption.decrypt(connection.encryptedAccessToken), connection.syncCursor);
       for (const removedId of updates.removed) await this.prisma.bankTransaction.updateMany({ where: { bankAccount: { bankConnectionId: id }, providerTransactionId: removedId }, data: { removedAt: new Date(), reconciliationStatus: BankReconciliationStatus.IGNORED } });
-      for (const transaction of [...updates.added, ...updates.modified]) await this.ingest(connection.organizationId, connection.accounts, transaction);
+      for (const transaction of [...updates.added, ...updates.modified]) await this.ingest(userId, connection.organizationId, connection.accounts, transaction);
       const saved = await this.prisma.bankConnection.update({ where: { id }, data: { syncCursor: updates.cursor, status: BankConnectionStatus.CONNECTED, lastSyncAt: new Date(), lastError: null } });
       await this.audit.log({ userId, organizationId: connection.organizationId, action: 'bank.synced', entityType: 'BankConnection', entityId: id, metadata: { added: updates.added.length, modified: updates.modified.length, removed: updates.removed.length } });
       return this.safeConnection(saved);
@@ -153,7 +153,7 @@ export class BankService {
     }
   }
 
-  private async ingest(organizationId: string, accounts: any[], transaction: ProviderTransaction) {
+  private async ingest(userId: string, organizationId: string, accounts: any[], transaction: ProviderTransaction) {
     const account = accounts.find((candidate) => candidate.providerAccountId === transaction.accountId);
     if (!account || !account.active) return;
     const merchant = normalizeMerchant(transaction.merchantName ?? transaction.description);
@@ -176,28 +176,68 @@ export class BankService {
           reconciliation = { expenseId: null, reconciliationStatus: BankReconciliationStatus.NEEDS_REVIEW };
         }
       }
-      await this.prisma.bankTransaction.update({ where: { id: posted.id }, data: { ...raw, ...reconciliation } });
+      const updated = await this.prisma.bankTransaction.update({ where: { id: posted.id }, data: { ...raw, ...reconciliation } });
+      await this.autoReconcile(userId, updated, categorization.rule);
       return;
     }
     if (pending) {
-      await this.prisma.bankTransaction.update({ where: { id: pending.id }, data: { ...raw, providerTransactionId: transaction.id, suggestedInvoiceId: pending.suggestedInvoiceId ?? invoiceMatch?.invoiceId, matchConfidence: pending.matchConfidence === InvoiceMatchConfidence.NO_MATCH ? invoiceMatch?.confidence ?? InvoiceMatchConfidence.NO_MATCH : pending.matchConfidence } });
+      const updated = await this.prisma.bankTransaction.update({ where: { id: pending.id }, data: { ...raw, providerTransactionId: transaction.id, suggestedInvoiceId: pending.suggestedInvoiceId ?? invoiceMatch?.invoiceId, matchConfidence: pending.matchConfidence === InvoiceMatchConfidence.NO_MATCH ? invoiceMatch?.confidence ?? InvoiceMatchConfidence.NO_MATCH : pending.matchConfidence } });
+      await this.autoReconcile(userId, updated, categorization.rule);
       return;
     }
-    await this.prisma.bankTransaction.create({ data: { organizationId, bankAccountId: account.id, providerTransactionId: transaction.id, ...proposed } });
+    const created = await this.prisma.bankTransaction.create({ data: { organizationId, bankAccountId: account.id, providerTransactionId: transaction.id, ...proposed } });
+    await this.autoReconcile(userId, created, categorization.rule);
   }
 
   private async categorize(organizationId: string, locationId: string | null, merchant: string, providerCategory?: string) {
     const canonical = cleanMerchant(merchant);
-    const rules = await this.prisma.merchantRule.findMany({ where: { organizationId, OR: [{ restaurantLocationId: locationId }, { restaurantLocationId: null }] }, orderBy: [{ restaurantLocationId: 'desc' }, { createdAt: 'asc' }] });
+    const rules = await this.prisma.merchantRule.findMany({ where: { organizationId, active: true, OR: [{ restaurantLocationId: locationId }, { restaurantLocationId: null }] }, orderBy: [{ restaurantLocationId: 'desc' }, { createdAt: 'asc' }] });
     const rule = rules.find((candidate) => candidate.matchType === MerchantRuleMatchType.EXACT ? canonical === candidate.matchValue : candidate.matchType === MerchantRuleMatchType.PREFIX ? canonical.startsWith(candidate.matchValue) : canonical.includes(candidate.matchValue));
-    if (rule) return { vendorId: rule.vendorId, categoryId: rule.expenseCategoryId, source: BankCategorizationSource.USER_RULE };
+    if (rule) return { vendorId: rule.vendorId, categoryId: rule.expenseCategoryId, source: BankCategorizationSource.USER_RULE, rule };
     const vendors = await this.prisma.vendor.findMany({ where: { organizationId }, select: { id: true, normalizedName: true } });
     const vendor = vendors.find((candidate) => canonical.includes(cleanMerchant(candidate.normalizedName)) || cleanMerchant(candidate.normalizedName).includes(canonical));
-    if (vendor) return { vendorId: vendor.id, categoryId: null, source: BankCategorizationSource.MERCHANT_RULE };
+    if (vendor) return { vendorId: vendor.id, categoryId: null, source: BankCategorizationSource.MERCHANT_RULE, rule: null };
     const mapping: Record<string, string> = { UTILITIES: 'utilities', PAYROLL: 'labor' };
     const slug = Object.entries(mapping).find(([key]) => (providerCategory ?? '').toUpperCase().includes(key))?.[1];
     const category = slug ? await this.prisma.expenseCategory.findFirst({ where: { slug, OR: [{ organizationId: null }, { organizationId }] }, select: { id: true } }) : null;
-    return { vendorId: null, categoryId: category?.id ?? null, source: category ? BankCategorizationSource.PROVIDER : BankCategorizationSource.UNRESOLVED };
+    return { vendorId: null, categoryId: category?.id ?? null, source: category ? BankCategorizationSource.PROVIDER : BankCategorizationSource.UNRESOLVED, rule: null };
+  }
+
+  private async autoReconcile(userId: string, transaction: any, rule: any) {
+    if (!rule?.active || !rule.autoConfirm || transaction.pending || transaction.expenseId
+      || transaction.suggestedInvoiceId || transaction.reconciliationStatus !== BankReconciliationStatus.NEEDS_REVIEW
+      || !transaction.restaurantLocationId || !rule.vendorId || !rule.expenseCategoryId
+      || rule.restaurantLocationId !== transaction.restaurantLocationId
+      || rule.matchType !== MerchantRuleMatchType.EXACT) return;
+    const exceptionText = `${transaction.description ?? ''} ${transaction.providerCategory ?? ''}`.toUpperCase();
+    if (/\b(TRANSFER|REFUND|REVERSAL|LOAN|OWNER CONTRIBUTION)\b/.test(exceptionText)) return;
+    const amount = new Prisma.Decimal(transaction.amount);
+    if (amount.lte(0) || (rule.minimumAmount && amount.lt(rule.minimumAmount))
+      || (rule.maximumAmount && amount.gt(rule.maximumAmount))) return;
+    await this.prisma.$transaction(async (tx) => {
+      const current = await tx.bankTransaction.findUnique({ where: { id: transaction.id } });
+      if (!current || current.expenseId || current.pending || current.suggestedInvoiceId
+        || current.reconciliationStatus !== BankReconciliationStatus.NEEDS_REVIEW) return;
+      const expense = await tx.expense.create({ data: {
+        organizationId: current.organizationId,
+        restaurantLocationId: current.restaurantLocationId!,
+        vendorId: rule.vendorId,
+        expenseCategoryId: rule.expenseCategoryId,
+        amount: current.amount,
+        date: current.postedDate,
+        description: current.description,
+        source: ExpenseSource.BANK_IMPORT,
+        createdByUserId: userId,
+      } });
+      await tx.bankTransaction.update({ where: { id: current.id }, data: {
+        vendorId: rule.vendorId,
+        categoryId: rule.expenseCategoryId,
+        expenseId: expense.id,
+        categorizationSource: BankCategorizationSource.USER_RULE,
+        reconciliationStatus: BankReconciliationStatus.MATCHED_EXPENSE,
+      } });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    await this.audit.log({ userId, organizationId: transaction.organizationId, action: 'bank.transaction_auto_reconciled', entityType: 'BankTransaction', entityId: transaction.id, metadata: { merchantRuleId: rule.id } });
   }
 
   private async matchInvoice(organizationId: string, locationId: string, vendorId: string | null, merchant: string, amount: number, postedDate: Date) {
@@ -227,6 +267,9 @@ export class BankService {
     if (data.restaurantLocationId) await this.validateLocation(transaction.organizationId, data.restaurantLocationId);
     if (data.vendorId && !(await this.prisma.vendor.findFirst({ where: { id: data.vendorId, organizationId: transaction.organizationId } }))) throw new ForbiddenException('Vendor is not available');
     if (data.categoryId && !(await this.prisma.expenseCategory.findFirst({ where: { id: data.categoryId, OR: [{ organizationId: null }, { organizationId: transaction.organizationId }] } }))) throw new ForbiddenException('Category is not available');
+    if (data.autoConfirmFuture && !data.createMerchantRule) throw new BadRequestException('Automatic confirmation requires an approved merchant rule');
+    if (data.autoConfirmFuture && (data.minimumAmount == null || data.maximumAmount == null)) throw new BadRequestException('Automatic confirmation requires an approved amount range');
+    if (data.minimumAmount != null && data.maximumAmount != null && data.minimumAmount > data.maximumAmount) throw new BadRequestException('Minimum amount cannot exceed maximum amount');
     const locationId = data.restaurantLocationId ?? transaction.restaurantLocationId;
     const vendorId = data.vendorId === undefined ? transaction.vendorId : data.vendorId;
     const categoryId = data.categoryId === undefined ? transaction.categoryId : data.categoryId;
@@ -259,10 +302,62 @@ export class BankService {
       const matchType = data.ruleMatchType ?? MerchantRuleMatchType.EXACT;
       const existing = await this.prisma.merchantRule.findFirst({ where: { organizationId: transaction.organizationId, restaurantLocationId: locationId, matchType, matchValue } });
       const rule = existing
-        ? await this.prisma.merchantRule.update({ where: { id: existing.id }, data: { vendorId: data.vendorId ?? transaction.vendorId, expenseCategoryId: data.categoryId ?? transaction.categoryId, normalizedMerchantName: transaction.merchantNameNormalized } })
-        : await this.prisma.merchantRule.create({ data: { organizationId: transaction.organizationId, restaurantLocationId: locationId, matchType, matchValue, normalizedMerchantName: transaction.merchantNameNormalized, vendorId: data.vendorId ?? transaction.vendorId, expenseCategoryId: data.categoryId ?? transaction.categoryId, createdByUserId: userId } });
+        ? await this.prisma.merchantRule.update({ where: { id: existing.id }, data: { active: true, autoConfirm: data.autoConfirmFuture ?? false, minimumAmount: data.minimumAmount, maximumAmount: data.maximumAmount, vendorId: data.vendorId ?? transaction.vendorId, expenseCategoryId: data.categoryId ?? transaction.categoryId, normalizedMerchantName: transaction.merchantNameNormalized } })
+        : await this.prisma.merchantRule.create({ data: { organizationId: transaction.organizationId, restaurantLocationId: locationId, matchType, matchValue, normalizedMerchantName: transaction.merchantNameNormalized, active: true, autoConfirm: data.autoConfirmFuture ?? false, minimumAmount: data.minimumAmount, maximumAmount: data.maximumAmount, vendorId: data.vendorId ?? transaction.vendorId, expenseCategoryId: data.categoryId ?? transaction.categoryId, createdByUserId: userId } });
       await this.audit.log({ userId, organizationId: transaction.organizationId, action: 'bank.merchant_rule_created', entityType: 'MerchantRule', entityId: rule.id });
     }
+    return saved;
+  }
+
+  async bulkReview(userId: string, data: BulkReviewBankTransactionsDto) {
+    const uniqueIds = [...new Set(data.ids)];
+    const rows = await this.prisma.bankTransaction.findMany({ where: { id: { in: uniqueIds } }, select: { id: true, organizationId: true, restaurantLocationId: true } });
+    if (rows.length !== uniqueIds.length) throw new NotFoundException('One or more bank transactions were not found');
+    const organizationIds = new Set(rows.map((row) => row.organizationId));
+    const locationIds = new Set(rows.map((row) => row.restaurantLocationId));
+    if (organizationIds.size !== 1 || locationIds.size !== 1) throw new BadRequestException('Bulk review requires transactions from one restaurant');
+    await this.organization(userId, rows[0].organizationId);
+    const reviewData: ReviewBankTransactionDto = { ...data };
+    delete (reviewData as any).ids;
+    const results = [];
+    for (const id of uniqueIds) results.push(await this.review(userId, id, reviewData));
+    return { count: results.length, results };
+  }
+
+  async reverseReconciliation(userId: string, id: string) {
+    const transaction = await this.transaction(userId, id);
+    if (transaction.reconciliationStatus !== BankReconciliationStatus.MATCHED_EXPENSE || !transaction.expenseId) throw new BadRequestException('Transaction is not reconciled to an expense');
+    const result = await this.prisma.$transaction(async (tx) => {
+      const current = await tx.bankTransaction.findUnique({ where: { id } });
+      if (!current?.expenseId || current.reconciliationStatus !== BankReconciliationStatus.MATCHED_EXPENSE) throw new ConflictException('Transaction reconciliation changed');
+      const expense = await tx.expense.findUnique({ where: { id: current.expenseId } });
+      if (!expense || expense.source !== ExpenseSource.BANK_IMPORT) throw new BadRequestException('Only bank-created expenses can be reversed here');
+      const links = await tx.bankTransaction.count({ where: { expenseId: expense.id } });
+      if (links !== 1) throw new ConflictException('Expense has multiple financial links');
+      await tx.expense.delete({ where: { id: expense.id } });
+      return tx.bankTransaction.update({ where: { id }, data: { expenseId: null, reconciliationStatus: BankReconciliationStatus.NEEDS_REVIEW } });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    await this.audit.log({ userId, organizationId: transaction.organizationId, action: 'bank.transaction_reconciliation_reversed', entityType: 'BankTransaction', entityId: id });
+    return result;
+  }
+
+  async merchantRules(userId: string, organizationId: string, locationId: string) {
+    await this.organization(userId, organizationId);
+    await this.validateLocation(organizationId, locationId);
+    return this.prisma.merchantRule.findMany({ where: { organizationId, restaurantLocationId: locationId }, include: { vendor: { select: { id: true, name: true } }, expenseCategory: { select: { id: true, name: true } } }, orderBy: { updatedAt: 'desc' } });
+  }
+
+  async updateMerchantRule(userId: string, id: string, data: UpdateMerchantRuleDto) {
+    const rule = await this.prisma.merchantRule.findUnique({ where: { id } });
+    if (!rule) throw new NotFoundException('Merchant rule not found');
+    await this.organization(userId, rule.organizationId);
+    if (data.minimumAmount != null && data.maximumAmount != null && data.minimumAmount > data.maximumAmount) throw new BadRequestException('Minimum amount cannot exceed maximum amount');
+    if (data.autoConfirm === true && (data.minimumAmount ?? rule.minimumAmount) == null) throw new BadRequestException('Automatic confirmation requires a minimum amount');
+    if (data.autoConfirm === true && (data.maximumAmount ?? rule.maximumAmount) == null) throw new BadRequestException('Automatic confirmation requires a maximum amount');
+    if (data.vendorId && !(await this.prisma.vendor.findFirst({ where: { id: data.vendorId, organizationId: rule.organizationId } }))) throw new ForbiddenException('Vendor is not available');
+    if (data.categoryId && !(await this.prisma.expenseCategory.findFirst({ where: { id: data.categoryId, OR: [{ organizationId: null }, { organizationId: rule.organizationId }] } }))) throw new ForbiddenException('Category is not available');
+    const saved = await this.prisma.merchantRule.update({ where: { id }, data: { active: data.active, autoConfirm: data.autoConfirm, vendorId: data.vendorId, expenseCategoryId: data.categoryId, minimumAmount: data.minimumAmount, maximumAmount: data.maximumAmount } });
+    await this.audit.log({ userId, organizationId: rule.organizationId, action: 'bank.merchant_rule_updated', entityType: 'MerchantRule', entityId: id });
     return saved;
   }
 

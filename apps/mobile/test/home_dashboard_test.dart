@@ -94,6 +94,7 @@ void main() {
     Future<DashboardData?> Function(Ref ref)? dashboard,
     Future<DashboardData?> Function(Ref ref)? previous,
     Stream<BankSyncStatus> Function(Ref ref)? bankSync,
+    Future<List<BankTransactionData>> Function(Ref ref)? bankTransactions,
   }) => ProviderScope(
     overrides: [
       activeLocationProvider.overrideWithValue(downtown),
@@ -115,6 +116,14 @@ void main() {
               ),
             ),
       ),
+      bankTransactionsProvider.overrideWith(
+        bankTransactions ?? (_) async => const [],
+      ),
+      bankTransactionsAwaitingReviewProvider.overrideWith(
+        (_) async => const [],
+      ),
+      allBankTransactionsProvider.overrideWith((_) async => const []),
+      bankConnectionsProvider.overrideWith((_) async => const []),
       needsAttentionProvider.overrideWith(
         (_) async => const NeedsAttentionData(
           summary: AttentionSummary(
@@ -128,7 +137,21 @@ void main() {
         ),
       ),
     ],
-    child: const MaterialApp(home: Scaffold(body: HomeScreen())),
+    child: MaterialApp(
+      home: Scaffold(
+        body: Column(
+          children: [
+            const Expanded(child: HomeScreen()),
+            Consumer(
+              builder: (context, ref, _) {
+                ref.watch(bankTransactionsProvider);
+                return const SizedBox.shrink();
+              },
+            ),
+          ],
+        ),
+      ),
+    ),
   );
 
   testWidgets('non-zero dashboard renders financial cards and profit focus', (
@@ -382,6 +405,7 @@ void main() {
       final statuses = StreamController<BankSyncStatus>();
       addTearDown(statuses.close);
       var dashboardLoads = 0;
+      var transactionLoads = 0;
       await tester.pumpWidget(
         dashboardApp(
           dashboard: (_) async {
@@ -389,6 +413,10 @@ void main() {
             return currentDashboard;
           },
           bankSync: (_) => statuses.stream,
+          bankTransactions: (_) async {
+            transactionLoads++;
+            return const [];
+          },
         ),
       );
       statuses.add(
@@ -418,6 +446,7 @@ void main() {
       await tester.pump();
       await tester.pump();
       expect(dashboardLoads, 2);
+      expect(transactionLoads, 2);
       expect(find.byKey(const Key('bank-sync-banner')), findsNothing);
     },
   );

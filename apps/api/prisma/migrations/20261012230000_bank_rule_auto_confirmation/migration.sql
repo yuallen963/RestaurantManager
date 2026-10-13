@@ -1,0 +1,5 @@
+ALTER TABLE "MerchantRule"
+ADD COLUMN "active" BOOLEAN NOT NULL DEFAULT true,
+ADD COLUMN "autoConfirm" BOOLEAN NOT NULL DEFAULT false,
+ADD COLUMN "minimumAmount" DECIMAL(14,2),
+ADD COLUMN "maximumAmount" DECIMAL(14,2);

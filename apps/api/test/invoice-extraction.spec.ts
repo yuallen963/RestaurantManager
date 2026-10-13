@@ -1,13 +1,14 @@
 import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { ExtractionStatus, ReviewStatus } from '@prisma/client';
-import { extractionConfidence, InvoiceExtractionProcessor, normalizeExtractedDate, parsePackageSize, reconcileInvoice } from '../src/invoices/extraction.processor';
+import { establishFieldProvenance, extractionConfidence, InvoiceExtractionProcessor, normalizeExtractedDate, parsePackageSize, reconcileInvoice } from '../src/invoices/extraction.processor';
 import { ExtractedInvoiceSchema } from '../src/invoices/extraction.provider';
 import { InvoicesService } from '../src/invoices/invoices.service';
 import { InvoiceExtractionProvider } from '../src/invoices/extraction.provider';
 const mockGenerateContent = jest.fn();
 jest.mock('@google/genai', () => ({ GoogleGenAI: jest.fn().mockImplementation(() => ({ models: { generateContent: mockGenerateContent } })) }));
 
-const extraction = { vendorName: 'Sysco', vendorAddress: '123 Food Way', invoiceNumber: 'INV-1', invoiceDate: '2026-10-04', dueDate: '2026-11-04', subtotal: 100, tax: 6, otherFees: 0, total: 106, currency: 'USD', uncertainFields: [], lineItems: [{ lineNumber: 1, sourcePage: 1, rawDescription: 'CHKN BRST BNLS SKLS 4/10 LB', normalizedName: 'Chicken Breast', sku: '384920', quantity: 2, unit: 'CASE', packSize: '4 x 10 lb', unitPrice: 50, extendedPrice: 100, category: 'Food' as const, productAttributes: { brand: null, condition: 'Fresh', bone: 'Boneless', skin: 'Skinless', organic: null, grade: null, cut: 'Breast', size: null, packConfiguration: '4/10 LB' }, uncertainFields: [] }] };
+const evidence = (sourceText: string | null, sourcePage = 1) => ({ sourceText, sourcePage: sourceText === null ? null : sourcePage });
+const extraction = { vendorName: 'Sysco', vendorAddress: '123 Food Way', invoiceNumber: 'INV-1', invoiceDate: '2026-10-04', dueDate: '2026-11-04', subtotal: 100, tax: 6, otherFees: 0, discount: 0, total: 106, currency: 'USD', fieldEvidence: { vendorName: evidence('SYSCO'), invoiceNumber: evidence('Invoice INV-1'), invoiceDate: evidence('Invoice date 10/04/2026'), dueDate: evidence('Due 11/04/2026'), subtotal: evidence('Subtotal $100.00'), tax: evidence('Tax $6.00'), otherFees: evidence('Fees $0.00'), discount: evidence('Discount $0.00'), total: evidence('Total $106.00'), currency: evidence('Currency USD') }, uncertainFields: [], lineItems: [{ lineNumber: 1, sourcePage: 1, sourceText: '2 CASE 384920 CHKN BRST BNLS SKLS 4/10 LB 50.00 100.00', rawDescription: 'CHKN BRST BNLS SKLS 4/10 LB', normalizedName: 'Chicken Breast', sku: '384920', quantity: 2, unit: 'CASE', packSize: '4/10 LB', unitPrice: 50, extendedPrice: 100, category: 'Food' as const, productAttributes: { brand: null, condition: 'Fresh', bone: 'Boneless', skin: 'Skinless', organic: null, grade: null, cut: 'Breast', size: null, packConfiguration: '4/10 LB' }, uncertainFields: [] }] };
 
 describe('invoice extraction', () => {
   it('reconciles complete invoice totals and tolerates cent rounding', () => {
@@ -18,8 +19,57 @@ describe('invoice extraction', () => {
   it('flags subtotal and final-total discrepancies without changing extracted values', () => {
     expect(reconcileInvoice({ ...extraction, subtotal: 99 }).reasons).toEqual(['SUBTOTAL_MISMATCH', 'LINE_EXTENSION_MISMATCH', 'TOTAL_MISMATCH']);
     expect(reconcileInvoice({ ...extraction, subtotal: 100, tax: 6, otherFees: 0, total: 105 }).reasons).toContain('TOTAL_MISMATCH');
-    expect(reconcileInvoice({ ...extraction, subtotal: 1320, tax: 91.9, otherFees: null, total: 1411 }).reasons).toContain('TOTAL_MISMATCH');
-    expect(reconcileInvoice({ ...extraction, subtotal: null, tax: null, otherFees: null, total: null }).reasons).toEqual([]);
+    expect(reconcileInvoice({ ...extraction, subtotal: 1320, tax: 91.9, otherFees: 0, discount: 0, total: 1411 }).reasons).toContain('TOTAL_MISMATCH');
+    expect(reconcileInvoice({ ...extraction, subtotal: null, tax: null, otherFees: null, discount: null, total: null }).reasons).toEqual([]);
+  });
+
+  it('rejects unsupported model-generated values and preserves calculated provenance without persisting guesses', () => {
+    const result = establishFieldProvenance({
+      ...extraction,
+      invoiceNumber: 'INVENTED-9',
+      subtotal: 999,
+      total: 106,
+      currency: 'EUR',
+      fieldEvidence: {
+        ...extraction.fieldEvidence,
+        invoiceNumber: evidence(null),
+        subtotal: evidence('Subtotal unreadable'),
+        total: evidence('Total $106.00'),
+        currency: evidence('$'),
+      },
+    });
+    expect(result.data.invoiceNumber).toBeNull();
+    expect(result.data.subtotal).toBeNull();
+    expect(result.data.currency).toBeNull();
+    expect(result.data.total).toBe(106);
+    expect(result.provenance.subtotal).toEqual(expect.objectContaining({ kind: 'CALCULATED', calculatedValue: '100.00' }));
+    expect(result.unsupportedFields).toEqual(expect.arrayContaining(['invoiceNumber', 'subtotal', 'currency']));
+  });
+
+  it('does not treat mathematical consistency as evidence that a financial value was printed', () => {
+    const result = establishFieldProvenance({ ...extraction, total: 106, fieldEvidence: { ...extraction.fieldEvidence, total: evidence(null) } });
+    expect(result.data.total).toBeNull();
+    expect(result.provenance.total.kind).toBe('CALCULATED');
+    expect(result.provenance.total.verified).toBe(false);
+  });
+
+  it('accepts exact date evidence written with a month name', () => {
+    const result = establishFieldProvenance({
+      ...extraction,
+      invoiceDate: '2026-10-04',
+      fieldEvidence: { ...extraction.fieldEvidence, invoiceDate: evidence('Invoice Date: October 4, 2026') },
+    });
+    expect(result.data.invoiceDate).toBe('2026-10-04');
+    expect(result.provenance.invoiceDate).toEqual(expect.objectContaining({ kind: 'OBSERVED', sourcePage: 1 }));
+  });
+
+  it('removes unsupported line-item financial claims', () => {
+    const result = establishFieldProvenance({
+      ...extraction,
+      lineItems: [{ ...extraction.lineItems[0], sourceText: 'CHKN BRST BNLS SKLS', quantity: 99, unitPrice: 999, extendedPrice: 98901 }],
+    });
+    expect(result.data.lineItems[0]).toEqual(expect.objectContaining({ quantity: null, unitPrice: null, extendedPrice: null }));
+    expect(result.data.lineItems[0].uncertainFields).toEqual(expect.arrayContaining(['UNSUPPORTED_quantity', 'UNSUPPORTED_unitPrice', 'UNSUPPORTED_extendedPrice']));
   });
 
   it('does not apply line math to case/package quantities', () => {
@@ -143,7 +193,7 @@ describe('invoice extraction', () => {
   });
 
   it('aggregates multi-page line items into one invoice transaction', async () => {
-    const multiPage = { ...extraction, lineItems: [extraction.lineItems[0], { ...extraction.lineItems[0], lineNumber: 2, sourcePage: 2, rawDescription: 'FRY OIL 2/35 LB', normalizedName: 'Frying Oil', packSize: '2/35 LB' }] };
+    const multiPage = { ...extraction, lineItems: [extraction.lineItems[0], { ...extraction.lineItems[0], lineNumber: 2, sourcePage: 2, sourceText: '2 CASE 384920 FRY OIL 2/35 LB 50.00 100.00', rawDescription: 'FRY OIL 2/35 LB', normalizedName: 'Frying Oil', packSize: '2/35 LB' }] };
     const tx: any = { invoiceLineItem: { deleteMany: jest.fn(), createMany: jest.fn() }, invoice: { findUnique: jest.fn().mockResolvedValue({ reviewStatus: ReviewStatus.NOT_REVIEWED }), update: jest.fn() } };
     const prisma: any = { invoice: { findUnique: jest.fn().mockResolvedValue({ id: 'inv', organizationId: 'org', restaurantLocationId: 'loc', storageKey: 'key', fileType: 'application/pdf', originalFileName: 'multi.pdf', reviewStatus: ReviewStatus.NOT_REVIEWED }) }, vendor: { findFirst: jest.fn() }, $transaction: (callback: (client: any) => unknown) => callback(tx) };
     const processor = new InvoiceExtractionProcessor(prisma, { get: jest.fn().mockResolvedValue(Buffer.from('pdf')) } as any, { extract: jest.fn().mockResolvedValue({ data: multiPage, provider: 'openai', model: 'gpt-4.1-mini', usage: null }) } as any, { log: jest.fn() } as any);

@@ -2,7 +2,176 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../main.dart' show AuthScreen, api;
+import '../../main.dart'
+    show
+        AuthScreen,
+        AccountSessionMode,
+        Home,
+        accountSessionModeProvider,
+        api,
+        pendingAuthChallengeKey,
+        pendingAuthChallengeMethodKey,
+        pendingAuthChallengeModeKey,
+        sessionModeStorageKey,
+        storage;
+import '../onboarding/foundation.dart';
+import '../onboarding/onboarding_screen.dart';
+
+class LoginChallengeScreen extends ConsumerStatefulWidget {
+  const LoginChallengeScreen({
+    super.key,
+    required this.challengeId,
+    required this.method,
+    this.accountMode = AccountSessionMode.standard,
+  });
+  final String challengeId;
+  final String method;
+  final AccountSessionMode accountMode;
+  @override
+  ConsumerState<LoginChallengeScreen> createState() =>
+      _LoginChallengeScreenState();
+}
+
+class _LoginChallengeScreenState extends ConsumerState<LoginChallengeScreen> {
+  final code = TextEditingController();
+  bool busy = false;
+  String? error;
+  Future<void> verify() async {
+    setState(() {
+      busy = true;
+      error = null;
+    });
+    try {
+      final response = await ref
+          .read(api)
+          .post(
+            '/auth/login-challenge',
+            data: {'challengeId': widget.challengeId, 'code': code.text.trim()},
+          );
+      await storage.write(
+        key: 'accessToken',
+        value: response.data['accessToken'],
+      );
+      await storage.write(
+        key: 'refreshToken',
+        value: response.data['refreshToken'],
+      );
+      await storage.delete(key: pendingAuthChallengeKey);
+      await storage.delete(key: pendingAuthChallengeMethodKey);
+      await storage.delete(key: pendingAuthChallengeModeKey);
+      await storage.write(
+        key: sessionModeStorageKey,
+        value: widget.accountMode.name,
+      );
+      ref.read(accountSessionModeProvider.notifier).state = widget.accountMode;
+      ref.read(api).options.headers['Authorization'] =
+          'Bearer ${response.data['accessToken']}';
+      final onboarding = await ref.read(onboardingRepositoryProvider).get();
+      if (mounted) {
+        Navigator.pushAndRemoveUntil(
+          context,
+          MaterialPageRoute(
+            builder: (_) =>
+                onboarding.completed ? const Home() : const Onboarding(),
+          ),
+          (_) => false,
+        );
+      }
+    } on DioException catch (exception) {
+      if (mounted) {
+        setState(
+          () => error = exception.response?.statusCode == 429
+              ? 'Too many attempts. Try again later.'
+              : 'That code is incorrect or expired.',
+        );
+      }
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
+  }
+
+  Future<void> resend() async {
+    setState(() {
+      busy = true;
+      error = null;
+    });
+    try {
+      await ref
+          .read(api)
+          .post(
+            '/auth/login-challenge/resend',
+            data: {'challengeId': widget.challengeId},
+          );
+      if (mounted) setState(() => error = 'A new code was sent.');
+    } on DioException {
+      if (mounted) {
+        setState(() => error = 'Wait before requesting another code.');
+      }
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(title: const Text('Verify sign-in')),
+    body: ListView(
+      padding: const EdgeInsets.all(24),
+      children: [
+        Icon(
+          widget.method == 'EMAIL'
+              ? Icons.mark_email_read_outlined
+              : Icons.phonelink_lock_outlined,
+          size: 60,
+        ),
+        const SizedBox(height: 16),
+        Text(
+          widget.method == 'EMAIL'
+              ? 'Enter the six-digit code sent to your email. It expires in 5 minutes.'
+              : 'Enter the code from your authenticator app or a one-time recovery code.',
+        ),
+        TextField(
+          key: const Key('login-challenge-code'),
+          controller: code,
+          autocorrect: false,
+          decoration: const InputDecoration(labelText: 'Verification code'),
+        ),
+        if (error != null)
+          Padding(padding: const EdgeInsets.only(top: 12), child: Text(error!)),
+        const SizedBox(height: 20),
+        FilledButton(
+          onPressed: busy ? null : verify,
+          child: const Text('Verify and sign in'),
+        ),
+        if (widget.method == 'EMAIL')
+          TextButton(
+            onPressed: busy ? null : resend,
+            child: const Text('Send another code'),
+          ),
+        TextButton(
+          onPressed: busy
+              ? null
+              : () async {
+                  await storage.delete(key: pendingAuthChallengeKey);
+                  await storage.delete(key: pendingAuthChallengeMethodKey);
+                  await storage.delete(key: pendingAuthChallengeModeKey);
+                  if (context.mounted &&
+                      widget.accountMode == AccountSessionMode.private) {
+                    Navigator.pop(context);
+                  } else if (context.mounted) {
+                    Navigator.pushAndRemoveUntil(
+                      context,
+                      MaterialPageRoute(builder: (_) => const AuthScreen()),
+                      (_) => false,
+                    );
+                  }
+                },
+          child: const Text('Cancel sign-in'),
+        ),
+      ],
+    ),
+  );
+}
 
 class VerifyEmailLinkScreen extends ConsumerStatefulWidget {
   const VerifyEmailLinkScreen({super.key, required this.token});
@@ -23,10 +192,14 @@ class _VerifyEmailLinkScreenState extends ConsumerState<VerifyEmailLinkScreen> {
 
   Future<void> verify() async {
     try {
-      await ref.read(api).post('/auth/verify-email', data: {'token': widget.token});
+      await ref
+          .read(api)
+          .post('/auth/verify-email', data: {'token': widget.token});
       if (mounted) setState(() => complete = true);
     } on DioException {
-      if (mounted) setState(() => error = 'Verification link is invalid or expired.');
+      if (mounted) {
+        setState(() => error = 'Verification link is invalid or expired.');
+      }
     }
   }
 

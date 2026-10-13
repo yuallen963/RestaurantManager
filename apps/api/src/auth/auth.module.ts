@@ -7,5 +7,6 @@ import { PrismaService } from '../prisma.service';
 import { AuditService } from '../audit.service';
 import { AuthEmailService } from './auth-email.service';
 import { AuthRateLimiter } from './auth-rate-limiter.service';
-@Module({ imports: [JwtModule.register({})], controllers: [AuthController], providers: [PrismaService, AuditService, AuthEmailService, AuthRateLimiter, AuthService, JwtAuthGuard], exports: [JwtModule, JwtAuthGuard] })
+import { AuthSecurityService } from './auth-security.service';
+@Module({ imports: [JwtModule.register({})], controllers: [AuthController], providers: [PrismaService, AuditService, AuthEmailService, AuthRateLimiter, AuthSecurityService, AuthService, JwtAuthGuard], exports: [JwtModule, JwtAuthGuard] })
 export class AuthModule {}

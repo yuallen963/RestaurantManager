@@ -58,6 +58,9 @@ const lookups = ExpenseLookups(
     ExpenseVendorOption(id: 'adp', name: 'ADP'),
   ],
 );
+final selectedBankLocationProvider = StateProvider<RestaurantLocation>(
+  (_) => downtown,
+);
 
 class FakeBankingRepository extends BankingRepository {
   FakeBankingRepository() : super(Dio());
@@ -69,6 +72,9 @@ class FakeBankingRepository extends BankingRepository {
   bool failSync = false;
   String? assignedLocation, confirmedInvoice;
   Map<String, dynamic>? reviewData;
+  List<String>? bulkIds;
+  final transactionStatuses = <String?>[];
+  Map<String?, List<BankTransactionData>> transactionsByStatus = const {};
   @override
   Future<BankLinkSetup> linkToken(String organizationId) async =>
       const BankLinkSetup('demo-link', true);
@@ -114,6 +120,16 @@ class FakeBankingRepository extends BankingRepository {
   @override
   Future<void> rejectMatch(String id) async {}
   @override
+  Future<List<BankTransactionData>> transactions(
+    String organizationId,
+    String? locationId,
+    String? status,
+  ) async {
+    transactionStatuses.add(status);
+    return transactionsByStatus[status] ?? const [];
+  }
+
+  @override
   Future<void> review(
     String id, {
     String? vendorId,
@@ -121,6 +137,9 @@ class FakeBankingRepository extends BankingRepository {
     String? locationId,
     bool ignored = false,
     bool createRule = false,
+    bool autoConfirmFuture = false,
+    double? minimumAmount,
+    double? maximumAmount,
   }) async {
     reviewData = {
       'vendorId': vendorId,
@@ -128,7 +147,34 @@ class FakeBankingRepository extends BankingRepository {
       'locationId': locationId,
       'ignored': ignored,
       'createRule': createRule,
+      'autoConfirmFuture': autoConfirmFuture,
     };
+  }
+
+  @override
+  Future<void> bulkReview(
+    List<String> ids, {
+    String? vendorId,
+    String? categoryId,
+    required String locationId,
+    bool ignored = false,
+  }) async {
+    bulkIds = ids;
+  }
+}
+
+class DeferredBankingRepository extends BankingRepository {
+  DeferredBankingRepository() : super(Dio());
+  final requests = <String, Completer<List<BankTransactionData>>>{};
+
+  @override
+  Future<List<BankTransactionData>> transactions(
+    String organizationId,
+    String? locationId,
+    String? status,
+  ) {
+    return (requests[locationId!] ??= Completer<List<BankTransactionData>>())
+        .future;
   }
 }
 
@@ -153,6 +199,17 @@ Widget transactionsApp(
     availableLocationsProvider.overrideWithValue(const [downtown, lakeside]),
     bankingRepositoryProvider.overrideWithValue(repository),
     bankTransactionsProvider.overrideWith((_) async => items),
+    bankConnectionsProvider.overrideWith((_) async => [connection]),
+    bankSyncStatusProvider.overrideWith(
+      (_) => Stream.value(
+        BankSyncStatus(
+          state: BankImportState.complete,
+          connectionCount: 1,
+          transactionCount: items.length,
+          canRetry: false,
+        ),
+      ),
+    ),
     expenseLookupsProvider.overrideWith((_) async => lookups),
   ],
   child: const MaterialApp(home: BankTransactionsScreen()),
@@ -291,6 +348,201 @@ void main() {
     expect(find.text('Matched'), findsOneWidget);
   });
 
+  test(
+    'matched filter combines invoice and expense reconciliation statuses',
+    () async {
+      final matchedInvoice = BankTransactionData(
+        id: 'matched-invoice',
+        merchant: 'Atlas',
+        description: 'ATLAS ACH',
+        amount: 100,
+        postedDate: DateTime(2026, 10, 8),
+        status: 'MATCHED_INVOICE',
+        categorizationSource: 'INVOICE_MATCH',
+        matchConfidence: 'EXACT',
+        pending: false,
+        restaurantLocationId: downtown.id,
+      );
+      final matchedExpense = BankTransactionData(
+        id: 'matched-expense',
+        merchant: 'ADP',
+        description: 'ADP PAYROLL',
+        amount: 200,
+        postedDate: DateTime(2026, 10, 9),
+        status: 'MATCHED_EXPENSE',
+        categorizationSource: 'USER_REVIEWED',
+        matchConfidence: 'NO_MATCH',
+        pending: false,
+        restaurantLocationId: downtown.id,
+      );
+      final repository = FakeBankingRepository()
+        ..transactionsByStatus = {
+          'MATCHED_INVOICE': [matchedInvoice],
+          'MATCHED_EXPENSE': [matchedExpense],
+        };
+      final container = ProviderContainer(
+        overrides: [
+          activeLocationProvider.overrideWithValue(downtown),
+          bankingRepositoryProvider.overrideWithValue(repository),
+          bankTransactionFilterProvider.overrideWith(
+            (_) => BankTransactionFilter.matched,
+          ),
+        ],
+      );
+      addTearDown(container.dispose);
+
+      final result = await container.read(bankTransactionsProvider.future);
+
+      expect(repository.transactionStatuses, [
+        'MATCHED_INVOICE',
+        'MATCHED_EXPENSE',
+      ]);
+      expect(result.map((item) => item.id), [
+        'matched-expense',
+        'matched-invoice',
+      ]);
+    },
+  );
+
+  test(
+    'late response from a previous restaurant cannot replace current data',
+    () async {
+      final repository = DeferredBankingRepository();
+      final container = ProviderContainer(
+        overrides: [
+          activeLocationProvider.overrideWith(
+            (ref) => ref.watch(selectedBankLocationProvider),
+          ),
+          bankingRepositoryProvider.overrideWithValue(repository),
+          bankTransactionFilterProvider.overrideWith(
+            (_) => BankTransactionFilter.all,
+          ),
+        ],
+      );
+      addTearDown(container.dispose);
+      final subscription = container.listen(
+        bankTransactionsProvider,
+        (_, _) {},
+        fireImmediately: true,
+      );
+      addTearDown(subscription.close);
+      await Future<void>.delayed(Duration.zero);
+
+      container.read(selectedBankLocationProvider.notifier).state = lakeside;
+      await Future<void>.delayed(Duration.zero);
+      final lakesideItem = BankTransactionData(
+        id: 'lakeside-item',
+        merchant: 'Lakeside Supplier',
+        description: 'LAKESIDE',
+        amount: 20,
+        postedDate: DateTime(2026, 10, 8),
+        status: 'NEEDS_REVIEW',
+        categorizationSource: 'PROVIDER',
+        matchConfidence: 'NO_MATCH',
+        pending: false,
+        restaurantLocationId: lakeside.id,
+      );
+      repository.requests[lakeside.id]!.complete([lakesideItem]);
+      await container.read(bankTransactionsProvider.future);
+      repository.requests[downtown.id]!.complete([reviewTransaction]);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(container.read(bankTransactionsProvider).valueOrNull, [
+        lakesideItem,
+      ]);
+    },
+  );
+
+  testWidgets(
+    'transaction empty state distinguishes synchronization progress',
+    (tester) async {
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            activeLocationProvider.overrideWithValue(downtown),
+            bankTransactionsProvider.overrideWith((_) async => []),
+            bankConnectionsProvider.overrideWith((_) async => [connection]),
+            bankSyncStatusProvider.overrideWith(
+              (_) => Stream.value(
+                const BankSyncStatus(
+                  state: BankImportState.importing,
+                  connectionCount: 1,
+                  transactionCount: 0,
+                  canRetry: false,
+                ),
+              ),
+            ),
+          ],
+          child: const MaterialApp(home: BankTransactionsScreen()),
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+
+      expect(
+        find.textContaining('synchronization is still in progress'),
+        findsWidgets,
+      );
+    },
+  );
+
+  testWidgets('transaction empty state distinguishes completed empty history', (
+    tester,
+  ) async {
+    await tester.pumpWidget(transactionsApp(FakeBankingRepository(), const []));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.textContaining('no bank transactions were found'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('transaction empty state explains account assigned elsewhere', (
+    tester,
+  ) async {
+    final elsewhere = BankConnectionData(
+      id: 'elsewhere',
+      institutionName: 'Bank',
+      status: 'CONNECTED',
+      accounts: const [
+        BankAccountData(
+          id: 'elsewhere-account',
+          name: 'Checking',
+          active: true,
+          restaurantLocationId: 'lakeside',
+          restaurantLocationName: 'Lakeside Grill',
+        ),
+      ],
+    );
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          activeLocationProvider.overrideWithValue(downtown),
+          bankTransactionsProvider.overrideWith((_) async => []),
+          bankConnectionsProvider.overrideWith((_) async => [elsewhere]),
+          bankSyncStatusProvider.overrideWith(
+            (_) => Stream.value(
+              const BankSyncStatus(
+                state: BankImportState.complete,
+                connectionCount: 1,
+                transactionCount: 0,
+                canRetry: false,
+              ),
+            ),
+          ),
+        ],
+        child: const MaterialApp(home: BankTransactionsScreen()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.textContaining('assigned to another restaurant'),
+      findsOneWidget,
+    );
+  });
+
   testWidgets(
     'exact invoice suggestion can be confirmed without creating an expense',
     (tester) async {
@@ -324,11 +576,60 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Food').last);
     await tester.pumpAndSettle();
-    await tester.tap(find.byType(Switch));
+    await tester.tap(find.byType(Switch).first);
+    await tester.ensureVisible(find.text('Reconcile Expense'));
     await tester.tap(find.text('Reconcile Expense'));
     await tester.pumpAndSettle();
     expect(repository.reviewData, containsPair('vendorId', 'adp'));
     expect(repository.reviewData, containsPair('categoryId', 'food'));
     expect(repository.reviewData, containsPair('createRule', true));
+  });
+
+  testWidgets('explicit auto-confirm opt-in is sent with the approved rule', (
+    tester,
+  ) async {
+    final repository = FakeBankingRepository();
+    await tester.pumpWidget(transactionsApp(repository, [reviewTransaction]));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Sysco'));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.byKey(const Key('auto-confirm-future')));
+    await tester.tap(find.byKey(const Key('auto-confirm-future')));
+    await tester.ensureVisible(find.text('Reconcile Expense'));
+    await tester.tap(find.text('Reconcile Expense'));
+    await tester.pumpAndSettle();
+    expect(repository.reviewData, containsPair('createRule', true));
+    expect(repository.reviewData, containsPair('autoConfirmFuture', true));
+  });
+
+  testWidgets('eligible transactions support bulk confirmation', (
+    tester,
+  ) async {
+    final repository = FakeBankingRepository();
+    final eligible = BankTransactionData(
+      id: 'eligible',
+      merchant: 'Restaurant Depot',
+      description: 'RESTAURANT DEPOT',
+      amount: 250,
+      postedDate: DateTime(2026, 10, 8),
+      status: 'NEEDS_REVIEW',
+      categorizationSource: 'PROVIDER',
+      matchConfidence: 'NO_MATCH',
+      pending: false,
+      restaurantLocationId: downtown.id,
+    );
+    await tester.pumpWidget(transactionsApp(repository, [eligible]));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byType(Checkbox));
+    await tester.pump();
+    await tester.tap(find.widgetWithText(FilledButton, 'Confirm').first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Category'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Food').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, 'Confirm').last);
+    await tester.pumpAndSettle();
+    expect(repository.bulkIds, ['eligible']);
   });
 }

@@ -6,7 +6,21 @@ import 'package:plaid_link_flutter/plaid_link_flutter.dart';
 
 import '../dashboard/foundation.dart';
 import '../expenses/foundation.dart';
+import '../needs_attention/foundation.dart';
+import '../vendors/foundation.dart';
 import 'foundation.dart';
+
+void _invalidateBankDerivedProviders(WidgetRef ref) {
+  ref.invalidate(bankTransactionsProvider);
+  ref.invalidate(bankTransactionsAwaitingReviewProvider);
+  ref.invalidate(allBankTransactionsProvider);
+  ref.invalidate(unverifiedBankDepositsProvider);
+  ref.invalidate(expenseListProvider);
+  ref.invalidate(vendorListProvider);
+  ref.invalidate(dashboardProvider);
+  ref.invalidate(previousDashboardProvider);
+  ref.invalidate(needsAttentionProvider);
+}
 
 class BankAccountsScreen extends ConsumerStatefulWidget {
   const BankAccountsScreen({super.key});
@@ -91,6 +105,7 @@ class _BankAccountsScreenState extends ConsumerState<BankAccountsScreen> {
   Future<void> refresh() async {
     ref.invalidate(bankConnectionsProvider);
     ref.invalidate(bankTransactionsProvider);
+    ref.invalidate(bankTransactionsAwaitingReviewProvider);
     ref.invalidate(bankSyncStatusProvider);
     ref.invalidate(dashboardProvider);
     ref.invalidate(previousDashboardProvider);
@@ -151,6 +166,17 @@ class _BankAccountsScreenState extends ConsumerState<BankAccountsScreen> {
                     : const Icon(Icons.account_balance),
                 label: const Text('Connect bank'),
               ),
+              TextButton.icon(
+                key: const Key('bank-automation-rules'),
+                onPressed: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => const MerchantRulesScreen(),
+                  ),
+                ),
+                icon: const Icon(Icons.auto_awesome),
+                label: const Text('Automation rules'),
+              ),
               const SizedBox(height: 16),
               if (connections.isEmpty)
                 const Center(
@@ -168,6 +194,70 @@ class _BankAccountsScreenState extends ConsumerState<BankAccountsScreen> {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+class MerchantRulesScreen extends ConsumerWidget {
+  const MerchantRulesScreen({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final rules = ref.watch(merchantRulesProvider);
+    return Scaffold(
+      appBar: AppBar(title: const Text('Bank Automation Rules')),
+      body: rules.when(
+        loading: () => const Center(child: CircularProgressIndicator()),
+        error: (_, _) => _BankError(
+          message: 'Unable to load automation rules',
+          retry: () => ref.invalidate(merchantRulesProvider),
+        ),
+        data: (items) => items.isEmpty
+            ? const Center(
+                child: Padding(
+                  padding: EdgeInsets.all(24),
+                  child: Text(
+                    'No automation rules yet. Approve one while reviewing a bank transaction.',
+                  ),
+                ),
+              )
+            : ListView(
+                padding: const EdgeInsets.all(16),
+                children: [
+                  const Text(
+                    'Automatic confirmation is always opt-in. Disabling a rule never changes historical expenses.',
+                  ),
+                  const SizedBox(height: 12),
+                  for (final rule in items)
+                    Card(
+                      child: SwitchListTile(
+                        key: ValueKey('merchant-rule-${rule.id}'),
+                        title: Text(rule.merchant),
+                        subtitle: Text(
+                          [
+                            if (rule.vendorName != null) rule.vendorName!,
+                            if (rule.categoryName != null) rule.categoryName!,
+                            if (rule.autoConfirm &&
+                                rule.minimumAmount != null &&
+                                rule.maximumAmount != null)
+                              '${_currency(rule.minimumAmount!)}–${_currency(rule.maximumAmount!)}',
+                            rule.autoConfirm
+                                ? 'Automatically confirmed when eligible'
+                                : 'Suggestions only',
+                          ].join(' · '),
+                        ),
+                        value: rule.active,
+                        onChanged: (active) async {
+                          await ref
+                              .read(bankingRepositoryProvider)
+                              .updateMerchantRule(rule.id, active: active);
+                          ref.invalidate(merchantRulesProvider);
+                        },
+                      ),
+                    ),
+                ],
+              ),
       ),
     );
   }
@@ -194,6 +284,7 @@ class _ConnectionCardState extends ConsumerState<_ConnectionCard> {
       await action();
       ref.invalidate(bankConnectionsProvider);
       ref.invalidate(bankTransactionsProvider);
+      ref.invalidate(bankTransactionsAwaitingReviewProvider);
       ref.invalidate(bankSyncStatusProvider);
       ref.invalidate(dashboardProvider);
       ref.invalidate(previousDashboardProvider);
@@ -355,18 +446,111 @@ class _AccountTile extends ConsumerWidget {
               .assignAccount(account.id, selected.id);
           ref.invalidate(bankConnectionsProvider);
           ref.invalidate(bankTransactionsProvider);
+          ref.invalidate(bankTransactionsAwaitingReviewProvider);
         }
       },
     );
   }
 }
 
-class BankTransactionsScreen extends ConsumerWidget {
+class BankTransactionsScreen extends ConsumerStatefulWidget {
   const BankTransactionsScreen({super.key});
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<BankTransactionsScreen> createState() =>
+      _BankTransactionsScreenState();
+}
+
+class _BankTransactionsScreenState
+    extends ConsumerState<BankTransactionsScreen> {
+  final selected = <String>{};
+
+  Future<void> bulkReview({required bool ignored}) async {
+    final location = ref.read(activeLocationProvider);
+    if (location == null || selected.isEmpty) return;
+    String? vendorId;
+    String? categoryId;
+    if (!ignored) {
+      final lookups = await ref.read(expenseLookupsProvider.future);
+      if (!mounted) return;
+      final proceed = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => StatefulBuilder(
+          builder: (context, setDialogState) => AlertDialog(
+            title: Text('Confirm ${selected.length} transactions'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                DropdownButtonFormField<String>(
+                  decoration: const InputDecoration(labelText: 'Category'),
+                  items: lookups.categories
+                      .map(
+                        (item) => DropdownMenuItem(
+                          value: item.id,
+                          child: Text(item.name),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (value) =>
+                      setDialogState(() => categoryId = value),
+                ),
+                DropdownButtonFormField<String>(
+                  decoration: const InputDecoration(
+                    labelText: 'Vendor (optional)',
+                  ),
+                  items: lookups.vendors
+                      .map(
+                        (item) => DropdownMenuItem(
+                          value: item.id,
+                          child: Text(item.name),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (value) => setDialogState(() => vendorId = value),
+                ),
+                const SizedBox(height: 12),
+                const Text(
+                  'Only posted, eligible transactions will become confirmed expenses.',
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext, false),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: categoryId == null
+                    ? null
+                    : () => Navigator.pop(dialogContext, true),
+                child: const Text('Confirm'),
+              ),
+            ],
+          ),
+        ),
+      );
+      if (proceed != true) return;
+    }
+    await ref
+        .read(bankingRepositoryProvider)
+        .bulkReview(
+          selected.toList(),
+          vendorId: vendorId,
+          categoryId: categoryId,
+          locationId: location.id,
+          ignored: ignored,
+        );
+    if (!mounted) return;
+    setState(selected.clear);
+    _invalidateBankDerivedProviders(ref);
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final filter = ref.watch(bankTransactionFilterProvider);
     final state = ref.watch(bankTransactionsProvider);
+    final sync = ref.watch(bankSyncStatusProvider);
+    final connections = ref.watch(bankConnectionsProvider);
+    final range = ref.watch(dateRangeProvider);
     return Scaffold(
       appBar: AppBar(title: const Text('Bank Transactions')),
       body: Column(
@@ -394,6 +578,56 @@ class BankTransactionsScreen extends ConsumerWidget {
                       value.first,
             ),
           ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Align(
+              alignment: Alignment.centerRight,
+              child: Text(
+                'Selected period: ${_date(range.startDate)} – ${_date(range.endDate)}',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ),
+          ),
+          if (sync.valueOrNull?.inProgress == true)
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 10, 16, 0),
+              child: Card(
+                child: ListTile(
+                  leading: SizedBox.square(
+                    dimension: 22,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                  title: Text('Bank synchronization is still in progress.'),
+                  subtitle: Text(
+                    'Imported transactions will appear automatically when they are available.',
+                  ),
+                ),
+              ),
+            ),
+          if (selected.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              child: Card(
+                child: ListTile(
+                  title: Text('${selected.length} selected'),
+                  subtitle: const Text(
+                    'Bulk actions never include pending, matched, or deposit transactions.',
+                  ),
+                  trailing: Wrap(
+                    children: [
+                      TextButton(
+                        onPressed: () => bulkReview(ignored: true),
+                        child: const Text('Ignore'),
+                      ),
+                      FilledButton(
+                        onPressed: () => bulkReview(ignored: false),
+                        child: const Text('Confirm'),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
           Expanded(
             child: state.when(
               loading: () => const Center(child: CircularProgressIndicator()),
@@ -402,28 +636,49 @@ class BankTransactionsScreen extends ConsumerWidget {
                 retry: () => ref.refresh(bankTransactionsProvider.future),
               ),
               data: (items) {
-                if (items.isEmpty) {
-                  return Center(
-                    child: Text(
-                      filter == BankTransactionFilter.needsReview
-                          ? 'No transactions need review.'
-                          : 'No bank transactions found.',
-                    ),
+                final visibleItems = items
+                    .where(
+                      (item) =>
+                          !item.postedDate.isBefore(range.startDate) &&
+                          item.postedDate.isBefore(
+                            range.endDate.add(const Duration(days: 1)),
+                          ),
+                    )
+                    .toList();
+                if (visibleItems.isEmpty) {
+                  return _BankTransactionsEmptyState(
+                    filter: filter,
+                    allFilteredItems: items,
+                    sync: sync.valueOrNull,
+                    connections: connections.valueOrNull ?? const [],
                   );
                 }
                 return ListView.builder(
-                  itemCount: items.length,
+                  itemCount: visibleItems.length,
                   itemBuilder: (context, index) {
-                    final item = items[index];
+                    final item = visibleItems[index];
                     return ListTile(
                       key: ValueKey('bank-transaction-${item.id}'),
-                      leading: CircleAvatar(
-                        child: Icon(
-                          item.status == 'MATCHED_INVOICE'
-                              ? Icons.link
-                              : Icons.help_outline,
-                        ),
-                      ),
+                      leading:
+                          item.status == 'NEEDS_REVIEW' &&
+                              !item.pending &&
+                              item.amount > 0 &&
+                              item.suggestedInvoice == null
+                          ? Checkbox(
+                              value: selected.contains(item.id),
+                              onChanged: (value) => setState(
+                                () => value == true
+                                    ? selected.add(item.id)
+                                    : selected.remove(item.id),
+                              ),
+                            )
+                          : CircleAvatar(
+                              child: Icon(
+                                item.status == 'MATCHED_INVOICE'
+                                    ? Icons.link
+                                    : Icons.help_outline,
+                              ),
+                            ),
                       title: Text(item.merchant),
                       subtitle: Text(
                         '${_date(item.postedDate)} • ${_status(item.status)}${item.categoryName == null ? '' : ' • ${item.categoryName}'}',
@@ -451,6 +706,63 @@ class BankTransactionsScreen extends ConsumerWidget {
   }
 }
 
+class _BankTransactionsEmptyState extends ConsumerWidget {
+  const _BankTransactionsEmptyState({
+    required this.filter,
+    required this.allFilteredItems,
+    required this.sync,
+    required this.connections,
+  });
+
+  final BankTransactionFilter filter;
+  final List<BankTransactionData> allFilteredItems;
+  final BankSyncStatus? sync;
+  final List<BankConnectionData> connections;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final activeLocationId = ref.watch(activeLocationProvider)?.id;
+    final assignedElsewhere = connections
+        .expand((connection) => connection.accounts)
+        .any(
+          (account) =>
+              account.active &&
+              account.restaurantLocationId != null &&
+              account.restaurantLocationId != activeLocationId,
+        );
+    final assignedHere = connections
+        .expand((connection) => connection.accounts)
+        .any(
+          (account) =>
+              account.active &&
+              account.restaurantLocationId == activeLocationId,
+        );
+    final message = switch (sync?.state) {
+      BankImportState.pending ||
+      BankImportState.importing ||
+      BankImportState.partiallyComplete =>
+        'Bank synchronization is still in progress. Transactions will appear automatically.',
+      _ when assignedElsewhere && !assignedHere =>
+        'Connected bank accounts are assigned to another restaurant. Switch restaurants or update the account assignment.',
+      BankImportState.complete when sync?.transactionCount == 0 =>
+        'Synchronization completed, but no bank transactions were found for this restaurant.',
+      _ when allFilteredItems.isNotEmpty =>
+        'No bank transactions were found within the selected date range.',
+      _ when filter == BankTransactionFilter.needsReview =>
+        'No transactions are awaiting reconciliation for this restaurant and period.',
+      _ when filter == BankTransactionFilter.matched =>
+        'No invoice-matched or expense-reconciled transactions were found for this period.',
+      _ => 'No bank transactions were found for this restaurant and period.',
+    };
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(28),
+        child: Text(message, textAlign: TextAlign.center),
+      ),
+    );
+  }
+}
+
 class TransactionReviewSheet extends ConsumerStatefulWidget {
   const TransactionReviewSheet({required this.transaction, super.key});
   final BankTransactionData transaction;
@@ -463,7 +775,7 @@ class _TransactionReviewSheetState
     extends ConsumerState<TransactionReviewSheet> {
   String? vendorId, categoryId, locationId;
   String? actionError;
-  bool createRule = false, saving = false;
+  bool createRule = false, autoConfirmFuture = false, saving = false;
   @override
   void initState() {
     super.initState();
@@ -487,8 +799,15 @@ class _TransactionReviewSheetState
             locationId: locationId,
             ignored: ignored,
             createRule: createRule,
+            autoConfirmFuture: autoConfirmFuture,
+            minimumAmount: autoConfirmFuture
+                ? widget.transaction.amount * .5
+                : null,
+            maximumAmount: autoConfirmFuture
+                ? widget.transaction.amount * 2
+                : null,
           );
-      ref.invalidate(bankTransactionsProvider);
+      _invalidateBankDerivedProviders(ref);
       if (mounted) Navigator.pop(context);
     } catch (_) {
       if (mounted) {
@@ -509,7 +828,7 @@ class _TransactionReviewSheetState
           widget.transaction.id,
           widget.transaction.suggestedInvoice!.id,
         );
-    ref.invalidate(bankTransactionsProvider);
+    _invalidateBankDerivedProviders(ref);
     if (mounted) Navigator.pop(context);
   }
 
@@ -517,7 +836,7 @@ class _TransactionReviewSheetState
     await ref
         .read(bankingRepositoryProvider)
         .rejectMatch(widget.transaction.id);
-    ref.invalidate(bankTransactionsProvider);
+    _invalidateBankDerivedProviders(ref);
     if (mounted) Navigator.pop(context);
   }
 
@@ -656,27 +975,70 @@ class _TransactionReviewSheetState
                   value: createRule,
                   onChanged: (value) => setState(() => createRule = value),
                 ),
-                Row(
-                  children: [
-                    Expanded(
-                      child: OutlinedButton(
-                        onPressed: saving ? null : () => save(ignored: true),
-                        child: const Text('Ignore'),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: FilledButton(
-                        onPressed: saving ? null : save,
-                        child: Text(
-                          widget.transaction.pending
-                              ? 'Save Category'
-                              : 'Reconcile Expense',
+                SwitchListTile(
+                  key: const Key('auto-confirm-future'),
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text(
+                    'Automatically confirm future eligible transactions',
+                  ),
+                  subtitle: const Text(
+                    'Off by default. Applies only to this restaurant, approved vendor/category, and a safe amount range. Exceptions still require review.',
+                  ),
+                  value: autoConfirmFuture,
+                  onChanged: (value) => setState(() {
+                    autoConfirmFuture = value;
+                    if (value) createRule = true;
+                  }),
+                ),
+                if (widget.transaction.status == 'MATCHED_EXPENSE')
+                  OutlinedButton.icon(
+                    key: const Key('reverse-reconciliation'),
+                    onPressed: saving
+                        ? null
+                        : () async {
+                            setState(() => saving = true);
+                            try {
+                              await ref
+                                  .read(bankingRepositoryProvider)
+                                  .reverse(widget.transaction.id);
+                              _invalidateBankDerivedProviders(ref);
+                              if (mounted) Navigator.pop(this.context);
+                            } catch (_) {
+                              if (mounted) {
+                                setState(
+                                  () => actionError =
+                                      'Unable to reverse this reconciliation safely.',
+                                );
+                              }
+                            } finally {
+                              if (mounted) setState(() => saving = false);
+                            }
+                          },
+                    icon: const Icon(Icons.undo),
+                    label: const Text('Reverse Reconciliation'),
+                  )
+                else
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: saving ? null : () => save(ignored: true),
+                          child: const Text('Ignore'),
                         ),
                       ),
-                    ),
-                  ],
-                ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: FilledButton(
+                          onPressed: saving ? null : save,
+                          child: Text(
+                            widget.transaction.pending
+                                ? 'Save Category'
+                                : 'Reconcile Expense',
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
               ],
             ),
           ),

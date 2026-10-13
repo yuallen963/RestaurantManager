@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:restaurant_profit_mobile/features/dashboard/foundation.dart';
+import 'package:restaurant_profit_mobile/features/banking/foundation.dart';
 import 'package:restaurant_profit_mobile/features/vendors/foundation.dart';
 import 'package:restaurant_profit_mobile/features/vendors/vendors_screen.dart';
 
@@ -94,7 +95,12 @@ class FakeVendorRepository extends VendorRepository {
 }
 
 void main() {
-  Widget app(FakeVendorRepository repository, {ProviderContainer? container}) {
+  Widget app(
+    FakeVendorRepository repository, {
+    ProviderContainer? container,
+    List<BankTransactionData> awaitingReview = const [],
+    List<BankTransactionData> bankTransactions = const [],
+  }) {
     final child = const MaterialApp(home: Scaffold(body: VendorsScreen()));
     if (container != null) {
       return UncontrolledProviderScope(container: container, child: child);
@@ -104,6 +110,20 @@ void main() {
         activeLocationProvider.overrideWithValue(downtown),
         availableLocationsProvider.overrideWithValue([downtown, lakeside]),
         vendorRepositoryProvider.overrideWithValue(repository),
+        bankSyncStatusProvider.overrideWith(
+          (_) => Stream.value(
+            const BankSyncStatus(
+              state: BankImportState.none,
+              connectionCount: 0,
+              transactionCount: 0,
+              canRetry: false,
+            ),
+          ),
+        ),
+        bankTransactionsAwaitingReviewProvider.overrideWith(
+          (_) async => awaitingReview,
+        ),
+        allBankTransactionsProvider.overrideWith((_) async => bankTransactions),
       ],
       child: child,
     );
@@ -137,10 +157,7 @@ void main() {
     final repository = FakeVendorRepository((_) async => page([], total: 0));
     await pump(tester, app(repository));
     await tester.pumpAndSettle();
-    expect(
-      find.text('No vendor activity found for this period.'),
-      findsOneWidget,
-    );
+    expect(find.textContaining('No confirmed vendor activity'), findsOneWidget);
     await tester.enterText(find.byKey(const Key('vendor-search')), 'none');
     await tester.pump(const Duration(milliseconds: 400));
     await tester.pumpAndSettle();
@@ -152,6 +169,64 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Unable to load vendors'), findsOneWidget);
     expect(find.text('Retry'), findsOneWidget);
+  });
+  testWidgets('bank merchant names are not presented as confirmed vendors', (
+    tester,
+  ) async {
+    final repository = FakeVendorRepository((_) async => page([], total: 0));
+    final waiting = BankTransactionData(
+      id: 'waiting',
+      merchant: 'Unconfirmed Merchant',
+      description: 'UNCONFIRMED ACH',
+      amount: 75,
+      postedDate: DateTime(2026, 10, 7),
+      status: 'NEEDS_REVIEW',
+      categorizationSource: 'PROVIDER',
+      matchConfidence: 'NO_MATCH',
+      pending: false,
+      restaurantLocationId: downtown.id,
+    );
+    await pump(tester, app(repository, awaitingReview: [waiting]));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.textContaining('do not become confirmed Vendors'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('Reconcile and link'), findsOneWidget);
+    expect(
+      find.byKey(const Key('review-bank-transactions-vendors')),
+      findsOneWidget,
+    );
+  });
+  testWidgets('bank merchants are visible without becoming confirmed vendors', (
+    tester,
+  ) async {
+    final transaction = BankTransactionData(
+      id: 'merchant-row',
+      merchant: 'Restaurant Depot',
+      description: 'RESTAURANT DEPOT',
+      amount: 250,
+      postedDate: DateTime(2026, 10, 7),
+      status: 'NEEDS_REVIEW',
+      categorizationSource: 'PROVIDER',
+      matchConfidence: 'NO_MATCH',
+      pending: false,
+      restaurantLocationId: downtown.id,
+    );
+    await pump(
+      tester,
+      app(
+        FakeVendorRepository((_) async => page([], total: 0)),
+        bankTransactions: [transaction],
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Bank Merchants'), findsOneWidget);
+    await tester.tap(find.text('Bank Merchants'));
+    await tester.pumpAndSettle();
+    expect(find.text('Restaurant Depot'), findsOneWidget);
+    expect(find.textContaining('Needs review'), findsOneWidget);
   });
   testWidgets('debounced search and sorting refresh server query', (
     tester,

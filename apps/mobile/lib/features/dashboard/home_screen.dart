@@ -39,6 +39,10 @@ class HomeScreen extends ConsumerWidget {
       final after = next.valueOrNull;
       if (before?.inProgress == true &&
           after?.state == BankImportState.complete) {
+        ref.invalidate(bankTransactionsProvider);
+        ref.invalidate(bankTransactionsAwaitingReviewProvider);
+        ref.invalidate(allBankTransactionsProvider);
+        ref.invalidate(unverifiedBankDepositsProvider);
         ref.invalidate(dashboardProvider);
         ref.invalidate(previousDashboardProvider);
       }
@@ -511,62 +515,149 @@ class _PrimaryAmountCard extends StatelessWidget {
   );
 }
 
-class _BankSection extends StatelessWidget {
+class _BankSection extends ConsumerWidget {
   const _BankSection({required this.insights, required this.previous});
   final BankDashboardInsights insights;
   final BankDashboardInsights? previous;
 
   @override
-  Widget build(BuildContext context) => Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      Text(
-        'Bank activity',
-        style: Theme.of(
-          context,
-        ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
-      ),
-      const SizedBox(height: 10),
-      _PrimaryAmountCard(
-        key: const Key('bank-outflows-card'),
-        label: 'Tracked bank outflows',
-        amount: insights.trackedOutflows,
-        note: 'Tracked bank spending is not necessarily total business costs.',
-      ),
-      PercentageChange(
-        current: insights.trackedOutflows,
-        previous: previous?.trackedOutflows ?? insights.previousTrackedOutflows,
-        favorableWhenIncrease: false,
-      ),
-      const SizedBox(height: 10),
-      Text(
-        '${insights.uncategorizedCount} uncategorized · ${insights.unmatchedCount} unmatched · ${insights.matchedInvoiceCount} matched to invoices',
-      ),
-      if (insights.categoryBreakdown.isNotEmpty) ...[
-        const SizedBox(height: 14),
-        _NamedAmountList(
-          title: 'Bank spending by category',
-          values: insights.categoryBreakdown,
+  Widget build(BuildContext context, WidgetRef ref) {
+    final accounts =
+        ref
+            .watch(bankConnectionsProvider)
+            .valueOrNull
+            ?.expand((connection) => connection.accounts)
+            .where((account) => account.active)
+            .length ??
+        0;
+    final waiting =
+        ref.watch(bankTransactionsAwaitingReviewProvider).valueOrNull ??
+        const [];
+    final recent =
+        ref.watch(allBankTransactionsProvider).valueOrNull ?? const [];
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Bank activity',
+          style: Theme.of(
+            context,
+          ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
         ),
-      ],
-      if (insights.topVendors.isNotEmpty) ...[
-        const SizedBox(height: 14),
-        _NamedAmountList(
-          title: 'Top bank vendors',
-          values: insights.topVendors,
+        const SizedBox(height: 10),
+        Card(
+          color: Theme.of(context).colorScheme.secondaryContainer,
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Unreviewed bank activity',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  '$accounts connected ${accounts == 1 ? 'account' : 'accounts'} · ${waiting.length} ${waiting.length == 1 ? 'transaction needs' : 'transactions need'} review',
+                ),
+                const SizedBox(height: 10),
+                FilledButton.icon(
+                  key: const Key('review-transactions-home'),
+                  onPressed: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const BankTransactionsScreen(),
+                    ),
+                  ),
+                  icon: const Icon(Icons.fact_check_outlined),
+                  label: Text(
+                    waiting.isEmpty
+                        ? 'View Bank Activity'
+                        : 'Review Transactions (${waiting.length})',
+                  ),
+                ),
+              ],
+            ),
+          ),
         ),
-      ],
-      if (insights.largestExpenses.isNotEmpty) ...[
-        const SizedBox(height: 14),
-        _NamedAmountList(
-          title: 'Largest tracked outflows',
-          values: insights.largestExpenses
-              .map((item) => NamedAmount(item.name, item.amount))
-              .toList(),
+        const SizedBox(height: 10),
+        _PrimaryAmountCard(
+          key: const Key('bank-outflows-card'),
+          label: 'Tracked bank outflows',
+          amount: insights.trackedOutflows,
+          note:
+              'Tracked bank spending is not necessarily total business costs.',
         ),
+        PercentageChange(
+          current: insights.trackedOutflows,
+          previous:
+              previous?.trackedOutflows ?? insights.previousTrackedOutflows,
+          favorableWhenIncrease: false,
+        ),
+        const SizedBox(height: 10),
+        Text(
+          '${insights.uncategorizedCount} uncategorized · ${insights.unmatchedCount} unmatched · ${insights.matchedInvoiceCount} matched to invoices',
+        ),
+        if (insights.categoryBreakdown.isNotEmpty) ...[
+          const SizedBox(height: 14),
+          _NamedAmountList(
+            title: 'Bank spending by category',
+            values: insights.categoryBreakdown,
+          ),
+        ],
+        if (insights.topVendors.isNotEmpty) ...[
+          const SizedBox(height: 14),
+          _NamedAmountList(
+            title: 'Top bank vendors',
+            values: insights.topVendors,
+          ),
+        ],
+        if (insights.largestExpenses.isNotEmpty) ...[
+          const SizedBox(height: 14),
+          _NamedAmountList(
+            title: 'Largest tracked outflows',
+            values: insights.largestExpenses
+                .map((item) => NamedAmount(item.name, item.amount))
+                .toList(),
+          ),
+        ],
+        if (recent.isNotEmpty) ...[
+          const SizedBox(height: 14),
+          Card(
+            elevation: 0,
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Recently imported',
+                    style: Theme.of(context).textTheme.titleSmall,
+                  ),
+                  for (final item in recent.take(3))
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      dense: true,
+                      title: Text(item.merchant),
+                      subtitle: Text(
+                        item.status == 'MATCHED_EXPENSE'
+                            ? 'Confirmed restaurant expense'
+                            : item.status == 'IGNORED'
+                            ? 'Ignored'
+                            : item.status == 'MATCHED_INVOICE'
+                            ? 'Matched to invoice'
+                            : 'Suggested · Needs review',
+                      ),
+                      trailing: Text(formatCurrency(item.amount.abs())),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        ],
       ],
-    ],
-  );
+    );
+  }
 }
 
 class _InvoiceSection extends StatelessWidget {

@@ -8,7 +8,14 @@ import '../../main.dart'
         AuthBootstrap,
         AuthScreen,
         accountSessionModeProvider,
-        demoModeProvider;
+        authDeviceIdProvider,
+        authDeviceName,
+        demoModeProvider,
+        pendingAuthChallengeKey,
+        pendingAuthChallengeMethodKey,
+        pendingAuthChallengeModeKey,
+        storage;
+import '../auth/auth_screens.dart';
 import '../dashboard/foundation.dart';
 import '../expenses/foundation.dart';
 import '../invoices/foundation.dart';
@@ -67,19 +74,52 @@ class _MoreScreenState extends ConsumerState<MoreScreen> {
   }
 
   Future<void> _enterPrivateAccount() async {
+    Map<String, dynamic>? challenge;
     await showDialog<void>(
       context: context,
       barrierDismissible: false,
       builder: (_) => _PrivateAccountDialog(
         onSubmit: (code) async {
-          await ref.read(privateAccountRepositoryProvider).unlockPrivate(code);
+          challenge = await ref
+              .read(privateAccountRepositoryProvider)
+              .unlockPrivate(
+                code,
+                deviceId: await ref.read(authDeviceIdProvider.future),
+                deviceName: authDeviceName,
+              );
+          if (challenge != null) return;
           ref.read(accountSessionModeProvider.notifier).state =
               AccountSessionMode.private;
           _clearAccountState();
         },
       ),
     );
-    if (!mounted || ref.read(accountSessionModeProvider) != AccountSessionMode.private) return;
+    if (!mounted) return;
+    if (challenge != null) {
+      final challengeId = challenge!['challengeId'] as String;
+      final method = challenge!['method'] as String;
+      await storage.write(key: pendingAuthChallengeKey, value: challengeId);
+      await storage.write(key: pendingAuthChallengeMethodKey, value: method);
+      await storage.write(
+        key: pendingAuthChallengeModeKey,
+        value: AccountSessionMode.private.name,
+      );
+      if (!mounted) return;
+      await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => LoginChallengeScreen(
+            challengeId: challengeId,
+            method: method,
+            accountMode: AccountSessionMode.private,
+          ),
+        ),
+      );
+      return;
+    }
+    if (!mounted ||
+        ref.read(accountSessionModeProvider) != AccountSessionMode.private) {
+      return;
+    }
     Navigator.of(context).pushAndRemoveUntil(
       MaterialPageRoute(builder: (_) => const AuthBootstrap()),
       (_) => false,
@@ -437,7 +477,10 @@ class _PrivateAccountDialogState extends State<_PrivateAccountDialog> {
 
   Future<void> submit() async {
     if (submitting || controller.text.isEmpty) return;
-    setState(() { submitting = true; error = null; });
+    setState(() {
+      submitting = true;
+      error = null;
+    });
     try {
       await widget.onSubmit(controller.text);
       if (mounted) Navigator.pop(context);
@@ -451,7 +494,10 @@ class _PrivateAccountDialogState extends State<_PrivateAccountDialog> {
       });
     } catch (_) {
       if (!mounted) return;
-      setState(() { error = 'Unable to open the private account.'; submitting = false; });
+      setState(() {
+        error = 'Unable to open the private account.';
+        submitting = false;
+      });
     }
   }
 
@@ -466,10 +512,7 @@ class _PrivateAccountDialogState extends State<_PrivateAccountDialog> {
           obscureText: true,
           enabled: !submitting,
           autofocus: true,
-          decoration: InputDecoration(
-            labelText: 'Password',
-            errorText: error,
-          ),
+          decoration: InputDecoration(labelText: 'Password', errorText: error),
           onSubmitted: (_) => submit(),
         ),
       ],

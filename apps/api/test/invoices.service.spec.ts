@@ -152,6 +152,34 @@ describe('InvoicesService', () => {
     });
   });
 
+  it('records human corrections as verified provenance', async () => {
+    const { service, prisma } = setup();
+    prisma.invoice.findUnique.mockResolvedValue({
+      ...invoice,
+      fieldProvenance: {
+        total: { kind: 'CALCULATED', calculatedValue: '100.00', verified: false },
+      },
+    });
+    await service.review('user-a', 'invoice-a', {
+      invoiceNumber: 'INV-42',
+      total: '100.25',
+      currency: 'usd',
+    });
+    expect(prisma.invoice.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          total: expect.anything(),
+          currency: 'USD',
+          fieldProvenance: expect.objectContaining({
+            invoiceNumber: expect.objectContaining({ kind: 'OBSERVED', verified: true }),
+            total: expect.objectContaining({ kind: 'OBSERVED', verified: true }),
+            currency: expect.objectContaining({ kind: 'OBSERVED', verified: true }),
+          }),
+        }),
+      }),
+    );
+  });
+
   it('authorizes deletion, removes the row and storage object, and audits it', async () => {
     const { service, prisma, access, storage, audit } = setup();
     await service.delete('user-a', 'invoice-a');

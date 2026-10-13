@@ -1,5 +1,5 @@
 import { BankReconciliationStatus, MerchantRuleMatchType } from '@prisma/client';
-import { IsBoolean, IsEnum, IsOptional, IsString, IsUUID } from 'class-validator';
+import { ArrayMaxSize, ArrayMinSize, IsArray, IsBoolean, IsEnum, IsNumber, IsOptional, IsString, IsUUID, Min } from 'class-validator';
 
 export class OrganizationDto { @IsUUID() organizationId!: string; }
 export class BankSyncStatusQuery extends OrganizationDto { @IsUUID() restaurantLocationId!: string; }
@@ -12,7 +12,21 @@ export class ReviewBankTransactionDto {
   @IsOptional() @IsUUID() restaurantLocationId?: string | null;
   @IsOptional() @IsBoolean() ignored?: boolean;
   @IsOptional() @IsBoolean() createMerchantRule?: boolean;
+  @IsOptional() @IsBoolean() autoConfirmFuture?: boolean;
+  @IsOptional() @IsNumber() @Min(0) minimumAmount?: number;
+  @IsOptional() @IsNumber() @Min(0) maximumAmount?: number;
   @IsOptional() @IsEnum(MerchantRuleMatchType) ruleMatchType?: MerchantRuleMatchType;
+}
+export class BulkReviewBankTransactionsDto extends ReviewBankTransactionDto {
+  @IsArray() @ArrayMinSize(1) @ArrayMaxSize(100) @IsUUID('4', { each: true }) ids!: string[];
+}
+export class UpdateMerchantRuleDto {
+  @IsOptional() @IsBoolean() active?: boolean;
+  @IsOptional() @IsBoolean() autoConfirm?: boolean;
+  @IsOptional() @IsUUID() vendorId?: string | null;
+  @IsOptional() @IsUUID() categoryId?: string | null;
+  @IsOptional() @IsNumber() @Min(0) minimumAmount?: number | null;
+  @IsOptional() @IsNumber() @Min(0) maximumAmount?: number | null;
 }
 export class ConfirmInvoiceMatchDto { @IsUUID() invoiceId!: string; }
 

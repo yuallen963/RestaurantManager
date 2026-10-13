@@ -1,11 +1,12 @@
 import { ConflictException, ForbiddenException, Injectable, NotFoundException, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import { OrganizationRole } from '@prisma/client';
+import { OrganizationRole, SecurityEmailType } from '@prisma/client';
 import * as argon2 from 'argon2';
 import { createHash, randomBytes, randomUUID } from 'crypto';
 import { AuditService } from '../audit.service';
 import { PrismaService } from '../prisma.service';
 import { AuthEmailService } from './auth-email.service';
+import { AuthSecurityService } from './auth-security.service';
 import { RegisterDto } from './dto';
 
 const normalizeEmail = (value: string) => value.trim().toLowerCase();
@@ -15,7 +16,7 @@ const genericVerificationMessage = 'If this account needs verification, a new em
 
 @Injectable()
 export class AuthService {
-  constructor(private readonly prisma: PrismaService, private readonly jwt: JwtService, private readonly email: AuthEmailService, private readonly audit: AuditService) {}
+  constructor(private readonly prisma: PrismaService, private readonly jwt: JwtService, private readonly email: AuthEmailService, private readonly audit: AuditService, private readonly security?: AuthSecurityService) {}
 
   async register(dto: RegisterDto) {
     this.email.assertConfigured();
@@ -35,6 +36,10 @@ export class AuthService {
     if (claimed.count !== 1) throw new UnauthorizedException('Verification link is invalid or expired');
     await this.prisma.user.update({ where: { id: stored.userId }, data: { emailVerifiedAt: new Date() } });
     await this.audit.log({ userId: stored.userId, action: 'auth.email_verified', entityType: 'User', entityId: stored.userId });
+    if (this.security) {
+      const user = await this.prisma.user.findUnique({ where: { id: stored.userId } });
+      if (user) await this.security.securityEmail(user, SecurityEmailType.WELCOME, `welcome:${user.id}`, 'Welcome to FundWell', 'Your email is verified and your FundWell account is ready.');
+    }
     return { verified: true };
   }
 
@@ -49,12 +54,22 @@ export class AuthService {
     return { message: genericVerificationMessage, ...(this.email.developmentMode ? { developmentVerificationToken: raw } : {}) };
   }
 
-  async login(rawEmail: string, password: string) {
+  async login(rawEmail: string, password: string, device: { deviceId?: string; deviceName?: string } = {}) {
     const email = normalizeEmail(rawEmail);
     const user = await this.prisma.user.findUnique({ where: { email } });
-    if (!user || user.deletedAt || user.disabledAt || !(await argon2.verify(user.passwordHash, password))) throw new UnauthorizedException('Invalid email or password');
+    if (!user || user.deletedAt || user.disabledAt) throw new UnauthorizedException('Invalid email or password');
+    if (!(await argon2.verify(user.passwordHash, password))) {
+      // Notification delivery must never change the neutral authentication
+      // response or turn an email-provider outage into account enumeration.
+      await this.security?.notifySuspiciousLogin(user).catch(() => undefined);
+      throw new UnauthorizedException('Invalid email or password');
+    }
     if (!user.emailVerifiedAt && email !== 'demo@profitlens.local') throw new ForbiddenException('Email verification required');
-    return this.issueTokens(user.id, user.email);
+    const challenge = await this.security?.beginLogin(user, device);
+    if (challenge) return challenge;
+    const tokens = await this.issueTokens(user.id, user.email, undefined, device);
+    await this.security?.recognizeDevice(user, device);
+    return tokens;
   }
 
   /**
@@ -79,7 +94,7 @@ export class AuthService {
     return this.issueTokens(user.id, user.email);
   }
 
-  async privateSession(accessCode: string) {
+  async privateSession(accessCode: string, device: { deviceId?: string; deviceName?: string } = {}) {
     const accessCodeHash = process.env.PRIVATE_BETA_ACCESS_CODE_HASH?.trim();
     const configuredEmail = process.env.PRIVATE_BETA_USER_EMAIL?.trim();
     if (!accessCodeHash || !configuredEmail) throw new ServiceUnavailableException('Private account access is not configured');
@@ -93,7 +108,17 @@ export class AuthService {
     });
     const ownerMemberships = user?.memberships.filter((membership) => membership.role === OrganizationRole.OWNER) ?? [];
     if (!user || ownerMemberships.length !== 1 || ownerMemberships[0].organization.locations.length !== 1) throw new ServiceUnavailableException('Private account is not provisioned correctly');
-    return { ...(await this.issueTokens(user.id, user.email)), accountMode: 'private' as const };
+    const challenge = await this.security?.beginLogin(user, device);
+    if (challenge) return { ...challenge, accountMode: 'private' as const };
+    return { ...(await this.issueTokens(user.id, user.email, undefined, device)), accountMode: 'private' as const };
+  }
+
+  async completeLoginChallenge(challengeId: string, code: string) {
+    if (!this.security) throw new NotFoundException();
+    const result = await this.security.completeLogin(challengeId, code);
+    const tokens = await this.issueTokens(result.user.id, result.user.email, undefined, { deviceName: result.deviceLabel ?? undefined }, result.deviceIdHash);
+    await this.security.recognizeDevice(result.user, { deviceName: result.deviceLabel ?? undefined }, result.deviceIdHash);
+    return tokens;
   }
 
   async refresh(rawToken: string) {
@@ -111,7 +136,8 @@ export class AuthService {
       await this.revokeReplacementChain(stored.replacedByTokenId, stored.userId);
       throw new UnauthorizedException('Refresh token revoked');
     }
-    return this.issueTokens(user.id, user.email, stored.id);
+    await this.prisma.refreshToken.update({ where: { id: stored.id }, data: { lastSeenAt: new Date() } });
+    return this.issueTokens(user.id, user.email, stored.id, { deviceName: stored.deviceLabel ?? undefined }, stored.deviceHash);
   }
 
   async logout(rawToken: string) {
@@ -150,7 +176,24 @@ export class AuthService {
       this.prisma.refreshToken.updateMany({ where: { userId: stored.userId, revokedAt: null }, data: { revokedAt: new Date() } }),
     ]);
     await this.audit.log({ userId: stored.userId, action: 'auth.password_reset_completed', entityType: 'User', entityId: stored.userId });
+    if (this.security) {
+      const user = await this.prisma.user.findUnique({ where: { id: stored.userId } });
+      if (user) await this.security.securityEmail(user, SecurityEmailType.ACCOUNT_RECOVERED, `password-reset:${stored.id}`, 'Your FundWell password was reset', 'Password recovery completed successfully. Existing MFA remains enabled.');
+    }
     return { reset: true };
+  }
+
+  async changePassword(userId: string, currentPassword: string, newPassword: string) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user || !(await argon2.verify(user.passwordHash, currentPassword))) throw new UnauthorizedException('Current password is incorrect');
+    const now = new Date();
+    await this.prisma.$transaction([
+      this.prisma.user.update({ where: { id: userId }, data: { passwordHash: await argon2.hash(newPassword) } }),
+      this.prisma.refreshToken.updateMany({ where: { userId, revokedAt: null }, data: { revokedAt: now } }),
+    ]);
+    await this.audit.log({ userId, action: 'auth.password_changed', entityType: 'User', entityId: userId });
+    await this.security?.securityEmail(user, SecurityEmailType.PASSWORD_CHANGED, `password-changed:${userId}:${now.getTime()}`, 'Your FundWell password was changed', 'Your password changed successfully and active sessions were revoked.');
+    return { changed: true };
   }
 
   async deleteAccount(userId: string, password: string) {
@@ -218,12 +261,13 @@ export class AuthService {
     }
   }
 
-  private async issueTokens(userId: string, email: string, replacedId?: string) {
+  private async issueTokens(userId: string, email: string, replacedId?: string, device: { deviceId?: string; deviceName?: string } = {}, knownDeviceHash?: string | null) {
     const refreshDays = Number(process.env.JWT_REFRESH_TTL_DAYS ?? 30);
     const id = randomUUID();
     const accessToken = await this.jwt.signAsync({ sub: userId, email }, { secret: process.env.JWT_ACCESS_SECRET, expiresIn: 900 });
     const refreshToken = await this.jwt.signAsync({ sub: userId, type: 'refresh', sid: id, jti: randomUUID() }, { secret: process.env.JWT_REFRESH_SECRET, expiresIn: refreshDays * 86400 });
-    await this.prisma.refreshToken.create({ data: { id, userId, tokenHash: await argon2.hash(refreshToken), expiresAt: new Date(Date.now() + refreshDays * 86400000) } });
+    const deviceHash = knownDeviceHash ?? (device.deviceId ? createHash('sha256').update(`${process.env.AUTH_CHALLENGE_SECRET ?? process.env.JWT_ACCESS_SECRET ?? 'development'}:device:${device.deviceId}`).digest('hex') : null);
+    await this.prisma.refreshToken.create({ data: { id, userId, tokenHash: await argon2.hash(refreshToken), expiresAt: new Date(Date.now() + refreshDays * 86400000), deviceHash, deviceLabel: device.deviceName?.trim().slice(0, 80) || null } });
     if (replacedId) await this.prisma.refreshToken.update({ where: { id: replacedId }, data: { replacedByTokenId: id } });
     return { accessToken, refreshToken, tokenType: 'Bearer' };
   }

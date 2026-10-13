@@ -11,11 +11,11 @@ function setup(overrides: { rules?: any[]; vendors?: any[]; invoices?: any[] } =
     bankConnection: { findUnique: jest.fn().mockResolvedValue(connection), update: jest.fn().mockImplementation(({ data }: any) => Promise.resolve({ ...connection, ...data })), updateMany: jest.fn().mockResolvedValue({ count: 1 }), create: jest.fn(), findMany: jest.fn() },
     bankAccount: { findUnique: jest.fn(), update: jest.fn() },
     bankTransaction: { create: jest.fn().mockResolvedValue({}), updateMany: jest.fn().mockResolvedValue({ count: 0 }), delete: jest.fn().mockResolvedValue({}), findUnique: jest.fn().mockResolvedValue(null), findFirst: jest.fn().mockResolvedValue(null), findMany: jest.fn().mockResolvedValue([]), count: jest.fn().mockResolvedValue(0), update: jest.fn().mockResolvedValue({}) },
-    merchantRule: { findMany: jest.fn().mockResolvedValue(overrides.rules ?? []), findFirst: jest.fn().mockResolvedValue(null), create: jest.fn(), update: jest.fn() },
+    merchantRule: { findMany: jest.fn().mockResolvedValue(overrides.rules ?? []), findFirst: jest.fn().mockResolvedValue(null), findUnique: jest.fn().mockResolvedValue(null), create: jest.fn(), update: jest.fn() },
     vendor: { findMany: jest.fn().mockResolvedValue(overrides.vendors ?? [{ id: 'sysco', normalizedName: 'sysco' }]), findFirst: jest.fn() },
     expenseCategory: { findFirst: jest.fn().mockResolvedValue({ id: 'category-a' }) },
     invoice: { findMany: jest.fn().mockResolvedValue(overrides.invoices ?? []), findFirst: jest.fn() },
-    expense: { findUnique: jest.fn(), findMany: jest.fn().mockResolvedValue([]), create: jest.fn().mockResolvedValue({ id: 'expense-created' }), update: jest.fn() },
+    expense: { findUnique: jest.fn(), findMany: jest.fn().mockResolvedValue([]), create: jest.fn().mockResolvedValue({ id: 'expense-created' }), update: jest.fn(), delete: jest.fn() },
     restaurantLocation: { findFirst: jest.fn().mockResolvedValue({ id: 'location-a', organizationId: 'org-a' }) },
   };
   prisma.$transaction = jest.fn((callback: any) => callback(prisma));
@@ -69,6 +69,33 @@ describe('bank transaction foundation', () => {
     expect(create.vendorId).toBe('rule-vendor');
     expect(create.categoryId).toBe('rule-category');
     expect(create.categorizationSource).toBe(BankCategorizationSource.USER_RULE);
+  });
+
+  it('keeps automatic confirmation disabled for ordinary saved rules', async () => {
+    const rule = { id: 'rule', active: true, autoConfirm: false, matchType: MerchantRuleMatchType.EXACT, matchValue: 'SYSCO', vendorId: 'rule-vendor', expenseCategoryId: 'rule-category', restaurantLocationId: 'location-a' };
+    const { service, prisma } = setup({ rules: [rule] });
+    await service.sync('user-a', 'connection-a');
+    expect(prisma.expense.create).not.toHaveBeenCalled();
+  });
+
+  it('auto-confirms a posted transaction only under an explicit location rule', async () => {
+    const rule = { id: 'rule', active: true, autoConfirm: true, matchType: MerchantRuleMatchType.EXACT, matchValue: 'SYSCO', vendorId: 'sysco', expenseCategoryId: 'food', restaurantLocationId: 'location-a', minimumAmount: new Prisma.Decimal(1000), maximumAmount: new Prisma.Decimal(2000) };
+    const { service, prisma } = setup({ rules: [rule] });
+    prisma.bankTransaction.create.mockImplementation(({ data }: any) => Promise.resolve({ id: 'bank-row', ...data }));
+    prisma.bankTransaction.findUnique
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ id: 'bank-row', organizationId: 'org-a', restaurantLocationId: 'location-a', pending: false, expenseId: null, suggestedInvoiceId: null, reconciliationStatus: BankReconciliationStatus.NEEDS_REVIEW, amount: new Prisma.Decimal(1446), postedDate: new Date('2026-10-08'), description: 'SYSCO ACH' });
+    await service.sync('user-a', 'connection-a');
+    expect(prisma.expense.create).toHaveBeenCalledWith({ data: expect.objectContaining({ vendorId: 'sysco', expenseCategoryId: 'food', source: ExpenseSource.BANK_IMPORT }) });
+    expect(prisma.bankTransaction.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ reconciliationStatus: BankReconciliationStatus.MATCHED_EXPENSE, categorizationSource: BankCategorizationSource.USER_RULE }) }));
+  });
+
+  it('leaves an unusual amount for review even when an automatic rule matches', async () => {
+    const rule = { id: 'rule', active: true, autoConfirm: true, matchType: MerchantRuleMatchType.EXACT, matchValue: 'SYSCO', vendorId: 'sysco', expenseCategoryId: 'food', restaurantLocationId: 'location-a', minimumAmount: new Prisma.Decimal(10), maximumAmount: new Prisma.Decimal(100) };
+    const { service, prisma } = setup({ rules: [rule] });
+    prisma.bankTransaction.create.mockImplementation(({ data }: any) => Promise.resolve({ id: 'bank-row', ...data }));
+    await service.sync('user-a', 'connection-a');
+    expect(prisma.expense.create).not.toHaveBeenCalled();
   });
 
   it('maps reliable provider payroll categories when no merchant is known', async () => {
@@ -218,6 +245,26 @@ describe('bank transaction foundation', () => {
     await service.review('user-a', 'pending-row', { categoryId: 'food' });
     expect(prisma.expense.create).not.toHaveBeenCalled();
     expect(prisma.bankTransaction.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ reconciliationStatus: BankReconciliationStatus.NEEDS_REVIEW }) }));
+  });
+
+  it('bulk review rejects transactions spanning restaurants', async () => {
+    const { service, prisma } = setup();
+    prisma.bankTransaction.findMany.mockResolvedValue([
+      { id: '00000000-0000-4000-8000-000000000001', organizationId: 'org-a', restaurantLocationId: 'location-a' },
+      { id: '00000000-0000-4000-8000-000000000002', organizationId: 'org-a', restaurantLocationId: 'location-b' },
+    ]);
+    await expect(service.bulkReview('user-a', { ids: ['00000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000002'] })).rejects.toThrow('one restaurant');
+  });
+
+  it('reverses only a uniquely linked bank-created expense', async () => {
+    const { service, prisma } = setup();
+    const row = { id: 'bank-row', organizationId: 'org-a', expenseId: 'expense-created', reconciliationStatus: BankReconciliationStatus.MATCHED_EXPENSE };
+    prisma.bankTransaction.findUnique.mockResolvedValue(row);
+    prisma.expense.findUnique.mockResolvedValue({ id: 'expense-created', source: ExpenseSource.BANK_IMPORT });
+    prisma.bankTransaction.count.mockResolvedValue(1);
+    await service.reverseReconciliation('user-a', 'bank-row');
+    expect(prisma.expense.delete).toHaveBeenCalledWith({ where: { id: 'expense-created' } });
+    expect(prisma.bankTransaction.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ expenseId: null, reconciliationStatus: BankReconciliationStatus.NEEDS_REVIEW }) }));
   });
 
   it('creates an update-mode link token and preserves the existing connection on reauth', async () => {

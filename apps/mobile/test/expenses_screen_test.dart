@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:restaurant_profit_mobile/features/dashboard/foundation.dart';
+import 'package:restaurant_profit_mobile/features/banking/foundation.dart';
 import 'package:restaurant_profit_mobile/features/expenses/expenses_screen.dart';
 import 'package:restaurant_profit_mobile/features/expenses/foundation.dart';
 
@@ -121,11 +122,24 @@ class FakeExpenseRepository extends ExpenseRepository {
 }
 
 void main() {
-  Widget app(FakeExpenseRepository repository) => ProviderScope(
+  Widget app(
+    FakeExpenseRepository repository, {
+    BankSyncStatus syncStatus = const BankSyncStatus(
+      state: BankImportState.none,
+      connectionCount: 0,
+      transactionCount: 0,
+      canRetry: false,
+    ),
+    List<BankTransactionData> awaitingReview = const [],
+  }) => ProviderScope(
     overrides: [
       activeLocationProvider.overrideWithValue(downtown),
       availableLocationsProvider.overrideWithValue([downtown, lakeside]),
       expenseRepositoryProvider.overrideWithValue(repository),
+      bankSyncStatusProvider.overrideWith((_) => Stream.value(syncStatus)),
+      bankTransactionsAwaitingReviewProvider.overrideWith(
+        (_) async => awaitingReview,
+      ),
     ],
     child: const MaterialApp(home: Scaffold(body: ExpensesScreen())),
   );
@@ -158,7 +172,7 @@ void main() {
     await tester.pumpWidget(app(repository));
     await tester.pumpAndSettle();
 
-    expect(find.text('Total Expenses'), findsOneWidget);
+    expect(find.text('Confirmed Expenses'), findsOneWidget);
     expect(find.text('\$2,150'), findsOneWidget);
     expect(find.text('2 expenses'), findsOneWidget);
     expect(find.text('Sysco'), findsOneWidget);
@@ -175,7 +189,59 @@ void main() {
     await tester.pumpWidget(app(repository));
     await tester.pumpAndSettle();
 
-    expect(find.text('No expenses found for this period.'), findsOneWidget);
+    expect(find.textContaining('No confirmed expenses'), findsOneWidget);
+    expect(find.text('Review Bank Transactions'), findsOneWidget);
+  });
+
+  testWidgets('explains that reviewed bank transactions become expenses', (
+    tester,
+  ) async {
+    final repository = FakeExpenseRepository(
+      onList: (_) async => page([], totalItems: 0, totalAmount: 0),
+    );
+    final waiting = BankTransactionData(
+      id: 'waiting',
+      merchant: 'Supplier',
+      description: 'SUPPLIER ACH',
+      amount: 125,
+      postedDate: DateTime(2026, 10, 7),
+      status: 'NEEDS_REVIEW',
+      categorizationSource: 'PROVIDER',
+      matchConfidence: 'NO_MATCH',
+      pending: false,
+      restaurantLocationId: downtown.id,
+    );
+    await tester.pumpWidget(app(repository, awaitingReview: [waiting]));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('waiting for review'), findsOneWidget);
+    expect(find.textContaining('confirmed Expenses'), findsWidgets);
+    expect(
+      find.byKey(const Key('review-bank-transactions-empty')),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('empty expenses distinguish an import still in progress', (
+    tester,
+  ) async {
+    final repository = FakeExpenseRepository(
+      onList: (_) async => page([], totalItems: 0, totalAmount: 0),
+    );
+    await tester.pumpWidget(
+      app(
+        repository,
+        syncStatus: const BankSyncStatus(
+          state: BankImportState.importing,
+          connectionCount: 1,
+          transactionCount: 0,
+          canRetry: false,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('still in progress'), findsOneWidget);
   });
 
   testWidgets('shows error and retry state', (tester) async {

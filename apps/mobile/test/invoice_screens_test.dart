@@ -311,33 +311,37 @@ void main() {
     expect(find.text('Retry Extraction'), findsOneWidget);
   });
 
-  testWidgets('failed upload explains recovery without unsafe extraction retry', (
-    tester,
-  ) async {
-    final failed = InvoiceRecord(
-      id: 'invoice-a',
-      restaurantLocationId: 'loc-a',
-      fileName: 'invoice.jpg',
-      fileType: 'image/jpeg',
-      fileSize: 100,
-      status: 'FAILED',
-      createdAt: DateTime(2026),
-      extractionStatus: 'FAILED',
-      extractionError: 'Upload did not finish. Choose the file and upload it again.',
-    );
-    await tester.pumpWidget(
-      app([
-        invoiceDetailProvider('invoice-a').overrideWith((_) async => failed),
-      ], const InvoiceDetailScreen(invoiceId: 'invoice-a')),
-    );
-    await tester.pumpAndSettle();
-    await tester.scrollUntilVisible(
-      find.text('Upload did not finish. Choose the file and upload it again.'),
-      300,
-      scrollable: find.byType(Scrollable).first,
-    );
-    expect(find.text('Retry Extraction'), findsNothing);
-  });
+  testWidgets(
+    'failed upload explains recovery without unsafe extraction retry',
+    (tester) async {
+      final failed = InvoiceRecord(
+        id: 'invoice-a',
+        restaurantLocationId: 'loc-a',
+        fileName: 'invoice.jpg',
+        fileType: 'image/jpeg',
+        fileSize: 100,
+        status: 'FAILED',
+        createdAt: DateTime(2026),
+        extractionStatus: 'FAILED',
+        extractionError:
+            'Upload did not finish. Choose the file and upload it again.',
+      );
+      await tester.pumpWidget(
+        app([
+          invoiceDetailProvider('invoice-a').overrideWith((_) async => failed),
+        ], const InvoiceDetailScreen(invoiceId: 'invoice-a')),
+      );
+      await tester.pumpAndSettle();
+      await tester.scrollUntilVisible(
+        find.text(
+          'Upload did not finish. Choose the file and upload it again.',
+        ),
+        300,
+        scrollable: find.byType(Scrollable).first,
+      );
+      expect(find.text('Retry Extraction'), findsNothing);
+    },
+  );
 
   testWidgets('unavailable extraction shows a safe recoverable message', (
     tester,
@@ -456,6 +460,58 @@ void main() {
     );
   });
 
+  testWidgets('review distinguishes observed calculated and missing fields', (
+    tester,
+  ) async {
+    final provenanceInvoice = InvoiceRecord(
+      id: 'invoice-provenance',
+      restaurantLocationId: 'loc-a',
+      fileName: 'invoice.pdf',
+      fileType: 'application/pdf',
+      fileSize: 100,
+      status: 'COMPLETED',
+      createdAt: DateTime(2026, 10, 4),
+      vendorName: 'Sysco',
+      invoiceDate: DateTime(2026, 10, 4),
+      extractionStatus: 'COMPLETED',
+      reviewStatus: 'NEEDS_REVIEW',
+      fieldProvenance: const {
+        'vendorName': InvoiceFieldProvenance(
+          kind: 'OBSERVED',
+          verified: false,
+          sourceText: 'SYSCO',
+          sourcePage: 1,
+        ),
+        'invoiceNumber': InvoiceFieldProvenance(
+          kind: 'MISSING',
+          verified: false,
+        ),
+        'subtotal': InvoiceFieldProvenance(
+          kind: 'CALCULATED',
+          verified: false,
+          calculatedValue: '100.00',
+        ),
+      },
+    );
+    await tester.pumpWidget(
+      app([
+        invoiceDetailProvider(
+          'invoice-provenance',
+        ).overrideWith((_) async => provenanceInvoice),
+        invoiceLineItemsProvider(
+          'invoice-provenance',
+        ).overrideWith((_) async => const []),
+      ], const InvoiceReviewScreen(invoiceId: 'invoice-provenance')),
+    );
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Observed on page 1'), findsOneWidget);
+    expect(find.textContaining('Not found in the document'), findsWidgets);
+    expect(
+      find.textContaining(r'Calculated estimate: $100.00'),
+      findsOneWidget,
+    );
+  });
+
   testWidgets('clean invoice does not show reconciliation warning', (
     tester,
   ) async {
@@ -550,6 +606,11 @@ void main() {
     await tester.enterText(
       find.widgetWithText(TextFormField, 'Total').last,
       '-1',
+    );
+    await tester.scrollUntilVisible(
+      find.text('Save Metadata'),
+      300,
+      scrollable: find.byType(Scrollable).first,
     );
     await tester.tap(find.text('Save Metadata'));
     await tester.pump();

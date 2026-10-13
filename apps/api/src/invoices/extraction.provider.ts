@@ -7,6 +7,10 @@ import { z } from 'zod';
 
 const nullableText = z.string().nullable();
 const nullableNumber = z.number().nonnegative().nullable();
+const FieldEvidenceSchema = z.object({
+  sourceText: nullableText,
+  sourcePage: z.number().int().positive().nullable(),
+});
 const ProductAttributesSchema = z.object({
   brand: nullableText,
   condition: nullableText,
@@ -28,12 +32,26 @@ export const ExtractedInvoiceSchema = z.object({
   subtotal: nullableNumber,
   tax: nullableNumber,
   otherFees: nullableNumber,
+  discount: nullableNumber,
   total: nullableNumber,
   currency: z.string().regex(/^[A-Z]{3}$/).nullable(),
+  fieldEvidence: z.object({
+    vendorName: FieldEvidenceSchema,
+    invoiceNumber: FieldEvidenceSchema,
+    invoiceDate: FieldEvidenceSchema,
+    dueDate: FieldEvidenceSchema,
+    subtotal: FieldEvidenceSchema,
+    tax: FieldEvidenceSchema,
+    otherFees: FieldEvidenceSchema,
+    discount: FieldEvidenceSchema,
+    total: FieldEvidenceSchema,
+    currency: FieldEvidenceSchema,
+  }),
   uncertainFields: z.array(z.string()),
   lineItems: z.array(z.object({
     lineNumber: z.number().int().positive(),
     sourcePage: z.number().int().positive().nullable(),
+    sourceText: nullableText,
     rawDescription: z.string(),
     normalizedName: nullableText,
     sku: nullableText,
@@ -79,7 +97,7 @@ export class InvoiceExtractionProvider {
       const response = await client.responses.parse({
         model,
         store: false,
-        input: [{ role: 'user', content: [document, { type: 'input_text', text: `Extract this restaurant vendor invoice, including every relevant page in page order as one invoice. Combine line items across pages. Do not duplicate repeated headers, footers, subtotals, or grand totals. Preserve every line item rawDescription and packSize exactly as printed. sourcePage is the one-based PDF page number when clear, otherwise null. normalizedName and productAttributes are interpretations, never replacements for rawDescription. Normalize invoiceDate and dueDate to YYYY-MM-DD. If a printed date omits its year, infer the current year only when clearly recent and unambiguous; otherwise return null and include the field in uncertainFields. Use null when a value or product attribute is absent or unclear. Do not infer package quantities that are not plainly printed. List field names in uncertainFields only when the document is ambiguous; do not invent confidence scores or values. Currency must be a three-letter ISO code only when shown or unambiguous. Categories are suggestions only. Today is ${new Date().toISOString().slice(0, 10)}.` }] }],
+        input: [{ role: 'user', content: [document, { type: 'input_text', text: `Extract this restaurant vendor invoice, including every relevant page in page order as one invoice. Combine line items across pages. Do not duplicate repeated headers, footers, subtotals, or grand totals. Preserve every line item rawDescription and packSize exactly as printed. For each line item, sourceText must be an exact transcription of the complete printed row containing its quantity, packaging, prices, and description; use null when the row is not legible. sourcePage is the one-based PDF page number when clear, otherwise null. normalizedName and productAttributes are interpretations, never replacements for rawDescription. Normalize invoiceDate and dueDate to YYYY-MM-DD only when the date is printed. Use null when a value is absent, cropped, illegible, or unclear. Never invent invoice numbers, dates, amounts, or currency and never derive a missing field. For every document-level field, fieldEvidence.sourceText must be a short exact transcription containing that value and sourcePage must identify its page. If exact supporting text is unavailable, return null for the value and both evidence properties. A currency symbol alone does not prove a three-letter currency. Do not infer package quantities that are not plainly printed. List ambiguous fields in uncertainFields. Categories are suggestions only. Today is ${new Date().toISOString().slice(0, 10)}.` }] }],
         text: { format: zodTextFormat(ExtractedInvoiceSchema, 'restaurant_invoice') },
       });
       if (!response.output_parsed) {
@@ -100,13 +118,16 @@ export class InvoiceExtractionProvider {
     if (!apiKey) throw new ServiceUnavailableException('Invoice extraction is not configured');
     const model = this.config.get<string>('GEMINI_INVOICE_MODEL') ?? 'gemini-3.5-flash-lite';
     const ai = new GoogleGenAI({ apiKey });
-    const prompt = `Extract this restaurant vendor invoice, including every page as one invoice. Preserve every line item rawDescription and packSize exactly as printed; never rewrite rawDescription. Combine line items across pages and do not duplicate headers, footers, subtotals, or totals. sourcePage is the one-based page number when clear. normalizedName and productAttributes are interpretations only. Normalize dates to YYYY-MM-DD. Use null when absent or unclear, and list ambiguous field names in uncertainFields. Do not invent package quantities or confidence scores. Return JSON matching the requested schema. Filename: ${fileName}. Today is ${new Date().toISOString().slice(0, 10)}.`;
+    const prompt = `Extract this restaurant vendor invoice, including every page as one invoice. Preserve every line item rawDescription and packSize exactly as printed; never rewrite rawDescription. For each line item, sourceText must be an exact transcription of the complete printed row containing its quantity, packaging, prices, and description; use null when the row is not legible. Combine line items across pages and do not duplicate headers, footers, subtotals, or totals. sourcePage is the one-based page number when clear. normalizedName and productAttributes are interpretations only. Normalize dates to YYYY-MM-DD only when printed. Use null when a value is absent, cropped, illegible, or unclear. Never invent invoice numbers, dates, amounts, or currency and never derive a missing document field. For each document-level field, fieldEvidence.sourceText must be a short exact transcription containing the value and sourcePage must identify its page; otherwise return null for both the value and evidence. A currency symbol alone does not prove a three-letter currency. Do not invent package quantities or confidence scores. Return JSON matching the requested schema. Filename: ${fileName}. Today is ${new Date().toISOString().slice(0, 10)}.`;
+    const evidenceProperty = { type: 'object', required: ['sourceText', 'sourcePage'], properties: { sourceText: { type: ['string', 'null'] }, sourcePage: { type: ['integer', 'null'] } } };
     const responseSchema = {
-      type: 'object', required: ['vendorName', 'vendorAddress', 'invoiceNumber', 'invoiceDate', 'dueDate', 'subtotal', 'tax', 'otherFees', 'total', 'currency', 'uncertainFields', 'lineItems'],
+      type: 'object', required: ['vendorName', 'vendorAddress', 'invoiceNumber', 'invoiceDate', 'dueDate', 'subtotal', 'tax', 'otherFees', 'discount', 'total', 'currency', 'fieldEvidence', 'uncertainFields', 'lineItems'],
       properties: {
-        vendorName: { type: ['string', 'null'] }, vendorAddress: { type: ['string', 'null'] }, invoiceNumber: { type: ['string', 'null'] }, invoiceDate: { type: ['string', 'null'] }, dueDate: { type: ['string', 'null'] }, subtotal: { type: ['number', 'null'] }, tax: { type: ['number', 'null'] }, otherFees: { type: ['number', 'null'] }, total: { type: ['number', 'null'] }, currency: { type: ['string', 'null'] }, uncertainFields: { type: 'array', items: { type: 'string' } },
-        lineItems: { type: 'array', items: { type: 'object', required: ['lineNumber', 'sourcePage', 'rawDescription', 'normalizedName', 'sku', 'quantity', 'unit', 'packSize', 'unitPrice', 'extendedPrice', 'category', 'productAttributes', 'uncertainFields'], properties: {
-          lineNumber: { type: 'integer' }, sourcePage: { type: ['integer', 'null'] }, rawDescription: { type: 'string' }, normalizedName: { type: ['string', 'null'] }, sku: { type: ['string', 'null'] }, quantity: { type: ['number', 'null'] }, unit: { type: ['string', 'null'] }, packSize: { type: ['string', 'null'] }, unitPrice: { type: ['number', 'null'] }, extendedPrice: { type: ['number', 'null'] }, category: { type: ['string', 'null'], enum: ['Food', 'Beverage', 'Alcohol', 'Supplies', 'Cleaning', 'Packaging', 'Other', null] }, productAttributes: { type: ['object', 'null'] }, uncertainFields: { type: 'array', items: { type: 'string' } },
+        vendorName: { type: ['string', 'null'] }, vendorAddress: { type: ['string', 'null'] }, invoiceNumber: { type: ['string', 'null'] }, invoiceDate: { type: ['string', 'null'] }, dueDate: { type: ['string', 'null'] }, subtotal: { type: ['number', 'null'] }, tax: { type: ['number', 'null'] }, otherFees: { type: ['number', 'null'] }, discount: { type: ['number', 'null'] }, total: { type: ['number', 'null'] }, currency: { type: ['string', 'null'] },
+        fieldEvidence: { type: 'object', required: ['vendorName', 'invoiceNumber', 'invoiceDate', 'dueDate', 'subtotal', 'tax', 'otherFees', 'discount', 'total', 'currency'], properties: { vendorName: evidenceProperty, invoiceNumber: evidenceProperty, invoiceDate: evidenceProperty, dueDate: evidenceProperty, subtotal: evidenceProperty, tax: evidenceProperty, otherFees: evidenceProperty, discount: evidenceProperty, total: evidenceProperty, currency: evidenceProperty } },
+        uncertainFields: { type: 'array', items: { type: 'string' } },
+        lineItems: { type: 'array', items: { type: 'object', required: ['lineNumber', 'sourcePage', 'sourceText', 'rawDescription', 'normalizedName', 'sku', 'quantity', 'unit', 'packSize', 'unitPrice', 'extendedPrice', 'category', 'productAttributes', 'uncertainFields'], properties: {
+          lineNumber: { type: 'integer' }, sourcePage: { type: ['integer', 'null'] }, sourceText: { type: ['string', 'null'] }, rawDescription: { type: 'string' }, normalizedName: { type: ['string', 'null'] }, sku: { type: ['string', 'null'] }, quantity: { type: ['number', 'null'] }, unit: { type: ['string', 'null'] }, packSize: { type: ['string', 'null'] }, unitPrice: { type: ['number', 'null'] }, extendedPrice: { type: ['number', 'null'] }, category: { type: ['string', 'null'], enum: ['Food', 'Beverage', 'Alcohol', 'Supplies', 'Cleaning', 'Packaging', 'Other', null] }, productAttributes: { type: ['object', 'null'] }, uncertainFields: { type: 'array', items: { type: 'string' } },
         } } },
       },
     };

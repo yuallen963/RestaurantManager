@@ -193,6 +193,24 @@ enum MerchantRuleMatchType {
   CONTAINS
 }
 
+enum AuthChallengeType {
+  EMAIL_LOGIN
+  TOTP_LOGIN
+}
+
+enum SecurityEmailType {
+  WELCOME
+  PASSWORD_CHANGED
+  NEW_DEVICE_LOGIN
+  SUSPICIOUS_LOGIN
+  SECURITY_SETTINGS_CHANGED
+  MFA_ENABLED
+  MFA_DISABLED
+  RECOVERY_CODES_REGENERATED
+  RECOVERY_CODE_USED
+  ACCOUNT_RECOVERED
+}
+
 enum ProductMatchStatus {
   PENDING
   CONFIRMED
@@ -230,6 +248,16 @@ model User {
   notificationPreferences NotificationPreference[]
   devicePushTokens      DevicePushToken[]
   onboardingState       OnboardingState?
+  emailLoginVerificationEnabled Boolean          @default(false)
+  mfaEnabled             Boolean                 @default(false)
+  totpSecretEncrypted    String?
+  totpPendingSecretEncrypted String?
+  totpPendingExpiresAt   DateTime?
+  totpLastUsedStep       BigInt?
+  authChallenges         AuthChallenge[]
+  mfaRecoveryCodes       MfaRecoveryCode[]
+  recognizedDevices      RecognizedDevice[]
+  securityEmailEvents    SecurityEmailEvent[]
 }
 
 model Organization {
@@ -339,9 +367,67 @@ model RefreshToken {
   revokedAt         DateTime?
   replacedByTokenId String?
   createdAt         DateTime  @default(now())
+  lastSeenAt        DateTime  @default(now())
+  deviceHash        String?
+  deviceLabel       String?
   user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, expiresAt])
+}
+
+model AuthChallenge {
+  id          String            @id @default(uuid())
+  userId      String
+  type        AuthChallengeType
+  codeHash    String?
+  expiresAt   DateTime
+  usedAt      DateTime?
+  attempts    Int               @default(0)
+  maxAttempts Int               @default(5)
+  lastSentAt  DateTime?
+  deviceHash  String?
+  deviceLabel String?
+  createdAt   DateTime          @default(now())
+  user        User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, type, expiresAt])
+}
+
+model MfaRecoveryCode {
+  id        String    @id @default(uuid())
+  userId    String
+  codeHash  String
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, usedAt])
+}
+
+model RecognizedDevice {
+  id          String    @id @default(uuid())
+  userId      String
+  deviceHash  String
+  label       String?
+  firstSeenAt DateTime  @default(now())
+  lastSeenAt  DateTime  @default(now())
+  revokedAt   DateTime?
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, deviceHash])
+  @@index([userId, revokedAt, lastSeenAt])
+}
+
+model SecurityEmailEvent {
+  id        String            @id @default(uuid())
+  userId    String
+  type      SecurityEmailType
+  dedupeKey String            @unique
+  sentAt    DateTime?
+  createdAt DateTime          @default(now())
+  user      User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, type, createdAt])
 }
 
 model EmailVerificationToken {
@@ -457,7 +543,7 @@ model PosLocationMapping {
 
   @@unique([posConnectionId, providerLocationId])
   @@unique([posConnectionId, restaurantLocationId])
-  @@index([organizationId, restaurantLocationId, active])
+  @@index([organizationId, restaurantLocationId, active], map: "PosLocationMapping_organizationId_restaurantLocationId_active_i")
 }
 
 model PosDailySales {
@@ -486,8 +572,8 @@ model PosDailySales {
   mapping              PosLocationMapping       @relation(fields: [posLocationMappingId], references: [id], onDelete: Cascade)
   revenueEntry         RevenueEntry?            @relation(fields: [revenueEntryId], references: [id], onDelete: SetNull)
 
-  @@unique([posConnectionId, providerLocationId, businessDate])
-  @@index([organizationId, restaurantLocationId, businessDate])
+  @@unique([posConnectionId, providerLocationId, businessDate], map: "PosDailySales_posConnectionId_providerLocationId_businessDate_k")
+  @@index([organizationId, restaurantLocationId, businessDate], map: "PosDailySales_organizationId_restaurantLocationId_businessDate_")
   @@index([conflictStatus])
 }
 
@@ -563,8 +649,10 @@ model Invoice {
   subtotal               Decimal?               @db.Decimal(14, 2)
   tax                    Decimal?               @db.Decimal(14, 2)
   otherFees              Decimal?               @db.Decimal(14, 2)
+  discount               Decimal?               @db.Decimal(14, 2)
   total                  Decimal?               @db.Decimal(14, 2)
   currency               String?
+  fieldProvenance        Json?
   notes                  String?
   status                 InvoiceStatus          @default(UPLOADED)
   ingestionSource        InvoiceIngestionSource @default(MANUAL_UPLOAD)
@@ -599,7 +687,7 @@ model Invoice {
   @@unique([organizationId, restaurantLocationId, attachmentHash])
   @@index([organizationId, restaurantLocationId])
   @@index([restaurantLocationId, invoiceDate])
-  @@index([organizationId, restaurantLocationId, inboundMessageId])
+  @@index([organizationId, restaurantLocationId, inboundMessageId], map: "Invoice_organizationId_restaurantLocationId_inboundMessageId_id")
 }
 
 model InvoiceLineItem {
@@ -625,6 +713,7 @@ model InvoiceLineItem {
   category                String?
   confidence              Decimal?               @db.Decimal(5, 4)
   uncertainFields         String[]               @default([])
+  fieldProvenance         Json?
   createdAt               DateTime               @default(now())
   updatedAt               DateTime               @updatedAt
   invoice                 Invoice                @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
@@ -697,8 +786,8 @@ model ProductMatchDecision {
   productGroup         ProductGroup?          @relation(fields: [productGroupId], references: [id], onDelete: SetNull)
   reviewedBy           User?                  @relation(fields: [reviewedByUserId], references: [id], onDelete: SetNull)
 
-  @@unique([candidateLineItemAId, candidateLineItemBId])
-  @@index([organizationId, restaurantLocationId, status])
+  @@unique([candidateLineItemAId, candidateLineItemBId], map: "ProductMatchDecision_candidateLineItemAId_candidateLineItemBId_")
+  @@index([organizationId, restaurantLocationId, status], map: "ProductMatchDecision_organizationId_restaurantLocationId_status")
 }
 
 model PayrollPeriod {
@@ -931,7 +1020,7 @@ model BankTransaction {
   expense                Expense?                 @relation(fields: [expenseId], references: [id], onDelete: SetNull)
 
   @@unique([bankAccountId, providerTransactionId])
-  @@index([organizationId, restaurantLocationId, reconciliationStatus, postedDate])
+  @@index([organizationId, restaurantLocationId, reconciliationStatus, postedDate], map: "BankTransaction_organizationId_restaurantLocationId_reconciliat")
   @@index([invoiceId])
   @@index([suggestedInvoiceId])
 }
@@ -945,6 +1034,10 @@ model MerchantRule {
   vendorId               String?
   expenseCategoryId      String?
   restaurantLocationId   String?
+  active                 Boolean               @default(true)
+  autoConfirm            Boolean               @default(false)
+  minimumAmount          Decimal?              @db.Decimal(14, 2)
+  maximumAmount          Decimal?              @db.Decimal(14, 2)
   createdByUserId        String
   createdAt              DateTime              @default(now())
   updatedAt              DateTime              @updatedAt
@@ -954,5 +1047,5 @@ model MerchantRule {
   restaurantLocation     RestaurantLocation?   @relation(fields: [restaurantLocationId], references: [id], onDelete: Cascade)
   createdBy              User                  @relation(fields: [createdByUserId], references: [id], onDelete: Restrict)
 
-  @@index([organizationId, restaurantLocationId, matchType, matchValue])
+  @@index([organizationId, restaurantLocationId, matchType, matchValue], map: "MerchantRule_organizationId_restaurantLocationId_matchType_matc")
 }

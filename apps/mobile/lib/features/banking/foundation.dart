@@ -199,6 +199,43 @@ class BankLinkSetup {
   final bool updateMode;
 }
 
+class MerchantRuleData {
+  const MerchantRuleData({
+    required this.id,
+    required this.merchant,
+    required this.active,
+    required this.autoConfirm,
+    this.vendorName,
+    this.categoryName,
+    this.vendorId,
+    this.categoryId,
+    this.minimumAmount,
+    this.maximumAmount,
+  });
+  final String id, merchant;
+  final bool active, autoConfirm;
+  final String? vendorName, categoryName, vendorId, categoryId;
+  final double? minimumAmount, maximumAmount;
+
+  factory MerchantRuleData.fromJson(Map<String, dynamic> json) =>
+      MerchantRuleData(
+        id: json['id'] as String,
+        merchant: json['normalizedMerchantName'] as String,
+        active: json['active'] as bool? ?? true,
+        autoConfirm: json['autoConfirm'] as bool? ?? false,
+        vendorName: (json['vendor'] as Map?)?['name'] as String?,
+        categoryName: (json['expenseCategory'] as Map?)?['name'] as String?,
+        vendorId: (json['vendor'] as Map?)?['id'] as String?,
+        categoryId: (json['expenseCategory'] as Map?)?['id'] as String?,
+        minimumAmount: json['minimumAmount'] == null
+            ? null
+            : _money(json['minimumAmount']),
+        maximumAmount: json['maximumAmount'] == null
+            ? null
+            : _money(json['maximumAmount']),
+      );
+}
+
 class BankingRepository {
   BankingRepository(this.dio);
   final Dio dio;
@@ -297,6 +334,9 @@ class BankingRepository {
     String? locationId,
     bool ignored = false,
     bool createRule = false,
+    bool autoConfirmFuture = false,
+    double? minimumAmount,
+    double? maximumAmount,
   }) => dio.patch(
     '/bank-transactions/$id/review',
     data: {
@@ -305,7 +345,62 @@ class BankingRepository {
       'restaurantLocationId': locationId,
       'ignored': ignored,
       'createMerchantRule': createRule,
+      'autoConfirmFuture': autoConfirmFuture,
+      'minimumAmount': minimumAmount,
+      'maximumAmount': maximumAmount,
     },
+  );
+  Future<void> bulkReview(
+    List<String> ids, {
+    String? vendorId,
+    String? categoryId,
+    required String locationId,
+    bool ignored = false,
+  }) => dio.post(
+    '/bank-transactions/bulk-review',
+    data: {
+      'ids': ids,
+      'vendorId': vendorId,
+      'categoryId': categoryId,
+      'restaurantLocationId': locationId,
+      'ignored': ignored,
+    },
+  );
+  Future<void> reverse(String id) => dio.post('/bank-transactions/$id/reverse');
+  Future<List<MerchantRuleData>> merchantRules(
+    String organizationId,
+    String locationId,
+  ) async =>
+      (await dio.get(
+            '/bank/merchant-rules',
+            queryParameters: {
+              'organizationId': organizationId,
+              'restaurantLocationId': locationId,
+            },
+          )).data
+          .map<MerchantRuleData>(
+            (item) =>
+                MerchantRuleData.fromJson(Map<String, dynamic>.from(item)),
+          )
+          .toList();
+  Future<void> updateMerchantRule(
+    String id, {
+    bool? active,
+    bool? autoConfirm,
+    String? vendorId,
+    String? categoryId,
+    double? minimumAmount,
+    double? maximumAmount,
+  }) => dio.patch(
+    '/bank/merchant-rules/$id',
+    data: <String, dynamic>{
+      'active': active,
+      'autoConfirm': autoConfirm,
+      'vendorId': vendorId,
+      'categoryId': categoryId,
+      'minimumAmount': minimumAmount,
+      'maximumAmount': maximumAmount,
+    }..removeWhere((_, value) => value == null),
   );
   Future<void> confirmMatch(String id, String invoiceId) => dio.post(
     '/bank-transactions/$id/confirm-match',
@@ -365,12 +460,66 @@ final bankTransactionsProvider = FutureProvider<List<BankTransactionData>>((
   final location = ref.watch(activeLocationProvider);
   if (location == null) return [];
   final filter = ref.watch(bankTransactionFilterProvider);
-  final status = switch (filter) {
-    BankTransactionFilter.needsReview => 'NEEDS_REVIEW',
-    BankTransactionFilter.matched => 'MATCHED_INVOICE',
-    BankTransactionFilter.all => null,
-  };
+  final repository = ref.watch(bankingRepositoryProvider);
+  if (filter == BankTransactionFilter.matched) {
+    final results = await Future.wait([
+      repository.transactions(
+        location.organizationId,
+        location.id,
+        'MATCHED_INVOICE',
+      ),
+      repository.transactions(
+        location.organizationId,
+        location.id,
+        'MATCHED_EXPENSE',
+      ),
+    ]);
+    final ids = <String>{};
+    return [
+      ...results.expand((items) => items).where((item) => ids.add(item.id)),
+    ]..sort((a, b) => b.postedDate.compareTo(a.postedDate));
+  }
+  return repository.transactions(
+    location.organizationId,
+    location.id,
+    filter == BankTransactionFilter.needsReview ? 'NEEDS_REVIEW' : null,
+  );
+});
+
+/// Independent of the visible Bank Transactions filter so Expenses and Vendors
+/// can explain why imported activity is not yet authoritative financial data.
+final bankTransactionsAwaitingReviewProvider =
+    FutureProvider<List<BankTransactionData>>((ref) async {
+      final location = ref.watch(activeLocationProvider);
+      if (location == null) return [];
+      return ref
+          .watch(bankingRepositoryProvider)
+          .transactions(location.organizationId, location.id, 'NEEDS_REVIEW');
+    });
+
+final allBankTransactionsProvider = FutureProvider<List<BankTransactionData>>((
+  ref,
+) async {
+  final location = ref.watch(activeLocationProvider);
+  if (location == null) return [];
   return ref
       .watch(bankingRepositoryProvider)
-      .transactions(location.organizationId, location.id, status);
+      .transactions(location.organizationId, location.id, null);
+});
+
+final unverifiedBankDepositsProvider =
+    FutureProvider<List<BankTransactionData>>(
+      (ref) async => (await ref.watch(
+        allBankTransactionsProvider.future,
+      )).where((item) => item.amount < 0 && item.status != 'IGNORED').toList(),
+    );
+
+final merchantRulesProvider = FutureProvider<List<MerchantRuleData>>((
+  ref,
+) async {
+  final location = ref.watch(activeLocationProvider);
+  if (location == null) return [];
+  return ref
+      .watch(bankingRepositoryProvider)
+      .merchantRules(location.organizationId, location.id);
 });

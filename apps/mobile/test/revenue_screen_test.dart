@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:restaurant_profit_mobile/features/dashboard/foundation.dart';
+import 'package:restaurant_profit_mobile/features/banking/foundation.dart';
 import 'package:restaurant_profit_mobile/features/revenue/foundation.dart';
 import 'package:restaurant_profit_mobile/features/revenue/revenue_screen.dart';
 
@@ -90,11 +91,15 @@ class FakeRevenueRepository extends RevenueRepository {
 }
 
 void main() {
-  Widget app(FakeRevenueRepository repository) => ProviderScope(
+  Widget app(
+    FakeRevenueRepository repository, {
+    List<BankTransactionData> deposits = const [],
+  }) => ProviderScope(
     overrides: [
       activeLocationProvider.overrideWithValue(downtown),
       availableLocationsProvider.overrideWithValue([downtown, lakeside]),
       revenueRepositoryProvider.overrideWithValue(repository),
+      unverifiedBankDepositsProvider.overrideWith((_) async => deposits),
     ],
     child: const MaterialApp(home: Scaffold(body: RevenueScreen())),
   );
@@ -145,6 +150,37 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Unable to load revenue'), findsOneWidget);
     expect(find.text('Retry'), findsOneWidget);
+  });
+
+  testWidgets('bank deposits remain visibly unverified revenue', (
+    tester,
+  ) async {
+    final deposit = BankTransactionData(
+      id: 'deposit',
+      merchant: 'Incoming transfer',
+      description: 'ACH CREDIT',
+      amount: -500,
+      postedDate: DateTime(2026, 10, 7),
+      status: 'NEEDS_REVIEW',
+      categorizationSource: 'UNRESOLVED',
+      matchConfidence: 'NO_MATCH',
+      pending: false,
+      restaurantLocationId: downtown.id,
+    );
+    await tester.pumpWidget(
+      app(
+        FakeRevenueRepository((_) async => page([], totalItems: 0)),
+        deposits: [deposit],
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Unverified Bank Deposits'), findsOneWidget);
+    expect(
+      find.textContaining('excluded from verified revenue'),
+      findsOneWidget,
+    );
+    expect(find.text('Total Revenue'), findsOneWidget);
+    expect(find.text('\$0'), findsNothing);
   });
 
   testWidgets('sort selection refreshes with server sort', (tester) async {

@@ -80,6 +80,24 @@ describe('auth service', () => {
     expect(prisma.user.findFirst).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ email: 'private@profitlens.local' }) }));
   });
 
+  it('does not let private-account access bypass an enabled MFA challenge', async () => {
+    process.env.PRIVATE_BETA_USER_EMAIL = 'private@profitlens.local';
+    process.env.PRIVATE_BETA_ACCESS_CODE_HASH = await argon2.hash('configured-secret');
+    const user = {
+      id: 'private-user', email: 'private@profitlens.local', emailVerifiedAt: new Date(), disabledAt: null, deletedAt: null,
+      mfaEnabled: true,
+      memberships: [{ role: OrganizationRole.OWNER, organization: { locations: [{ id: 'private-location' }] } }],
+    };
+    const prisma: any = { user: { findFirst: jest.fn().mockResolvedValue(user) }, refreshToken: { create: jest.fn() } };
+    const security = { beginLogin: jest.fn().mockResolvedValue({ challengeRequired: true, challengeId: 'challenge', method: 'AUTHENTICATOR' }) };
+    const jwt = { signAsync: jest.fn() };
+    const service = new AuthService(prisma, jwt as any, mail() as any, audit as any, security as any);
+
+    await expect(service.privateSession('configured-secret')).resolves.toEqual(expect.objectContaining({ challengeRequired: true, accountMode: 'private' }));
+    expect(jwt.signAsync).not.toHaveBeenCalled();
+    expect(prisma.refreshToken.create).not.toHaveBeenCalled();
+  });
+
   it('refuses a private identity without exactly one owned organization and location', async () => {
     process.env.PRIVATE_BETA_USER_EMAIL = 'private@profitlens.local';
     process.env.PRIVATE_BETA_ACCESS_CODE_HASH = await argon2.hash('configured-secret');
@@ -148,6 +166,15 @@ describe('auth service', () => {
     await expect(service.login('a@example.com', password)).rejects.toBeInstanceOf(UnauthorizedException);
     prisma.user.findUnique.mockResolvedValue(null);
     await expect(service.login('missing@example.com', 'wrong')).rejects.toBeInstanceOf(UnauthorizedException);
+  });
+
+  it('sends a deduplicated suspicious-login signal without changing the neutral error', async () => {
+    const hash = await argon2.hash(password);
+    const user = { id: 'user-a', email: 'a@example.com', passwordHash: hash, disabledAt: null, deletedAt: null };
+    const security = { notifySuspiciousLogin: jest.fn().mockRejectedValue(new Error('email unavailable')) };
+    const service = new AuthService({ user: { findUnique: jest.fn().mockResolvedValue(user) } } as any, {} as any, mail() as any, audit as any, security as any);
+    await expect(service.login(user.email, 'wrong-password')).rejects.toThrow('Invalid email or password');
+    expect(security.notifySuspiciousLogin).toHaveBeenCalledWith(user);
   });
 
   it('atomically rotates refresh tokens and rejects replay', async () => {

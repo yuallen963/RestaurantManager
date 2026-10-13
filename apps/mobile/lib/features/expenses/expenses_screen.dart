@@ -8,6 +8,7 @@ import '../dashboard/home_screen.dart';
 import '../invoices/invoice_screens.dart';
 import '../price_intelligence/price_changes_screen.dart';
 import '../banking/bank_screens.dart';
+import '../banking/foundation.dart';
 import 'foundation.dart';
 
 class ExpensesScreen extends ConsumerStatefulWidget {
@@ -110,11 +111,7 @@ class _ExpensesScreenState extends ConsumerState<ExpensesScreen> {
           if (expenseData.items.isEmpty) {
             return Padding(
               padding: const EdgeInsets.only(top: 36),
-              child: EmptyState(
-                message: filters.isFiltered
-                    ? 'No expenses match your filters.'
-                    : 'No expenses found for this period.',
-              ),
+              child: _ExpenseEmptyState(filtered: filters.isFiltered),
             );
           }
           if (expenseData.isLoadingMore) {
@@ -161,6 +158,46 @@ class _ExpensesScreenState extends ConsumerState<ExpensesScreen> {
           ),
         );
       },
+    );
+  }
+}
+
+class _ExpenseEmptyState extends ConsumerWidget {
+  const _ExpenseEmptyState({required this.filtered});
+  final bool filtered;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    if (filtered) {
+      return const EmptyState(message: 'No expenses match your filters.');
+    }
+    final sync = ref.watch(bankSyncStatusProvider);
+    final awaitingReview = ref.watch(bankTransactionsAwaitingReviewProvider);
+    final status = sync.valueOrNull;
+    final waitingCount = awaitingReview.valueOrNull?.length ?? 0;
+    final message = status?.inProgress == true
+        ? 'Bank synchronization is still in progress. Imported transactions must be reviewed before they appear as confirmed Expenses.'
+        : waitingCount > 0
+        ? '$waitingCount bank ${waitingCount == 1 ? 'transaction is' : 'transactions are'} waiting for review. Reconcile them before they appear as confirmed Expenses.'
+        : status?.state == BankImportState.complete &&
+              status?.transactionCount == 0
+        ? 'Bank synchronization completed with no transactions. No confirmed expenses were found for this period.'
+        : 'No confirmed expenses were found for this period. Imported bank transactions appear here only after reconciliation.';
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        EmptyState(message: message),
+        const SizedBox(height: 8),
+        OutlinedButton.icon(
+          key: const Key('review-bank-transactions-empty'),
+          onPressed: () => Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const BankTransactionsScreen()),
+          ),
+          icon: const Icon(Icons.account_balance),
+          label: const Text('Review Bank Transactions'),
+        ),
+      ],
     );
   }
 }
@@ -251,6 +288,37 @@ class _ExpenseHeader extends ConsumerWidget {
           ),
         ),
         const SizedBox(height: 16),
+        Consumer(
+          builder: (context, ref, _) {
+            final waiting = ref.watch(bankTransactionsAwaitingReviewProvider);
+            final count = waiting.valueOrNull?.length ?? 0;
+            if (count == 0) return const SizedBox.shrink();
+            return Card(
+              key: const Key('expense-bank-activity-card'),
+              color: Theme.of(context).colorScheme.secondaryContainer,
+              child: ListTile(
+                leading: const Icon(Icons.account_balance),
+                title: Text('Bank activity · $count needs review'),
+                subtitle: const Text(
+                  'Unreviewed outflows are kept separate from confirmed Expenses.',
+                ),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => const BankTransactionsScreen(),
+                  ),
+                ),
+              ),
+            );
+          },
+        ),
+        if ((ref
+                .watch(bankTransactionsAwaitingReviewProvider)
+                .valueOrNull
+                ?.isNotEmpty ??
+            false))
+          const SizedBox(height: 12),
         Card(
           key: const Key('expense-total-card'),
           color: Theme.of(context).colorScheme.primaryContainer,
@@ -264,7 +332,7 @@ class _ExpenseHeader extends ConsumerWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        'Total Expenses',
+                        'Confirmed Expenses',
                         style: Theme.of(context).textTheme.titleMedium,
                       ),
                       const SizedBox(height: 4),

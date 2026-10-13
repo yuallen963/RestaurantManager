@@ -53,6 +53,13 @@ class InvoiceListScreen extends ConsumerWidget {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   const Text('No invoices uploaded yet.'),
+                  const Padding(
+                    padding: EdgeInsets.fromLTRB(28, 8, 28, 0),
+                    child: Text(
+                      'Bank activity can show payments, but invoice uploads add item-level pricing, package sizes, and vendor cost intelligence.',
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
                   const SizedBox(height: 12),
                   FilledButton(
                     onPressed: location == null ? null : openUpload,
@@ -591,7 +598,9 @@ class InvoiceReviewScreen extends ConsumerWidget {
                 ListTile(
                   title: const Text('Vendor'),
                   subtitle: Text(
-                    _reviewValue(
+                    _reviewFieldValue(
+                      data,
+                      'vendorName',
                       data.vendorName,
                       data.uncertainFields.contains('vendorName'),
                     ),
@@ -605,7 +614,9 @@ class InvoiceReviewScreen extends ConsumerWidget {
                 ListTile(
                   title: const Text('Invoice number'),
                   subtitle: Text(
-                    _reviewValue(
+                    _reviewFieldValue(
+                      data,
+                      'invoiceNumber',
                       data.invoiceNumber,
                       data.uncertainFields.contains('invoiceNumber'),
                     ),
@@ -614,7 +625,9 @@ class InvoiceReviewScreen extends ConsumerWidget {
                 ListTile(
                   title: const Text('Invoice date'),
                   subtitle: Text(
-                    _reviewValue(
+                    _reviewFieldValue(
+                      data,
+                      'invoiceDate',
                       data.invoiceDate == null
                           ? null
                           : _date(data.invoiceDate!),
@@ -626,7 +639,9 @@ class InvoiceReviewScreen extends ConsumerWidget {
                   ListTile(
                     title: const Text('Due date'),
                     subtitle: Text(
-                      _reviewValue(
+                      _reviewFieldValue(
+                        data,
+                        'dueDate',
                         _date(data.dueDate!),
                         data.uncertainFields.contains('dueDate'),
                       ),
@@ -635,36 +650,75 @@ class InvoiceReviewScreen extends ConsumerWidget {
                 ListTile(
                   title: const Text('Subtotal'),
                   subtitle: Text(
-                    data.subtotal == null
-                        ? 'Missing'
-                        : formatCurrency(data.subtotal!),
+                    _reviewFieldValue(
+                      data,
+                      'subtotal',
+                      data.subtotal == null
+                          ? null
+                          : formatCurrency(data.subtotal!),
+                      data.uncertainFields.contains('subtotal'),
+                    ),
                   ),
                 ),
                 ListTile(
                   title: const Text('Tax'),
                   subtitle: Text(
-                    data.tax == null ? 'Missing' : formatCurrency(data.tax!),
+                    _reviewFieldValue(
+                      data,
+                      'tax',
+                      data.tax == null ? null : formatCurrency(data.tax!),
+                      data.uncertainFields.contains('tax'),
+                    ),
                   ),
                 ),
                 ListTile(
                   title: const Text('Total'),
                   subtitle: Text(
-                    _reviewValue(
+                    _reviewFieldValue(
+                      data,
+                      'total',
                       data.total == null ? null : formatCurrency(data.total!),
                       data.uncertainFields.contains('total'),
                     ),
                   ),
                 ),
-                if (data.otherFees != null)
-                  ListTile(
-                    title: const Text('Other fees'),
-                    subtitle: Text(formatCurrency(data.otherFees!)),
+                ListTile(
+                  title: const Text('Other fees'),
+                  subtitle: Text(
+                    _reviewFieldValue(
+                      data,
+                      'otherFees',
+                      data.otherFees == null
+                          ? null
+                          : formatCurrency(data.otherFees!),
+                      data.uncertainFields.contains('otherFees'),
+                    ),
                   ),
-                if (data.currency != null)
-                  ListTile(
-                    title: const Text('Currency'),
-                    subtitle: Text(data.currency!),
+                ),
+                ListTile(
+                  title: const Text('Discount'),
+                  subtitle: Text(
+                    _reviewFieldValue(
+                      data,
+                      'discount',
+                      data.discount == null
+                          ? null
+                          : formatCurrency(data.discount!),
+                      data.uncertainFields.contains('discount'),
+                    ),
                   ),
+                ),
+                ListTile(
+                  title: const Text('Currency'),
+                  subtitle: Text(
+                    _reviewFieldValue(
+                      data,
+                      'currency',
+                      data.currency,
+                      data.uncertainFields.contains('currency'),
+                    ),
+                  ),
+                ),
                 if (data.extractionConfidence != null)
                   ListTile(
                     title: const Text('Extraction confidence'),
@@ -749,6 +803,10 @@ class InvoiceReviewScreen extends ConsumerWidget {
                                     : 'High'}',
                                 if (item.uncertainFields.isNotEmpty)
                                   'Check: ${item.uncertainFields.map(_uncertainFieldLabel).join(', ')}',
+                                if (item.fieldProvenance.values.any(
+                                  (value) => value.kind == 'OBSERVED',
+                                ))
+                                  'Evidence: page ${item.sourcePage ?? '?'} • confirm quantities and prices against the printed row',
                                 if (item.productAttributes.values.any(
                                   (value) => value != null,
                                 ))
@@ -761,6 +819,13 @@ class InvoiceReviewScreen extends ConsumerWidget {
                     ),
                   ),
                 const SizedBox(height: 16),
+                if (data.reviewStatus != 'REVIEWED')
+                  const Padding(
+                    padding: EdgeInsets.only(bottom: 12),
+                    child: Text(
+                      'Marking reviewed confirms that you checked the displayed values against the original invoice.',
+                    ),
+                  ),
                 if (data.reviewStatus != 'REVIEWED')
                   FilledButton.icon(
                     onPressed: () => _markReviewed(context, ref, data),
@@ -918,9 +983,16 @@ class _InvoiceEditScreenState extends ConsumerState<InvoiceEditScreen> {
   late final tax = TextEditingController(
     text: widget.invoice.tax?.toStringAsFixed(2),
   );
+  late final otherFees = TextEditingController(
+    text: widget.invoice.otherFees?.toStringAsFixed(2),
+  );
+  late final discount = TextEditingController(
+    text: widget.invoice.discount?.toStringAsFixed(2),
+  );
   late final total = TextEditingController(
     text: widget.invoice.total?.toStringAsFixed(2),
   );
+  late final currency = TextEditingController(text: widget.invoice.currency);
   late final notes = TextEditingController(text: widget.invoice.notes);
   late final vendorName = TextEditingController(
     text: widget.invoice.vendorName,
@@ -989,6 +1061,8 @@ class _InvoiceEditScreenState extends ConsumerState<InvoiceEditScreen> {
             for (final field in [
               MapEntry('Subtotal', subtotal),
               MapEntry('Tax', tax),
+              MapEntry('Other fees', otherFees),
+              MapEntry('Discount', discount),
               MapEntry('Total', total),
             ])
               TextFormField(
@@ -1002,6 +1076,15 @@ class _InvoiceEditScreenState extends ConsumerState<InvoiceEditScreen> {
                 ),
                 validator: validateAmount,
               ),
+            TextFormField(
+              controller: currency,
+              textCapitalization: TextCapitalization.characters,
+              maxLength: 3,
+              decoration: const InputDecoration(
+                labelText: 'Currency code',
+                hintText: 'USD',
+              ),
+            ),
             TextFormField(
               controller: notes,
               maxLines: 3,
@@ -1041,7 +1124,12 @@ class _InvoiceEditScreenState extends ConsumerState<InvoiceEditScreen> {
       'invoiceDate': date?.toIso8601String(),
       'subtotal': subtotal.text.trim().isEmpty ? null : subtotal.text.trim(),
       'tax': tax.text.trim().isEmpty ? null : tax.text.trim(),
+      'otherFees': otherFees.text.trim().isEmpty ? null : otherFees.text.trim(),
+      'discount': discount.text.trim().isEmpty ? null : discount.text.trim(),
       'total': total.text.trim().isEmpty ? null : total.text.trim(),
+      'currency': currency.text.trim().isEmpty
+          ? null
+          : currency.text.trim().toUpperCase(),
       'notes': notes.text.trim().isEmpty ? null : notes.text.trim(),
       'status': 'COMPLETED',
     };
@@ -1081,6 +1169,32 @@ String _date(DateTime value) {
 String _reviewValue(String? value, bool uncertain) {
   final displayed = value ?? 'Missing';
   return uncertain ? '$displayed • Needs review' : displayed;
+}
+
+String _reviewFieldValue(
+  InvoiceRecord invoice,
+  String field,
+  String? value,
+  bool uncertain,
+) {
+  final displayed = _reviewValue(value, uncertain);
+  final provenance = invoice.fieldProvenance[field];
+  if (provenance == null) return displayed;
+  if (provenance.kind == 'CALCULATED') {
+    final calculated = provenance.calculatedValue;
+    return '$displayed\nCalculated estimate${calculated == null ? '' : ': ${_reconciliationAmount(calculated)}'} • confirm before approval';
+  }
+  if (provenance.kind == 'MISSING') {
+    return '$displayed\nNot found in the document';
+  }
+  if (provenance.verified) return '$displayed\nConfirmed by you';
+  final page = provenance.sourcePage == null
+      ? ''
+      : ' on page ${provenance.sourcePage}';
+  final quote = provenance.sourceText == null
+      ? ''
+      : ': “${provenance.sourceText}”';
+  return '$displayed\nObserved$page$quote • confirm before approval';
 }
 
 String _status(String value) => value

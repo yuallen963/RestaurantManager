@@ -5,6 +5,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../dashboard/foundation.dart';
 import '../dashboard/home_screen.dart';
+import '../banking/bank_screens.dart';
+import '../banking/foundation.dart';
 import '../revenue/foundation.dart' show DailyRevenue;
 import '../revenue/revenue_screen.dart' show RevenueChart;
 import 'foundation.dart';
@@ -92,11 +94,12 @@ class _VendorsScreenState extends ConsumerState<VendorsScreen> {
             if (data.items.isEmpty)
               return Padding(
                 padding: const EdgeInsets.only(top: 36),
-                child: EmptyState(
-                  message:
-                      ref.watch(vendorFiltersProvider).search.trim().isEmpty
-                      ? 'No vendor activity found for this period.'
-                      : 'No vendors match your search.',
+                child: _VendorEmptyState(
+                  filtered: ref
+                      .watch(vendorFiltersProvider)
+                      .search
+                      .trim()
+                      .isNotEmpty,
                 ),
               );
             if (data.isLoadingMore)
@@ -134,6 +137,43 @@ class _VendorsScreenState extends ConsumerState<VendorsScreen> {
           );
         },
       );
+}
+
+class _VendorEmptyState extends ConsumerWidget {
+  const _VendorEmptyState({required this.filtered});
+  final bool filtered;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    if (filtered)
+      return const EmptyState(message: 'No vendors match your search.');
+    final sync = ref.watch(bankSyncStatusProvider).valueOrNull;
+    final waiting = ref.watch(bankTransactionsAwaitingReviewProvider);
+    final waitingCount = waiting.valueOrNull?.length ?? 0;
+    final message = sync?.inProgress == true
+        ? 'Bank synchronization is still in progress. Merchant activity will become confirmed vendor spending only after reconciliation.'
+        : waitingCount > 0
+        ? 'Bank merchant names do not become confirmed Vendors automatically. Reconcile and link the waiting transactions to Vendors to see spending here.'
+        : 'No confirmed vendor activity was found for this period. Vendor spending appears after expenses are reconciled and linked to Vendors.';
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        EmptyState(message: message),
+        if (waitingCount > 0) ...[
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            key: const Key('review-bank-transactions-vendors'),
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const BankTransactionsScreen()),
+            ),
+            icon: const Icon(Icons.account_balance),
+            label: const Text('Review Bank Transactions'),
+          ),
+        ],
+      ],
+    );
+  }
 }
 
 class VendorHeader extends ConsumerWidget {
@@ -178,6 +218,10 @@ class VendorHeader extends ConsumerWidget {
               .select(selected),
         ),
         const SizedBox(height: 16),
+        _BankMerchantSummary(
+          transactions:
+              ref.watch(allBankTransactionsProvider).valueOrNull ?? const [],
+        ),
         TextField(
           key: const Key('vendor-search'),
           controller: searchController,
@@ -227,6 +271,60 @@ class VendorHeader extends ConsumerWidget {
         ),
         const SizedBox(height: 12),
       ],
+    );
+  }
+}
+
+class _BankMerchantSummary extends StatelessWidget {
+  const _BankMerchantSummary({required this.transactions});
+  final List<BankTransactionData> transactions;
+
+  @override
+  Widget build(BuildContext context) {
+    final groups = <String, List<BankTransactionData>>{};
+    for (final item in transactions.where((item) => item.amount > 0)) {
+      groups.putIfAbsent(item.merchant, () => []).add(item);
+    }
+    if (groups.isEmpty) return const SizedBox.shrink();
+    final merchants = groups.entries.toList()
+      ..sort(
+        (a, b) => b.value
+            .fold<double>(0, (sum, item) => sum + item.amount)
+            .compareTo(
+              a.value.fold<double>(0, (sum, item) => sum + item.amount),
+            ),
+      );
+    return Card(
+      key: const Key('bank-merchants-section'),
+      elevation: 0,
+      child: ExpansionTile(
+        title: const Text('Bank Merchants'),
+        subtitle: const Text(
+          'Imported names are not confirmed Vendors until you review and link them.',
+        ),
+        children: [
+          for (final entry in merchants.take(5))
+            ListTile(
+              title: Text(entry.key),
+              subtitle: Text(
+                '${entry.value.length} transactions · ${entry.value.any((item) => item.vendorId != null) ? 'Vendor associated' : 'Needs review'}',
+              ),
+              trailing: Text(
+                formatCurrency(
+                  entry.value.fold<double>(0, (sum, item) => sum + item.amount),
+                ),
+              ),
+            ),
+          ListTile(
+            title: const Text('Review Bank Transactions'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const BankTransactionsScreen()),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

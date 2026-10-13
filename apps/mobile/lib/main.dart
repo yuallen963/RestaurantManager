@@ -1,5 +1,8 @@
 // ignore_for_file: curly_braces_in_flow_control_structures
 
+import 'dart:convert';
+import 'dart:math';
+
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
@@ -43,8 +46,29 @@ const sharedTestUserModeRequested = bool.fromEnvironment(
 final sharedTestUserModeProvider = Provider<bool>(
   (_) => sharedTestUserModeRequested,
 );
+
 enum AccountSessionMode { standard, private }
+
 const sessionModeStorageKey = 'accountSessionMode';
+const pendingAuthChallengeKey = 'pendingAuthChallenge';
+const pendingAuthChallengeMethodKey = 'pendingAuthChallengeMethod';
+const pendingAuthChallengeModeKey = 'pendingAuthChallengeMode';
+const authDeviceIdKey = 'authDeviceId';
+
+Future<String> authDeviceId() async {
+  final existing = await storage.read(key: authDeviceIdKey);
+  if (existing != null) return existing;
+  final random = Random.secure();
+  final value = base64Url
+      .encode(List<int>.generate(32, (_) => random.nextInt(256)))
+      .replaceAll('=', '');
+  await storage.write(key: authDeviceIdKey, value: value);
+  return value;
+}
+
+final authDeviceIdProvider = FutureProvider<String>((_) => authDeviceId());
+
+String get authDeviceName => '${defaultTargetPlatform.name} FundWell app';
 final accountSessionModeProvider = StateProvider<AccountSessionMode>(
   (_) => AccountSessionMode.standard,
 );
@@ -67,11 +91,13 @@ class _ProfitAppState extends State<ProfitApp> {
     super.initState();
     links.start();
   }
+
   @override
   void dispose() {
     links.dispose();
     super.dispose();
   }
+
   @override
   Widget build(BuildContext context) => MaterialApp(
     navigatorKey: navigatorKey,
@@ -108,6 +134,30 @@ class _AuthBootstrapState extends ConsumerState<AuthBootstrap> {
         ? AccountSessionMode.private
         : AccountSessionMode.standard;
     try {
+      final pendingChallenge = await storage.read(key: pendingAuthChallengeKey);
+      if (pendingChallenge != null) {
+        final method =
+            await storage.read(key: pendingAuthChallengeMethodKey) ??
+            'AUTHENTICATOR';
+        final pendingMode =
+            await storage.read(key: pendingAuthChallengeModeKey) ==
+                AccountSessionMode.private.name
+            ? AccountSessionMode.private
+            : AccountSessionMode.standard;
+        if (mounted) {
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(
+              builder: (_) => LoginChallengeScreen(
+                challengeId: pendingChallenge,
+                method: method,
+                accountMode: pendingMode,
+              ),
+            ),
+          );
+        }
+        widget.onReady?.call();
+        return;
+      }
       // Shared test mode deliberately obtains a session on every launch. This
       // prevents an old device's saved account from leaking into this temporary
       // single-restaurant testing environment.
@@ -173,7 +223,8 @@ class _AuthBootstrapState extends ConsumerState<AuthBootstrap> {
           );
           if (privateSession) {
             final profile = await client.get('/auth/me');
-            if (profile.data['accountMode'] != 'private') throw StateError('Private session expired');
+            if (profile.data['accountMode'] != 'private')
+              throw StateError('Private session expired');
           }
           await _enterAuthenticatedApp();
           return;
@@ -303,11 +354,17 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
   Future<void> login() async {
     setState(() => busy = true);
     try {
+      final deviceId = await ref.read(authDeviceIdProvider.future);
       final response = await ref
           .read(api)
           .post(
             creatingAccount ? '/auth/register' : '/auth/login',
-            data: {'email': email.text, 'password': password.text},
+            data: {
+              'email': email.text,
+              'password': password.text,
+              'deviceId': deviceId,
+              'deviceName': authDeviceName,
+            },
           );
       if (creatingAccount) {
         final data = Map<String, dynamic>.from(response.data as Map);
@@ -319,6 +376,27 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                 email: data['email'] as String,
                 developmentToken:
                     data['developmentVerificationToken'] as String?,
+              ),
+            ),
+          );
+        return;
+      }
+      if (response.data['challengeRequired'] == true) {
+        final challengeId = response.data['challengeId'] as String;
+        final method = response.data['method'] as String;
+        await storage.write(key: pendingAuthChallengeKey, value: challengeId);
+        await storage.write(key: pendingAuthChallengeMethodKey, value: method);
+        await storage.write(
+          key: pendingAuthChallengeModeKey,
+          value: AccountSessionMode.standard.name,
+        );
+        if (mounted)
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(
+              builder: (_) => LoginChallengeScreen(
+                challengeId: challengeId,
+                method: method,
               ),
             ),
           );

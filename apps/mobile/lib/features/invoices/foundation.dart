@@ -60,6 +60,30 @@ class InvoiceReconciliation {
   }
 }
 
+class InvoiceFieldProvenance {
+  const InvoiceFieldProvenance({
+    required this.kind,
+    required this.verified,
+    this.sourceText,
+    this.sourcePage,
+    this.calculatedValue,
+  });
+
+  final String kind;
+  final bool verified;
+  final String? sourceText, calculatedValue;
+  final int? sourcePage;
+
+  factory InvoiceFieldProvenance.fromJson(Map<String, dynamic> json) =>
+      InvoiceFieldProvenance(
+        kind: json['kind']?.toString() ?? 'MISSING',
+        verified: json['verified'] == true,
+        sourceText: json['sourceText']?.toString(),
+        sourcePage: json['sourcePage'] as int?,
+        calculatedValue: json['calculatedValue']?.toString(),
+      );
+}
+
 class InvoiceRecord {
   const InvoiceRecord({
     required this.id,
@@ -78,6 +102,7 @@ class InvoiceRecord {
     this.subtotal,
     this.tax,
     this.otherFees,
+    this.discount,
     this.total,
     this.currency,
     this.notes,
@@ -90,6 +115,7 @@ class InvoiceRecord {
     this.ingestionSource = 'MANUAL_UPLOAD',
     this.uncertainFields = const [],
     this.reconciliation,
+    this.fieldProvenance = const {},
   });
   final String id, restaurantLocationId, fileName, fileType, status;
   final int fileSize;
@@ -101,7 +127,7 @@ class InvoiceRecord {
       currency;
   final DateTime? invoiceDate, dueDate;
   final DateTime createdAt;
-  final double? subtotal, tax, otherFees, total;
+  final double? subtotal, tax, otherFees, discount, total;
   final String extractionStatus, reviewStatus;
   final String ingestionSource;
   final double? extractionConfidence;
@@ -110,6 +136,7 @@ class InvoiceRecord {
   final bool canRetryExtraction;
   final List<String> uncertainFields;
   final InvoiceReconciliation? reconciliation;
+  final Map<String, InvoiceFieldProvenance> fieldProvenance;
   factory InvoiceRecord.fromJson(Map<String, dynamic> json) {
     final rawExtraction = json['rawExtractionJson'];
     final rawMap = rawExtraction is Map
@@ -137,6 +164,7 @@ class InvoiceRecord {
       subtotal: _money(json['subtotal']),
       tax: _money(json['tax']),
       otherFees: _money(json['otherFees']),
+      discount: _money(json['discount']),
       total: _money(json['total']),
       currency: json['currency'] as String?,
       notes: json['notes'] as String?,
@@ -154,6 +182,14 @@ class InvoiceRecord {
               Map<String, dynamic>.from(reconciliationJson),
             )
           : null,
+      fieldProvenance: (json['fieldProvenance'] as Map? ?? const {}).map(
+        (key, value) => MapEntry(
+          key.toString(),
+          InvoiceFieldProvenance.fromJson(
+            Map<String, dynamic>.from(value as Map),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -179,6 +215,7 @@ class InvoiceLineItem {
     this.category,
     this.confidence,
     this.uncertainFields = const [],
+    this.fieldProvenance = const {},
   });
   final String id, rawDescription;
   final int lineNumber;
@@ -193,6 +230,7 @@ class InvoiceLineItem {
   final int? sourcePage;
   final Map<String, dynamic> productAttributes;
   final List<String> uncertainFields;
+  final Map<String, InvoiceFieldProvenance> fieldProvenance;
   bool get lowConfidence =>
       (confidence ?? 0) < .75 || uncertainFields.isNotEmpty;
   factory InvoiceLineItem.fromJson(Map<String, dynamic> json) =>
@@ -219,6 +257,14 @@ class InvoiceLineItem {
         confidence: _money(json['confidence']),
         uncertainFields: (json['uncertainFields'] as List? ?? const [])
             .cast<String>(),
+        fieldProvenance: (json['fieldProvenance'] as Map? ?? const {}).map(
+          (key, value) => MapEntry(
+            key.toString(),
+            InvoiceFieldProvenance.fromJson(
+              Map<String, dynamic>.from(value as Map),
+            ),
+          ),
+        ),
       );
 }
 
