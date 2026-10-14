@@ -193,7 +193,7 @@ void main() {
       find.textContaining('do not become confirmed Vendors'),
       findsOneWidget,
     );
-    expect(find.textContaining('Reconcile and link'), findsOneWidget);
+    expect(find.textContaining('add them to Expenses'), findsOneWidget);
     expect(
       find.byKey(const Key('review-bank-transactions-vendors')),
       findsOneWidget,

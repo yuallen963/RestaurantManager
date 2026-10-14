@@ -125,6 +125,11 @@ class _BankSyncStatusBanner extends StatelessWidget {
           message:
               'Bank sync is complete. No transactions were found for this restaurant.',
         ),
+      BankImportState.complete => _BankSyncBanner(
+        icon: Icons.check_circle_outline,
+        message:
+            'Your bank transactions are ready! We found ${status.transactionCount}. Review which purchases belong to your restaurant. FundWell can remember your choices to make future expense tracking easier.',
+      ),
       _ => const SizedBox.shrink(),
     };
   }
@@ -398,7 +403,7 @@ class _DashboardContent extends StatelessWidget {
         if (availability.bank && availability.reviewedInvoices) ...[
           const SizedBox(height: 12),
           const Text(
-            'Bank outflows and invoice purchases are shown separately. Matched records represent the same purchase and are not added together.',
+            'Bank outflows and invoice purchases are shown separately. Payments linked to invoices represent the same purchase and are not added together.',
           ),
         ],
         if (availability.expenses && !availability.profitability) ...[
@@ -641,11 +646,11 @@ class _BankSection extends ConsumerWidget {
                       title: Text(item.merchant),
                       subtitle: Text(
                         item.status == 'MATCHED_EXPENSE'
-                            ? 'Confirmed restaurant expense'
+                            ? 'Added to Expenses'
                             : item.status == 'IGNORED'
                             ? 'Ignored'
                             : item.status == 'MATCHED_INVOICE'
-                            ? 'Matched to invoice'
+                            ? 'Linked to Invoice'
                             : 'Suggested · Needs review',
                       ),
                       trailing: Text(formatCurrency(item.amount.abs())),

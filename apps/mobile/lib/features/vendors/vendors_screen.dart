@@ -151,10 +151,10 @@ class _VendorEmptyState extends ConsumerWidget {
     final waiting = ref.watch(bankTransactionsAwaitingReviewProvider);
     final waitingCount = waiting.valueOrNull?.length ?? 0;
     final message = sync?.inProgress == true
-        ? 'Bank synchronization is still in progress. Merchant activity will become confirmed vendor spending only after reconciliation.'
+        ? 'Bank synchronization is still in progress. Merchant activity becomes confirmed vendor spending only after a purchase is added to Expenses and linked to a Vendor.'
         : waitingCount > 0
-        ? 'Bank merchant names do not become confirmed Vendors automatically. Reconcile and link the waiting transactions to Vendors to see spending here.'
-        : 'No confirmed vendor activity was found for this period. Vendor spending appears after expenses are reconciled and linked to Vendors.';
+        ? 'Bank merchant names do not become confirmed Vendors automatically. Review purchases, add them to Expenses, and link them to Vendors to see confirmed spending here.'
+        : 'No confirmed vendor activity was found for this period. Vendor spending appears after purchases are added to Expenses and linked to Vendors.';
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [

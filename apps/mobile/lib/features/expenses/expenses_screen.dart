@@ -178,11 +178,11 @@ class _ExpenseEmptyState extends ConsumerWidget {
     final message = status?.inProgress == true
         ? 'Bank synchronization is still in progress. Imported transactions must be reviewed before they appear as confirmed Expenses.'
         : waitingCount > 0
-        ? '$waitingCount bank ${waitingCount == 1 ? 'transaction is' : 'transactions are'} waiting for review. Reconcile them before they appear as confirmed Expenses.'
+        ? '$waitingCount bank ${waitingCount == 1 ? 'transaction is' : 'transactions are'} waiting for review. Add business purchases to Expenses before they appear in financial reports.'
         : status?.state == BankImportState.complete &&
               status?.transactionCount == 0
         ? 'Bank synchronization completed with no transactions. No confirmed expenses were found for this period.'
-        : 'No confirmed expenses were found for this period. Imported bank transactions appear here only after reconciliation.';
+        : 'No confirmed expenses were found for this period. Imported bank purchases appear here only after you add them to Expenses.';
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [

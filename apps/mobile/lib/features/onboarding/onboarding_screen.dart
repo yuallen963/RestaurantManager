@@ -264,7 +264,7 @@ class _OnboardingState extends ConsumerState<Onboarding> {
       _source(
         'BANK',
         'Bank',
-        'Connect a business bank account to help categorize spending and reconcile purchases.',
+        'Connect a business bank account to review purchases and add confirmed business costs to Expenses.',
       ),
       const SizedBox(height: 20),
       FilledButton(

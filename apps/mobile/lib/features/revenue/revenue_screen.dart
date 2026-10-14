@@ -178,9 +178,9 @@ class RevenueHeader extends ConsumerWidget {
               key: const Key('unverified-bank-deposits'),
               color: Theme.of(context).colorScheme.secondaryContainer,
               child: ExpansionTile(
-                title: const Text('Unverified Bank Deposits'),
+                title: const Text('Bank Deposits Needing Review'),
                 subtitle: Text(
-                  '${deposits.length} deposits are excluded from verified revenue until reviewed.',
+                  '${deposits.length} ${deposits.length == 1 ? 'deposit is' : 'deposits are'} not counted as restaurant sales until reviewed. Deposits may be transfers, loans, refunds, owner contributions, or sales.',
                 ),
                 children: [
                   for (final deposit in deposits.take(5))

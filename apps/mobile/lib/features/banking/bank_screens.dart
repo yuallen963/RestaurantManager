@@ -175,7 +175,7 @@ class _BankAccountsScreenState extends ConsumerState<BankAccountsScreen> {
                   ),
                 ),
                 icon: const Icon(Icons.auto_awesome),
-                label: const Text('Automation rules'),
+                label: const Text('Automatic Expense Rules'),
               ),
               const SizedBox(height: 16),
               if (connections.isEmpty)
@@ -206,11 +206,11 @@ class MerchantRulesScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final rules = ref.watch(merchantRulesProvider);
     return Scaffold(
-      appBar: AppBar(title: const Text('Bank Automation Rules')),
+      appBar: AppBar(title: const Text('Automatic Expense Rules')),
       body: rules.when(
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (_, _) => _BankError(
-          message: 'Unable to load automation rules',
+          message: 'Unable to load automatic expense rules',
           retry: () => ref.invalidate(merchantRulesProvider),
         ),
         data: (items) => items.isEmpty
@@ -218,7 +218,7 @@ class MerchantRulesScreen extends ConsumerWidget {
                 child: Padding(
                   padding: EdgeInsets.all(24),
                   child: Text(
-                    'No automation rules yet. Approve one while reviewing a bank transaction.',
+                    'No automatic expense rules yet. You can create one while reviewing a bank transaction.',
                   ),
                 ),
               )
@@ -226,7 +226,7 @@ class MerchantRulesScreen extends ConsumerWidget {
                 padding: const EdgeInsets.all(16),
                 children: [
                   const Text(
-                    'Automatic confirmation is always opt-in. Disabling a rule never changes historical expenses.',
+                    'Automatic expense tracking is optional. Turning off a rule never changes expenses already added.',
                   ),
                   const SizedBox(height: 12),
                   for (final rule in items)
@@ -243,7 +243,7 @@ class MerchantRulesScreen extends ConsumerWidget {
                                 rule.maximumAmount != null)
                               '${_currency(rule.minimumAmount!)}–${_currency(rule.maximumAmount!)}',
                             rule.autoConfirm
-                                ? 'Automatically confirmed when eligible'
+                                ? 'Automatically added when eligible'
                                 : 'Suggestions only',
                           ].join(' · '),
                         ),
@@ -476,7 +476,7 @@ class _BankTransactionsScreenState
         context: context,
         builder: (dialogContext) => StatefulBuilder(
           builder: (context, setDialogState) => AlertDialog(
-            title: Text('Confirm ${selected.length} transactions'),
+            title: Text('Add ${selected.length} transactions to Expenses'),
             content: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
@@ -509,7 +509,7 @@ class _BankTransactionsScreenState
                 ),
                 const SizedBox(height: 12),
                 const Text(
-                  'Only posted, eligible transactions will become confirmed expenses.',
+                  'This counts the selected purchases as business expenses in your financial reports. It will not affect your bank account. Only posted, eligible transactions can be added.',
                 ),
               ],
             ),
@@ -522,7 +522,7 @@ class _BankTransactionsScreenState
                 onPressed: categoryId == null
                     ? null
                     : () => Navigator.pop(dialogContext, true),
-                child: const Text('Confirm'),
+                child: const Text('Add Selected to Expenses'),
               ),
             ],
           ),
@@ -565,7 +565,7 @@ class _BankTransactionsScreenState
                 ),
                 ButtonSegment(
                   value: BankTransactionFilter.matched,
-                  label: Text('Matched'),
+                  label: Text('Added / Linked'),
                 ),
                 ButtonSegment(
                   value: BankTransactionFilter.all,
@@ -621,7 +621,7 @@ class _BankTransactionsScreenState
                       ),
                       FilledButton(
                         onPressed: () => bulkReview(ignored: false),
-                        child: const Text('Confirm'),
+                        child: const Text('Add Selected to Expenses'),
                       ),
                     ],
                   ),
@@ -749,9 +749,9 @@ class _BankTransactionsEmptyState extends ConsumerWidget {
       _ when allFilteredItems.isNotEmpty =>
         'No bank transactions were found within the selected date range.',
       _ when filter == BankTransactionFilter.needsReview =>
-        'No transactions are awaiting reconciliation for this restaurant and period.',
+        'No transactions need review for this restaurant and period.',
       _ when filter == BankTransactionFilter.matched =>
-        'No invoice-matched or expense-reconciled transactions were found for this period.',
+        'No transactions were added to Expenses or linked to invoices for this period.',
       _ => 'No bank transactions were found for this restaurant and period.',
     };
     return Center(
@@ -813,7 +813,7 @@ class _TransactionReviewSheetState
       if (mounted) {
         setState(
           () => actionError =
-              'Unable to reconcile this transaction. Review the selections and try again.',
+              'Unable to add this transaction to Expenses. Review the selections and try again.',
         );
       }
     } finally {
@@ -970,7 +970,7 @@ class _TransactionReviewSheetState
                 SwitchListTile(
                   contentPadding: EdgeInsets.zero,
                   title: const Text(
-                    'Apply this to future transactions from this merchant',
+                    'Remember this business for future transactions',
                   ),
                   value: createRule,
                   onChanged: (value) => setState(() => createRule = value),
@@ -978,11 +978,9 @@ class _TransactionReviewSheetState
                 SwitchListTile(
                   key: const Key('auto-confirm-future'),
                   contentPadding: EdgeInsets.zero,
-                  title: const Text(
-                    'Automatically confirm future eligible transactions',
-                  ),
+                  title: const Text('Automatically Track Future Expenses'),
                   subtitle: const Text(
-                    'Off by default. Applies only to this restaurant, approved vendor/category, and a safe amount range. Exceptions still require review.',
+                    'Optional and off by default. FundWell can automatically add future purchases from this approved business to Expenses. Unusual or uncertain purchases still require review.',
                   ),
                   value: autoConfirmFuture,
                   onChanged: (value) => setState(() {
@@ -991,51 +989,73 @@ class _TransactionReviewSheetState
                   }),
                 ),
                 if (widget.transaction.status == 'MATCHED_EXPENSE')
-                  OutlinedButton.icon(
-                    key: const Key('reverse-reconciliation'),
-                    onPressed: saving
-                        ? null
-                        : () async {
-                            setState(() => saving = true);
-                            try {
-                              await ref
-                                  .read(bankingRepositoryProvider)
-                                  .reverse(widget.transaction.id);
-                              _invalidateBankDerivedProviders(ref);
-                              if (mounted) Navigator.pop(this.context);
-                            } catch (_) {
-                              if (mounted) {
-                                setState(
-                                  () => actionError =
-                                      'Unable to reverse this reconciliation safely.',
-                                );
-                              }
-                            } finally {
-                              if (mounted) setState(() => saving = false);
-                            }
-                          },
-                    icon: const Icon(Icons.undo),
-                    label: const Text('Reverse Reconciliation'),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      const Text(
+                        'This removes the expense from your financial reports. The original bank transaction remains and returns to Needs Review.',
+                      ),
+                      const SizedBox(height: 10),
+                      OutlinedButton.icon(
+                        key: const Key('reverse-reconciliation'),
+                        onPressed: saving
+                            ? null
+                            : () async {
+                                setState(() => saving = true);
+                                try {
+                                  await ref
+                                      .read(bankingRepositoryProvider)
+                                      .reverse(widget.transaction.id);
+                                  _invalidateBankDerivedProviders(ref);
+                                  if (mounted) Navigator.pop(this.context);
+                                } catch (_) {
+                                  if (mounted) {
+                                    setState(
+                                      () => actionError =
+                                          'Unable to remove this transaction from Expenses safely.',
+                                    );
+                                  }
+                                } finally {
+                                  if (mounted) setState(() => saving = false);
+                                }
+                              },
+                        icon: const Icon(Icons.undo),
+                        label: const Text('Remove from Expenses'),
+                      ),
+                    ],
                   )
                 else
-                  Row(
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      Expanded(
-                        child: OutlinedButton(
-                          onPressed: saving ? null : () => save(ignored: true),
-                          child: const Text('Ignore'),
+                      if (!widget.transaction.pending) ...[
+                        const Text(
+                          'Adding this counts the transaction as a business expense in your financial reports. It will not affect your bank account.',
                         ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: FilledButton(
-                          onPressed: saving ? null : save,
-                          child: Text(
-                            widget.transaction.pending
-                                ? 'Save Category'
-                                : 'Reconcile Expense',
+                        const SizedBox(height: 10),
+                      ],
+                      Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton(
+                              onPressed: saving
+                                  ? null
+                                  : () => save(ignored: true),
+                              child: const Text('Ignore'),
+                            ),
                           ),
-                        ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: FilledButton(
+                              onPressed: saving ? null : save,
+                              child: Text(
+                                widget.transaction.pending
+                                    ? 'Save Category'
+                                    : 'Add to Expenses',
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                     ],
                   ),
@@ -1076,14 +1096,20 @@ class _BankError extends StatelessWidget {
   );
 }
 
-String _status(String value) => value
-    .toLowerCase()
-    .split('_')
-    .map(
-      (part) =>
-          part.isEmpty ? part : '${part[0].toUpperCase()}${part.substring(1)}',
-    )
-    .join(' ');
+String _status(String value) => switch (value) {
+  'MATCHED_EXPENSE' => 'Added to Expenses',
+  'MATCHED_INVOICE' => 'Linked to Invoice',
+  _ =>
+    value
+        .toLowerCase()
+        .split('_')
+        .map(
+          (part) => part.isEmpty
+              ? part
+              : '${part[0].toUpperCase()}${part.substring(1)}',
+        )
+        .join(' '),
+};
 String _date(DateTime value) => '${value.month}/${value.day}/${value.year}';
 String _currency(double value) =>
     '${value < 0 ? '-' : ''}\$${value.abs().toStringAsFixed(2)}';

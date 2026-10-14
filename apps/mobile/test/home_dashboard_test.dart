@@ -447,7 +447,12 @@ void main() {
       await tester.pump();
       expect(dashboardLoads, 2);
       expect(transactionLoads, 2);
-      expect(find.byKey(const Key('bank-sync-banner')), findsNothing);
+      expect(find.byKey(const Key('bank-sync-banner')), findsOneWidget);
+      expect(
+        find.textContaining('bank transactions are ready'),
+        findsOneWidget,
+      );
+      expect(find.textContaining('We found 8'), findsOneWidget);
     },
   );
 

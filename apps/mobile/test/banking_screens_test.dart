@@ -343,9 +343,9 @@ void main() {
     expect(find.text('Needs Review'), findsWidgets);
     expect(find.text('Sysco'), findsOneWidget);
     expect(find.text(r'$1446.00'), findsOneWidget);
-    await tester.tap(find.text('Matched'));
+    await tester.tap(find.text('Added / Linked'));
     await tester.pumpAndSettle();
-    expect(find.text('Matched'), findsOneWidget);
+    expect(find.text('Added / Linked'), findsOneWidget);
   });
 
   test(
@@ -403,6 +403,35 @@ void main() {
       ]);
     },
   );
+
+  testWidgets('expense actions use owner-friendly language', (tester) async {
+    final repository = FakeBankingRepository();
+    final matchedExpense = BankTransactionData(
+      id: 'matched-expense-copy',
+      merchant: 'Consumers Energy',
+      description: 'UTILITY PAYMENT',
+      amount: 29.44,
+      postedDate: DateTime(2026, 10, 8),
+      status: 'MATCHED_EXPENSE',
+      categorizationSource: 'MANUAL',
+      matchConfidence: 'NO_MATCH',
+      pending: false,
+      categoryId: 'food',
+      categoryName: 'Food',
+      restaurantLocationId: downtown.id,
+    );
+    await tester.pumpWidget(transactionsApp(repository, [matchedExpense]));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Consumers Energy'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Remove from Expenses'), findsOneWidget);
+    expect(
+      find.textContaining('original bank transaction remains'),
+      findsOneWidget,
+    );
+    expect(find.text('Reverse Reconciliation'), findsNothing);
+  });
 
   test(
     'late response from a previous restaurant cannot replace current data',
@@ -577,8 +606,8 @@ void main() {
     await tester.tap(find.text('Food').last);
     await tester.pumpAndSettle();
     await tester.tap(find.byType(Switch).first);
-    await tester.ensureVisible(find.text('Reconcile Expense'));
-    await tester.tap(find.text('Reconcile Expense'));
+    await tester.ensureVisible(find.text('Add to Expenses'));
+    await tester.tap(find.text('Add to Expenses'));
     await tester.pumpAndSettle();
     expect(repository.reviewData, containsPair('vendorId', 'adp'));
     expect(repository.reviewData, containsPair('categoryId', 'food'));
@@ -595,8 +624,8 @@ void main() {
     await tester.pumpAndSettle();
     await tester.ensureVisible(find.byKey(const Key('auto-confirm-future')));
     await tester.tap(find.byKey(const Key('auto-confirm-future')));
-    await tester.ensureVisible(find.text('Reconcile Expense'));
-    await tester.tap(find.text('Reconcile Expense'));
+    await tester.ensureVisible(find.text('Add to Expenses'));
+    await tester.tap(find.text('Add to Expenses'));
     await tester.pumpAndSettle();
     expect(repository.reviewData, containsPair('createRule', true));
     expect(repository.reviewData, containsPair('autoConfirmFuture', true));
@@ -622,13 +651,17 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.byType(Checkbox));
     await tester.pump();
-    await tester.tap(find.widgetWithText(FilledButton, 'Confirm').first);
+    await tester.tap(
+      find.widgetWithText(FilledButton, 'Add Selected to Expenses').first,
+    );
     await tester.pumpAndSettle();
     await tester.tap(find.text('Category'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Food').last);
     await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(FilledButton, 'Confirm').last);
+    await tester.tap(
+      find.widgetWithText(FilledButton, 'Add Selected to Expenses').last,
+    );
     await tester.pumpAndSettle();
     expect(repository.bulkIds, ['eligible']);
   });

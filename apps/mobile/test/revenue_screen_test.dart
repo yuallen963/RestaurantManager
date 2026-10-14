@@ -174,9 +174,9 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    expect(find.text('Unverified Bank Deposits'), findsOneWidget);
+    expect(find.text('Bank Deposits Needing Review'), findsOneWidget);
     expect(
-      find.textContaining('excluded from verified revenue'),
+      find.textContaining('not counted as restaurant sales'),
       findsOneWidget,
     );
     expect(find.text('Total Revenue'), findsOneWidget);
