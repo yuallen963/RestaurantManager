@@ -334,8 +334,9 @@ export class BankService {
       if (!expense || expense.source !== ExpenseSource.BANK_IMPORT) throw new BadRequestException('Only bank-created expenses can be reversed here');
       const links = await tx.bankTransaction.count({ where: { expenseId: expense.id } });
       if (links !== 1) throw new ConflictException('Expense has multiple financial links');
+      const reversed = await tx.bankTransaction.update({ where: { id }, data: { expenseId: null, reconciliationStatus: BankReconciliationStatus.NEEDS_REVIEW } });
       await tx.expense.delete({ where: { id: expense.id } });
-      return tx.bankTransaction.update({ where: { id }, data: { expenseId: null, reconciliationStatus: BankReconciliationStatus.NEEDS_REVIEW } });
+      return reversed;
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
     await this.audit.log({ userId, organizationId: transaction.organizationId, action: 'bank.transaction_reconciliation_reversed', entityType: 'BankTransaction', entityId: id });
     return result;

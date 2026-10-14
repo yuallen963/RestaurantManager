@@ -262,9 +262,19 @@ describe('bank transaction foundation', () => {
     prisma.bankTransaction.findUnique.mockResolvedValue(row);
     prisma.expense.findUnique.mockResolvedValue({ id: 'expense-created', source: ExpenseSource.BANK_IMPORT });
     prisma.bankTransaction.count.mockResolvedValue(1);
+    const mutationOrder: string[] = [];
+    prisma.bankTransaction.update.mockImplementation(async () => {
+      mutationOrder.push('unlink');
+      return {};
+    });
+    prisma.expense.delete.mockImplementation(async () => {
+      mutationOrder.push('delete');
+      return {};
+    });
     await service.reverseReconciliation('user-a', 'bank-row');
     expect(prisma.expense.delete).toHaveBeenCalledWith({ where: { id: 'expense-created' } });
     expect(prisma.bankTransaction.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ expenseId: null, reconciliationStatus: BankReconciliationStatus.NEEDS_REVIEW }) }));
+    expect(mutationOrder).toEqual(['unlink', 'delete']);
   });
 
   it('creates an update-mode link token and preserves the existing connection on reauth', async () => {

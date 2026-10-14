@@ -3,7 +3,7 @@ import { ConfigModule } from '@nestjs/config';
 import { AuthModule } from './auth/auth.module';
 import { OrganizationsModule } from './organizations/organizations.module';
 import { LocationsModule } from './locations/locations.module';
-import { PrismaService } from './prisma.service';
+import { PrismaModule } from './prisma.module';
 import { AuditService } from './audit.service';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { FinanceModule } from './finance/finance.module';
@@ -17,5 +17,5 @@ import { PosModule } from './pos/pos.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { OnboardingModule } from './onboarding/onboarding.module';
 import { PublicLinksController } from './public-links.controller';
-@Module({ imports: [ConfigModule.forRoot({ isGlobal: true }), AuthModule, OrganizationsModule, LocationsModule, DashboardModule, FinanceModule, InvoicesModule, PriceIntelligenceModule, NeedsAttentionModule, BankModule, ProductMatchesModule, SavingsIntelligenceModule, PosModule, NotificationsModule, OnboardingModule], controllers: [PublicLinksController], providers: [PrismaService, AuditService] })
+@Module({ imports: [ConfigModule.forRoot({ isGlobal: true }), PrismaModule, AuthModule, OrganizationsModule, LocationsModule, DashboardModule, FinanceModule, InvoicesModule, PriceIntelligenceModule, NeedsAttentionModule, BankModule, ProductMatchesModule, SavingsIntelligenceModule, PosModule, NotificationsModule, OnboardingModule], controllers: [PublicLinksController], providers: [AuditService] })
 export class AppModule {}
