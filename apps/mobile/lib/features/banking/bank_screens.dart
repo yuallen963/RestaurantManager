@@ -530,18 +530,47 @@ class _BankTransactionsScreenState
       );
       if (proceed != true) return;
     }
-    await ref
-        .read(bankingRepositoryProvider)
-        .bulkReview(
-          selected.toList(),
-          vendorId: vendorId,
-          categoryId: categoryId,
-          locationId: location.id,
-          ignored: ignored,
+    BulkReviewResult result;
+    try {
+      result = await ref
+          .read(bankingRepositoryProvider)
+          .bulkReview(
+            selected.toList(),
+            vendorId: vendorId,
+            categoryId: categoryId,
+            locationId: location.id,
+            ignored: ignored,
+          );
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              ignored
+                  ? 'Unable to ignore the selected transactions. Nothing was removed from the review list.'
+                  : 'Unable to add the selected transactions to Expenses. Nothing was removed from the review list.',
+            ),
+          ),
         );
+      }
+      return;
+    }
     if (!mounted) return;
-    setState(selected.clear);
-    _invalidateBankDerivedProviders(ref);
+    setState(() {
+      selected
+        ..clear()
+        ..addAll(result.failedIds);
+    });
+    if (result.confirmedCount > 0) _invalidateBankDerivedProviders(ref);
+    if (result.failedIds.isNotEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '${result.confirmedCount} completed; ${result.failedIds.length} could not be completed. The remaining transactions are still selected.',
+          ),
+        ),
+      );
+    }
   }
 
   @override
@@ -822,22 +851,52 @@ class _TransactionReviewSheetState
   }
 
   Future<void> confirm() async {
-    await ref
-        .read(bankingRepositoryProvider)
-        .confirmMatch(
-          widget.transaction.id,
-          widget.transaction.suggestedInvoice!.id,
+    setState(() {
+      saving = true;
+      actionError = null;
+    });
+    try {
+      await ref
+          .read(bankingRepositoryProvider)
+          .confirmMatch(
+            widget.transaction.id,
+            widget.transaction.suggestedInvoice!.id,
+          );
+      _invalidateBankDerivedProviders(ref);
+      if (mounted) Navigator.pop(context);
+    } catch (_) {
+      if (mounted) {
+        setState(
+          () => actionError =
+              'Unable to link this transaction to the invoice. No review status was changed.',
         );
-    _invalidateBankDerivedProviders(ref);
-    if (mounted) Navigator.pop(context);
+      }
+    } finally {
+      if (mounted) setState(() => saving = false);
+    }
   }
 
   Future<void> reject() async {
-    await ref
-        .read(bankingRepositoryProvider)
-        .rejectMatch(widget.transaction.id);
-    _invalidateBankDerivedProviders(ref);
-    if (mounted) Navigator.pop(context);
+    setState(() {
+      saving = true;
+      actionError = null;
+    });
+    try {
+      await ref
+          .read(bankingRepositoryProvider)
+          .rejectMatch(widget.transaction.id);
+      _invalidateBankDerivedProviders(ref);
+      if (mounted) Navigator.pop(context);
+    } catch (_) {
+      if (mounted) {
+        setState(
+          () => actionError =
+              'Unable to reject this invoice match. No review status was changed.',
+        );
+      }
+    } finally {
+      if (mounted) setState(() => saving = false);
+    }
   }
 
   @override

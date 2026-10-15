@@ -22,15 +22,74 @@ const apiBaseUrl = String.fromEnvironment(
   'API_BASE_URL',
   defaultValue: 'http://localhost:3000/api/v1',
 );
-final api = Provider(
-  (_) => Dio(
-    BaseOptions(
-      baseUrl: apiBaseUrl,
-      connectTimeout: const Duration(seconds: 10),
-      receiveTimeout: const Duration(seconds: 15),
-    ),
-  ),
+BaseOptions apiOptions() => BaseOptions(
+  baseUrl: apiBaseUrl,
+  connectTimeout: const Duration(seconds: 10),
+  receiveTimeout: const Duration(seconds: 15),
 );
+
+Dio createApiClient({Dio? refreshClient}) {
+  final client = Dio(apiOptions());
+  installAuthRefreshInterceptor(
+    client,
+    refreshClient: refreshClient ?? Dio(apiOptions()),
+  );
+  return client;
+}
+
+void installAuthRefreshInterceptor(Dio client, {required Dio refreshClient}) {
+  client.interceptors.add(
+    QueuedInterceptorsWrapper(
+      onError: (error, handler) async {
+        final request = error.requestOptions;
+        if (error.response?.statusCode != 401 ||
+            request.path == '/auth/refresh' ||
+            request.extra['authRetried'] == true) {
+          handler.next(error);
+          return;
+        }
+
+        try {
+          final failedAuthorization = request.headers['Authorization'];
+          var authorization = client.options.headers['Authorization'];
+          if (authorization == null || authorization == failedAuthorization) {
+            final refreshToken = await storage.read(key: 'refreshToken');
+            if (refreshToken == null) {
+              handler.next(error);
+              return;
+            }
+            final response = await refreshClient.post<Map<String, dynamic>>(
+              '/auth/refresh',
+              data: {'refreshToken': refreshToken},
+            );
+            final data = response.data;
+            final accessToken = data?['accessToken'] as String?;
+            final replacementRefreshToken = data?['refreshToken'] as String?;
+            if (accessToken == null || replacementRefreshToken == null) {
+              handler.next(error);
+              return;
+            }
+            await storage.write(key: 'accessToken', value: accessToken);
+            await storage.write(
+              key: 'refreshToken',
+              value: replacementRefreshToken,
+            );
+            authorization = 'Bearer $accessToken';
+            client.options.headers['Authorization'] = authorization;
+          }
+
+          request.headers['Authorization'] = authorization;
+          request.extra['authRetried'] = true;
+          handler.resolve(await client.fetch<dynamic>(request));
+        } catch (_) {
+          handler.next(error);
+        }
+      },
+    ),
+  );
+}
+
+final api = Provider((_) => createApiClient());
 void main() {
   if (kDebugMode) debugPrint('[DEV] API base URL: $apiBaseUrl');
   runApp(const ProviderScope(child: ProfitApp()));

@@ -320,8 +320,27 @@ export class BankService {
     const reviewData: ReviewBankTransactionDto = { ...data };
     delete (reviewData as any).ids;
     const results = [];
-    for (const id of uniqueIds) results.push(await this.review(userId, id, reviewData));
-    return { count: results.length, results };
+    const failures: Array<{ id: string; message: string }> = [];
+    let firstError: unknown;
+    for (const id of uniqueIds) {
+      try {
+        results.push(await this.review(userId, id, reviewData));
+      } catch (error) {
+        firstError ??= error;
+        failures.push({
+          id,
+          message: error instanceof Error ? error.message : 'Unable to review transaction',
+        });
+      }
+    }
+    if (!results.length && firstError) throw firstError;
+    return {
+      requestedCount: uniqueIds.length,
+      count: results.length,
+      failedCount: failures.length,
+      results,
+      failures,
+    };
   }
 
   async reverseReconciliation(userId: string, id: string) {

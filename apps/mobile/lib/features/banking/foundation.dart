@@ -236,6 +236,26 @@ class MerchantRuleData {
       );
 }
 
+class BulkReviewResult {
+  const BulkReviewResult({
+    required this.requestedCount,
+    required this.confirmedCount,
+    required this.failedIds,
+  });
+
+  final int requestedCount, confirmedCount;
+  final List<String> failedIds;
+
+  factory BulkReviewResult.fromJson(Map<String, dynamic> json) =>
+      BulkReviewResult(
+        requestedCount: json['requestedCount'] as int? ?? 0,
+        confirmedCount: json['count'] as int? ?? 0,
+        failedIds: (json['failures'] as List? ?? const [])
+            .map((failure) => (failure as Map)['id'] as String)
+            .toList(),
+      );
+}
+
 class BankingRepository {
   BankingRepository(this.dio);
   final Dio dio;
@@ -350,22 +370,28 @@ class BankingRepository {
       'maximumAmount': maximumAmount,
     },
   );
-  Future<void> bulkReview(
+  Future<BulkReviewResult> bulkReview(
     List<String> ids, {
     String? vendorId,
     String? categoryId,
     required String locationId,
     bool ignored = false,
-  }) => dio.post(
-    '/bank-transactions/bulk-review',
-    data: {
-      'ids': ids,
-      'vendorId': vendorId,
-      'categoryId': categoryId,
-      'restaurantLocationId': locationId,
-      'ignored': ignored,
-    },
-  );
+  }) async {
+    final response = await dio.post(
+      '/bank-transactions/bulk-review',
+      data: {
+        'ids': ids,
+        'vendorId': vendorId,
+        'categoryId': categoryId,
+        'restaurantLocationId': locationId,
+        'ignored': ignored,
+      },
+    );
+    return BulkReviewResult.fromJson(
+      Map<String, dynamic>.from(response.data as Map),
+    );
+  }
+
   Future<void> reverse(String id) => dio.post('/bank-transactions/$id/reverse');
   Future<List<MerchantRuleData>> merchantRules(
     String organizationId,
@@ -459,6 +485,7 @@ final bankTransactionsProvider = FutureProvider<List<BankTransactionData>>((
 ) async {
   final location = ref.watch(activeLocationProvider);
   if (location == null) return [];
+  final range = ref.watch(dateRangeProvider);
   final filter = ref.watch(bankTransactionFilterProvider);
   final repository = ref.watch(bankingRepositoryProvider);
   if (filter == BankTransactionFilter.matched) {
@@ -476,14 +503,15 @@ final bankTransactionsProvider = FutureProvider<List<BankTransactionData>>((
     ]);
     final ids = <String>{};
     return [
-      ...results.expand((items) => items).where((item) => ids.add(item.id)),
-    ]..sort((a, b) => b.postedDate.compareTo(a.postedDate));
+        ...results.expand((items) => items).where((item) => ids.add(item.id)),
+      ].where((item) => _isInRange(item, range)).toList()
+      ..sort((a, b) => b.postedDate.compareTo(a.postedDate));
   }
-  return repository.transactions(
+  return (await repository.transactions(
     location.organizationId,
     location.id,
     filter == BankTransactionFilter.needsReview ? 'NEEDS_REVIEW' : null,
-  );
+  )).where((item) => _isInRange(item, range)).toList();
 });
 
 /// Independent of the visible Bank Transactions filter so Expenses and Vendors
@@ -492,9 +520,16 @@ final bankTransactionsAwaitingReviewProvider =
     FutureProvider<List<BankTransactionData>>((ref) async {
       final location = ref.watch(activeLocationProvider);
       if (location == null) return [];
-      return ref
-          .watch(bankingRepositoryProvider)
-          .transactions(location.organizationId, location.id, 'NEEDS_REVIEW');
+      final range = ref.watch(dateRangeProvider);
+      return (await ref
+              .watch(bankingRepositoryProvider)
+              .transactions(
+                location.organizationId,
+                location.id,
+                'NEEDS_REVIEW',
+              ))
+          .where((item) => _isInRange(item, range))
+          .toList();
     });
 
 final allBankTransactionsProvider = FutureProvider<List<BankTransactionData>>((
@@ -502,10 +537,17 @@ final allBankTransactionsProvider = FutureProvider<List<BankTransactionData>>((
 ) async {
   final location = ref.watch(activeLocationProvider);
   if (location == null) return [];
-  return ref
-      .watch(bankingRepositoryProvider)
-      .transactions(location.organizationId, location.id, null);
+  final range = ref.watch(dateRangeProvider);
+  return (await ref
+          .watch(bankingRepositoryProvider)
+          .transactions(location.organizationId, location.id, null))
+      .where((item) => _isInRange(item, range))
+      .toList();
 });
+
+bool _isInRange(BankTransactionData item, DateRangeState range) =>
+    !item.postedDate.isBefore(range.startDate) &&
+    item.postedDate.isBefore(range.endDate.add(const Duration(days: 1)));
 
 final unverifiedBankDepositsProvider =
     FutureProvider<List<BankTransactionData>>(

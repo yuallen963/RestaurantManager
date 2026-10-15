@@ -70,9 +70,15 @@ class FakeBankingRepository extends BankingRepository {
       disconnectCalls = 0,
       reauthenticationCalls = 0;
   bool failSync = false;
+  bool failConfirm = false;
   String? assignedLocation, confirmedInvoice;
   Map<String, dynamic>? reviewData;
   List<String>? bulkIds;
+  BulkReviewResult bulkResult = const BulkReviewResult(
+    requestedCount: 1,
+    confirmedCount: 1,
+    failedIds: [],
+  );
   final transactionStatuses = <String?>[];
   Map<String?, List<BankTransactionData>> transactionsByStatus = const {};
   @override
@@ -114,6 +120,7 @@ class FakeBankingRepository extends BankingRepository {
 
   @override
   Future<void> confirmMatch(String id, String invoiceId) async {
+    if (failConfirm) throw DioException(requestOptions: RequestOptions());
     confirmedInvoice = invoiceId;
   }
 
@@ -152,7 +159,7 @@ class FakeBankingRepository extends BankingRepository {
   }
 
   @override
-  Future<void> bulkReview(
+  Future<BulkReviewResult> bulkReview(
     List<String> ids, {
     String? vendorId,
     String? categoryId,
@@ -160,6 +167,7 @@ class FakeBankingRepository extends BankingRepository {
     bool ignored = false,
   }) async {
     bulkIds = ids;
+    return bulkResult;
   }
 }
 
@@ -404,6 +412,65 @@ void main() {
     },
   );
 
+  test(
+    'transaction lists and review counts share the selected date range',
+    () async {
+      final inRange = BankTransactionData(
+        id: 'in-range',
+        merchant: 'Current Merchant',
+        description: 'CURRENT',
+        amount: 20,
+        postedDate: DateTime(2026, 10, 8),
+        status: 'NEEDS_REVIEW',
+        categorizationSource: 'PROVIDER',
+        matchConfidence: 'NO_MATCH',
+        pending: false,
+        restaurantLocationId: downtown.id,
+      );
+      final outOfRange = BankTransactionData(
+        id: 'out-of-range',
+        merchant: 'Old Merchant',
+        description: 'OLD',
+        amount: 30,
+        postedDate: DateTime(2026, 9, 30),
+        status: 'NEEDS_REVIEW',
+        categorizationSource: 'PROVIDER',
+        matchConfidence: 'NO_MATCH',
+        pending: false,
+        restaurantLocationId: downtown.id,
+      );
+      final repository = FakeBankingRepository()
+        ..transactionsByStatus = {
+          'NEEDS_REVIEW': [inRange, outOfRange],
+          null: [inRange, outOfRange],
+        };
+      final container = ProviderContainer(
+        overrides: [
+          activeLocationProvider.overrideWithValue(downtown),
+          bankingRepositoryProvider.overrideWithValue(repository),
+          dateRangeProvider.overrideWith(
+            (_) => DateRangeState(
+              DatePreset.custom,
+              DateTime(2026, 10, 1),
+              DateTime(2026, 10, 31),
+            ),
+          ),
+        ],
+      );
+      addTearDown(container.dispose);
+
+      final visible = await container.read(bankTransactionsProvider.future);
+      final awaiting = await container.read(
+        bankTransactionsAwaitingReviewProvider.future,
+      );
+      final all = await container.read(allBankTransactionsProvider.future);
+
+      expect(visible.map((item) => item.id), ['in-range']);
+      expect(awaiting.map((item) => item.id), ['in-range']);
+      expect(all.map((item) => item.id), ['in-range']);
+    },
+  );
+
   testWidgets('expense actions use owner-friendly language', (tester) async {
     final repository = FakeBankingRepository();
     final matchedExpense = BankTransactionData(
@@ -589,6 +656,22 @@ void main() {
     },
   );
 
+  testWidgets('failed invoice confirmation stays open and reports no change', (
+    tester,
+  ) async {
+    final repository = FakeBankingRepository()..failConfirm = true;
+    await tester.pumpWidget(transactionsApp(repository, [reviewTransaction]));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Sysco'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Confirm Match'));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('No review status was changed'), findsOneWidget);
+    expect(find.text('Confirm Match'), findsOneWidget);
+    expect(repository.confirmedInvoice, isNull);
+  });
+
   testWidgets('manual corrections can opt into a future merchant rule', (
     tester,
   ) async {
@@ -665,4 +748,68 @@ void main() {
     await tester.pumpAndSettle();
     expect(repository.bulkIds, ['eligible']);
   });
+
+  testWidgets(
+    'partial bulk success keeps failed rows selected and reports it',
+    (tester) async {
+      final repository = FakeBankingRepository()
+        ..bulkResult = const BulkReviewResult(
+          requestedCount: 2,
+          confirmedCount: 1,
+          failedIds: ['second'],
+        );
+      final items = [
+        BankTransactionData(
+          id: 'first',
+          merchant: 'First Merchant',
+          description: 'FIRST',
+          amount: 25,
+          postedDate: DateTime(2026, 10, 8),
+          status: 'NEEDS_REVIEW',
+          categorizationSource: 'PROVIDER',
+          matchConfidence: 'NO_MATCH',
+          pending: false,
+          restaurantLocationId: downtown.id,
+        ),
+        BankTransactionData(
+          id: 'second',
+          merchant: 'Second Merchant',
+          description: 'SECOND',
+          amount: 35,
+          postedDate: DateTime(2026, 10, 9),
+          status: 'NEEDS_REVIEW',
+          categorizationSource: 'PROVIDER',
+          matchConfidence: 'NO_MATCH',
+          pending: false,
+          restaurantLocationId: downtown.id,
+        ),
+      ];
+      await tester.pumpWidget(transactionsApp(repository, items));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byType(Checkbox).at(0));
+      await tester.tap(find.byType(Checkbox).at(1));
+      await tester.pump();
+      await tester.tap(
+        find.widgetWithText(FilledButton, 'Add Selected to Expenses').first,
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Category'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Food').last);
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.widgetWithText(FilledButton, 'Add Selected to Expenses').last,
+      );
+      await tester.pump();
+
+      expect(
+        find.textContaining('1 completed; 1 could not be completed'),
+        findsOneWidget,
+      );
+      final checkboxes = tester
+          .widgetList<Checkbox>(find.byType(Checkbox))
+          .toList();
+      expect(checkboxes.map((checkbox) => checkbox.value), [false, true]);
+    },
+  );
 }

@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -154,6 +157,117 @@ void main() {
       expect(calls, 0);
     },
   );
+
+  test(
+    'an expired access token refreshes once and retries the request',
+    () async {
+      FlutterSecureStorage.setMockInitialValues({
+        'accessToken': 'expired-access',
+        'refreshToken': 'refresh-one',
+      });
+      final resourceAdapter = _AuthAdapter((options) {
+        if (options.headers['Authorization'] == 'Bearer fresh-access') {
+          return _jsonResponse(200, {'items': <dynamic>[]});
+        }
+        return _jsonResponse(401, {'message': 'Unauthorized'});
+      });
+      final refreshAdapter = _AuthAdapter((options) {
+        expect(options.path, '/auth/refresh');
+        expect(jsonDecode(utf8.decode(options.data as List<int>)), {
+          'refreshToken': 'refresh-one',
+        });
+        return _jsonResponse(200, {
+          'accessToken': 'fresh-access',
+          'refreshToken': 'refresh-two',
+        });
+      });
+      final client = Dio(BaseOptions(baseUrl: 'https://fundwell.test'))
+        ..options.headers['Authorization'] = 'Bearer expired-access'
+        ..httpClientAdapter = resourceAdapter;
+      final refreshClient = Dio(BaseOptions(baseUrl: 'https://fundwell.test'))
+        ..httpClientAdapter = refreshAdapter;
+      installAuthRefreshInterceptor(client, refreshClient: refreshClient);
+
+      final response = await client.get('/expenses');
+
+      expect(response.statusCode, 200);
+      expect(resourceAdapter.calls, 2);
+      expect(refreshAdapter.calls, 1);
+      expect(await storage.read(key: 'accessToken'), 'fresh-access');
+      expect(await storage.read(key: 'refreshToken'), 'refresh-two');
+    },
+  );
+
+  test(
+    'a rejected refresh preserves the original unauthorized response',
+    () async {
+      FlutterSecureStorage.setMockInitialValues({
+        'accessToken': 'expired-access',
+        'refreshToken': 'expired-refresh',
+      });
+      final resourceAdapter = _AuthAdapter(
+        (_) => _jsonResponse(401, {'message': 'Unauthorized'}),
+      );
+      final refreshAdapter = _AuthAdapter(
+        (_) => _jsonResponse(401, {'message': 'Unauthorized'}),
+      );
+      final client = Dio(BaseOptions(baseUrl: 'https://fundwell.test'))
+        ..options.headers['Authorization'] = 'Bearer expired-access'
+        ..httpClientAdapter = resourceAdapter;
+      final refreshClient = Dio(BaseOptions(baseUrl: 'https://fundwell.test'))
+        ..httpClientAdapter = refreshAdapter;
+      installAuthRefreshInterceptor(client, refreshClient: refreshClient);
+
+      await expectLater(
+        client.get('/expenses'),
+        throwsA(
+          isA<DioException>().having(
+            (error) => error.response?.statusCode,
+            'status',
+            401,
+          ),
+        ),
+      );
+      expect(resourceAdapter.calls, 1);
+      expect(refreshAdapter.calls, 1);
+    },
+  );
+}
+
+ResponseBody _jsonResponse(int status, Map<String, dynamic> body) =>
+    ResponseBody.fromString(
+      jsonEncode(body),
+      status,
+      headers: {
+        Headers.contentTypeHeader: [Headers.jsonContentType],
+      },
+    );
+
+class _AuthAdapter implements HttpClientAdapter {
+  _AuthAdapter(this.respond);
+
+  final ResponseBody Function(RequestOptions options) respond;
+  int calls = 0;
+
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async {
+    calls++;
+    if (requestStream != null) {
+      final bytes = <int>[];
+      await for (final chunk in requestStream) {
+        bytes.addAll(chunk);
+      }
+      options.data = bytes;
+    }
+    return respond(options);
+  }
+
+  @override
+  void close({bool force = false}) {}
 }
 
 Dio stubDio(Map<String, dynamic> Function(RequestOptions options) response) =>

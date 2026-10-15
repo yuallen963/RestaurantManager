@@ -256,6 +256,31 @@ describe('bank transaction foundation', () => {
     await expect(service.bulkReview('user-a', { ids: ['00000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000002'] })).rejects.toThrow('one restaurant');
   });
 
+  it('reports partial bulk success so clients can refresh completed rows', async () => {
+    const { service, prisma } = setup();
+    const firstId = '00000000-0000-4000-8000-000000000001';
+    const secondId = '00000000-0000-4000-8000-000000000002';
+    prisma.bankTransaction.findMany.mockResolvedValue([
+      { id: firstId, organizationId: 'org-a', restaurantLocationId: 'location-a' },
+      { id: secondId, organizationId: 'org-a', restaurantLocationId: 'location-a' },
+    ]);
+    jest
+      .spyOn(service, 'review')
+      .mockResolvedValueOnce({ id: firstId } as any)
+      .mockRejectedValueOnce(new ConflictException('Transaction changed'));
+
+    await expect(
+      service.bulkReview('user-a', { ids: [firstId, secondId] }),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        requestedCount: 2,
+        count: 1,
+        failedCount: 1,
+        failures: [{ id: secondId, message: 'Transaction changed' }],
+      }),
+    );
+  });
+
   it('reverses only a uniquely linked bank-created expense', async () => {
     const { service, prisma } = setup();
     const row = { id: 'bank-row', organizationId: 'org-a', expenseId: 'expense-created', reconciliationStatus: BankReconciliationStatus.MATCHED_EXPENSE };
