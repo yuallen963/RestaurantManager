@@ -193,6 +193,16 @@ enum MerchantRuleMatchType {
   CONTAINS
 }
 
+enum MerchantRuleDecision {
+  EXPENSE
+  PERSONAL_TRANSFER
+}
+
+enum BankTransactionDirection {
+  OUTFLOW
+  INFLOW
+}
+
 enum AuthChallengeType {
   EMAIL_LOGIN
   TOTP_LOGIN
@@ -980,6 +990,7 @@ model BankAccount {
   organization         Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   restaurantLocation   RestaurantLocation? @relation(fields: [restaurantLocationId], references: [id], onDelete: SetNull)
   transactions         BankTransaction[]
+  merchantRules        MerchantRule[]
 
   @@unique([bankConnectionId, providerAccountId])
   @@index([organizationId, restaurantLocationId])
@@ -1008,6 +1019,7 @@ model BankTransaction {
   matchConfidence        InvoiceMatchConfidence   @default(NO_MATCH)
   reconciliationStatus   BankReconciliationStatus @default(UNMATCHED)
   categorizationSource   BankCategorizationSource @default(UNRESOLVED)
+  pendingReviewDecision  MerchantRuleDecision?
   removedAt              DateTime?
   createdAt              DateTime                 @default(now())
   updatedAt              DateTime                 @updatedAt
@@ -1034,6 +1046,10 @@ model MerchantRule {
   vendorId               String?
   expenseCategoryId      String?
   restaurantLocationId   String?
+  bankAccountId          String?
+  direction              BankTransactionDirection?
+  providerCategoryId     String?
+  decision               MerchantRuleDecision    @default(EXPENSE)
   active                 Boolean               @default(true)
   autoConfirm            Boolean               @default(false)
   minimumAmount          Decimal?              @db.Decimal(14, 2)
@@ -1045,7 +1061,9 @@ model MerchantRule {
   vendor                 Vendor?               @relation(fields: [vendorId], references: [id], onDelete: SetNull)
   expenseCategory        ExpenseCategory?      @relation(fields: [expenseCategoryId], references: [id], onDelete: SetNull)
   restaurantLocation     RestaurantLocation?   @relation(fields: [restaurantLocationId], references: [id], onDelete: Cascade)
+  bankAccount            BankAccount?          @relation(fields: [bankAccountId], references: [id], onDelete: Cascade)
   createdBy              User                  @relation(fields: [createdByUserId], references: [id], onDelete: Restrict)
 
   @@index([organizationId, restaurantLocationId, matchType, matchValue], map: "MerchantRule_organizationId_restaurantLocationId_matchType_matc")
+  @@index([bankAccountId, direction, providerCategoryId])
 }

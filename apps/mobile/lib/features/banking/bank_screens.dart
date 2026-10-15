@@ -175,7 +175,7 @@ class _BankAccountsScreenState extends ConsumerState<BankAccountsScreen> {
                   ),
                 ),
                 icon: const Icon(Icons.auto_awesome),
-                label: const Text('Automatic Expense Rules'),
+                label: const Text('Automatic Bank Rules'),
               ),
               const SizedBox(height: 16),
               if (connections.isEmpty)
@@ -206,7 +206,7 @@ class MerchantRulesScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final rules = ref.watch(merchantRulesProvider);
     return Scaffold(
-      appBar: AppBar(title: const Text('Automatic Expense Rules')),
+      appBar: AppBar(title: const Text('Automatic Bank Rules')),
       body: rules.when(
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (_, _) => _BankError(
@@ -226,7 +226,7 @@ class MerchantRulesScreen extends ConsumerWidget {
                 padding: const EdgeInsets.all(16),
                 children: [
                   const Text(
-                    'Automatic expense tracking is optional. Turning off a rule never changes expenses already added.',
+                    'Remembered decisions are scoped to this restaurant, bank account, merchant, direction, and transaction type. Turning off a rule never changes completed records.',
                   ),
                   const SizedBox(height: 12),
                   for (final rule in items)
@@ -238,11 +238,18 @@ class MerchantRulesScreen extends ConsumerWidget {
                           [
                             if (rule.vendorName != null) rule.vendorName!,
                             if (rule.categoryName != null) rule.categoryName!,
+                            rule.decision == 'PERSONAL_TRANSFER'
+                                ? 'Personal / Transfer'
+                                : 'Business expense',
+                            if (rule.direction != null)
+                              _status(rule.direction!),
                             if (rule.autoConfirm &&
                                 rule.minimumAmount != null &&
                                 rule.maximumAmount != null)
                               '${_currency(rule.minimumAmount!)}–${_currency(rule.maximumAmount!)}',
-                            rule.autoConfirm
+                            rule.decision == 'PERSONAL_TRANSFER'
+                                ? 'Automatically excluded when eligible'
+                                : rule.autoConfirm
                                 ? 'Automatically added when eligible'
                                 : 'Suggestions only',
                           ].join(' · '),
@@ -813,36 +820,126 @@ class _TransactionReviewSheetState
     locationId = widget.transaction.restaurantLocationId;
   }
 
-  Future<void> save({bool ignored = false}) async {
+  Future<void> save(BankReviewDecision decision) async {
     setState(() {
       saving = true;
       actionError = null;
     });
     try {
-      await ref
-          .read(bankingRepositoryProvider)
-          .review(
-            widget.transaction.id,
-            vendorId: vendorId,
-            categoryId: categoryId,
-            locationId: locationId,
-            ignored: ignored,
-            createRule: createRule,
-            autoConfirmFuture: autoConfirmFuture,
-            minimumAmount: autoConfirmFuture
-                ? widget.transaction.amount * .5
-                : null,
-            maximumAmount: autoConfirmFuture
-                ? widget.transaction.amount * 2
-                : null,
+      final repository = ref.read(bankingRepositoryProvider);
+      var ids = <String>[widget.transaction.id];
+      if (decision != BankReviewDecision.reviewLater) {
+        final similar = await repository.similarTransactions(
+          widget.transaction.id,
+        );
+        if (similar.length > 1 && mounted) {
+          final total = similar.fold<double>(
+            0,
+            (sum, item) => sum + item.amount,
           );
+          final dates = similar.map((item) => item.postedDate).toList()..sort();
+          final applyAll = await showDialog<bool>(
+            context: context,
+            builder: (dialogContext) => AlertDialog(
+              title: Text('${similar.length} similar transactions'),
+              content: SizedBox(
+                width: double.maxFinite,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text(
+                      'Same restaurant, bank account, merchant, direction, transaction type, pending state, and review status.',
+                    ),
+                    Text(
+                      '${_currency(total)} total • ${_date(dates.first)}–${_date(dates.last)} • ${widget.transaction.pending ? 'Waiting to Post' : 'Needs Review'}',
+                    ),
+                    const SizedBox(height: 12),
+                    SizedBox(
+                      height: 280,
+                      child: ListView(
+                        shrinkWrap: true,
+                        children: similar
+                            .map(
+                              (item) => ListTile(
+                                dense: true,
+                                title: Text(item.merchant),
+                                subtitle: Text(
+                                  '${_date(item.postedDate)} • ${item.pending ? 'Waiting to Post' : 'Needs Review'}',
+                                ),
+                                trailing: Text(_currency(item.amount)),
+                              ),
+                            )
+                            .toList(),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogContext, false),
+                  child: const Text('This Transaction Only'),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.pop(dialogContext, true),
+                  child: Text('Apply to ${similar.length}'),
+                ),
+              ],
+            ),
+          );
+          if (applyAll == null) return;
+          if (applyAll) ids = similar.map((item) => item.id).toList();
+        }
+      }
+      if (ids.length == 1) {
+        await repository.review(
+          ids.single,
+          vendorId: vendorId,
+          categoryId: categoryId,
+          locationId: locationId,
+          decision: decision,
+          createRule: createRule,
+          autoConfirmFuture: autoConfirmFuture,
+          minimumAmount: autoConfirmFuture
+              ? widget.transaction.amount * .5
+              : null,
+          maximumAmount: autoConfirmFuture
+              ? widget.transaction.amount * 2
+              : null,
+        );
+      } else {
+        final result = await repository.bulkReview(
+          ids,
+          vendorId: vendorId,
+          categoryId: categoryId,
+          locationId: locationId!,
+          decision: decision,
+          createRule: createRule,
+          autoConfirmFuture: autoConfirmFuture,
+          minimumAmount: autoConfirmFuture
+              ? widget.transaction.amount * .5
+              : null,
+          maximumAmount: autoConfirmFuture
+              ? widget.transaction.amount * 2
+              : null,
+        );
+        if (result.failedIds.isNotEmpty && mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                '${result.confirmedCount} completed; ${result.failedIds.length} still need review.',
+              ),
+            ),
+          );
+        }
+      }
       _invalidateBankDerivedProviders(ref);
       if (mounted) Navigator.pop(context);
     } catch (_) {
       if (mounted) {
         setState(
           () => actionError =
-              'Unable to add this transaction to Expenses. Review the selections and try again.',
+              'Unable to complete this review. No unsuccessful transaction was removed from review.',
         );
       }
     } finally {
@@ -1083,6 +1180,42 @@ class _TransactionReviewSheetState
                       ),
                     ],
                   )
+                else if (widget.transaction.status == 'IGNORED')
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      const Text(
+                        'This transaction is excluded from Expenses and Revenue. Return it to Needs Review if that decision was incorrect.',
+                      ),
+                      const SizedBox(height: 10),
+                      OutlinedButton.icon(
+                        key: const Key('restore-ignored-transaction'),
+                        onPressed: saving
+                            ? null
+                            : () async {
+                                setState(() => saving = true);
+                                try {
+                                  await ref
+                                      .read(bankingRepositoryProvider)
+                                      .reverse(widget.transaction.id);
+                                  _invalidateBankDerivedProviders(ref);
+                                  if (mounted) Navigator.pop(this.context);
+                                } catch (_) {
+                                  if (mounted) {
+                                    setState(
+                                      () => actionError =
+                                          'Unable to return this transaction to Needs Review safely.',
+                                    );
+                                  }
+                                } finally {
+                                  if (mounted) setState(() => saving = false);
+                                }
+                              },
+                        icon: const Icon(Icons.undo),
+                        label: const Text('Return to Needs Review'),
+                      ),
+                    ],
+                  )
                 else
                   Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1099,22 +1232,32 @@ class _TransactionReviewSheetState
                             child: OutlinedButton(
                               onPressed: saving
                                   ? null
-                                  : () => save(ignored: true),
-                              child: const Text('Ignore'),
+                                  : () => save(
+                                      BankReviewDecision.personalTransfer,
+                                    ),
+                              child: const Text('Personal / Transfer'),
                             ),
                           ),
                           const SizedBox(width: 12),
                           Expanded(
                             child: FilledButton(
-                              onPressed: saving ? null : save,
+                              onPressed: saving
+                                  ? null
+                                  : () => save(BankReviewDecision.expense),
                               child: Text(
                                 widget.transaction.pending
-                                    ? 'Save Category'
+                                    ? 'Save — Waiting to Post'
                                     : 'Add to Expenses',
                               ),
                             ),
                           ),
                         ],
+                      ),
+                      TextButton(
+                        onPressed: saving
+                            ? null
+                            : () => save(BankReviewDecision.reviewLater),
+                        child: const Text('Review Later'),
                       ),
                     ],
                   ),

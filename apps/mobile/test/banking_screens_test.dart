@@ -71,7 +71,7 @@ class FakeBankingRepository extends BankingRepository {
       reauthenticationCalls = 0;
   bool failSync = false;
   bool failConfirm = false;
-  String? assignedLocation, confirmedInvoice;
+  String? assignedLocation, confirmedInvoice, reversedTransaction;
   Map<String, dynamic>? reviewData;
   List<String>? bulkIds;
   BulkReviewResult bulkResult = const BulkReviewResult(
@@ -127,6 +127,8 @@ class FakeBankingRepository extends BankingRepository {
   @override
   Future<void> rejectMatch(String id) async {}
   @override
+  Future<void> reverse(String id) async => reversedTransaction = id;
+  @override
   Future<List<BankTransactionData>> transactions(
     String organizationId,
     String? locationId,
@@ -137,12 +139,20 @@ class FakeBankingRepository extends BankingRepository {
   }
 
   @override
+  Future<List<BankTransactionData>> similarTransactions(String id) async =>
+      transactionsByStatus.values
+          .expand((items) => items)
+          .where((item) => item.id == id)
+          .toList();
+
+  @override
   Future<void> review(
     String id, {
     String? vendorId,
     String? categoryId,
     String? locationId,
     bool ignored = false,
+    BankReviewDecision? decision,
     bool createRule = false,
     bool autoConfirmFuture = false,
     double? minimumAmount,
@@ -153,6 +163,7 @@ class FakeBankingRepository extends BankingRepository {
       'categoryId': categoryId,
       'locationId': locationId,
       'ignored': ignored,
+      'decision': decision,
       'createRule': createRule,
       'autoConfirmFuture': autoConfirmFuture,
     };
@@ -165,6 +176,11 @@ class FakeBankingRepository extends BankingRepository {
     String? categoryId,
     required String locationId,
     bool ignored = false,
+    BankReviewDecision? decision,
+    bool createRule = false,
+    bool autoConfirmFuture = false,
+    double? minimumAmount,
+    double? maximumAmount,
   }) async {
     bulkIds = ids;
     return bulkResult;
@@ -498,6 +514,33 @@ void main() {
       findsOneWidget,
     );
     expect(find.text('Reverse Reconciliation'), findsNothing);
+  });
+
+  testWidgets('ignored transactions can return to Needs Review', (
+    tester,
+  ) async {
+    final repository = FakeBankingRepository();
+    final ignored = BankTransactionData(
+      id: 'ignored-transfer',
+      merchant: 'Broker Transfer',
+      description: 'TRANSFER',
+      amount: 94,
+      postedDate: DateTime(2026, 10, 8),
+      status: 'IGNORED',
+      categorizationSource: 'MANUAL',
+      matchConfidence: 'NO_MATCH',
+      pending: false,
+      restaurantLocationId: downtown.id,
+    );
+    await tester.pumpWidget(transactionsApp(repository, [ignored]));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Broker Transfer'));
+    await tester.pumpAndSettle();
+    expect(find.text('Return to Needs Review'), findsOneWidget);
+    await tester.ensureVisible(find.text('Return to Needs Review'));
+    await tester.tap(find.text('Return to Needs Review'));
+    await tester.pumpAndSettle();
+    expect(repository.reversedTransaction, 'ignored-transfer');
   });
 
   test(

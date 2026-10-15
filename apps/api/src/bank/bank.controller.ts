@@ -18,6 +18,7 @@ export class BankController {
   @Post('bank/connections/:id/sync') sync(@CurrentUser() u: { sub: string }, @Param('id') id: string) { return this.service.sync(u.sub, id); }
   @HttpCode(204) @Delete('bank/connections/:id') disconnect(@CurrentUser() u: { sub: string }, @Param('id') id: string) { return this.service.disconnect(u.sub, id); }
   @Get('bank-transactions') transactions(@CurrentUser() u: { sub: string }, @Query() q: BankTransactionQuery) { return this.service.transactions(u.sub, q); }
+  @Get('bank-transactions/:id/similar') similar(@CurrentUser() u: { sub: string }, @Param('id') id: string) { return this.service.similarTransactions(u.sub, id); }
   @Patch('bank-transactions/:id/review') review(@CurrentUser() u: { sub: string }, @Param('id') id: string, @Body() d: ReviewBankTransactionDto) { return this.service.review(u.sub, id, d); }
   @Post('bank-transactions/bulk-review') bulkReview(@CurrentUser() u: { sub: string }, @Body() d: BulkReviewBankTransactionsDto) { return this.service.bulkReview(u.sub, d); }
   @Post('bank-transactions/:id/reverse') reverse(@CurrentUser() u: { sub: string }, @Param('id') id: string) { return this.service.reverseReconciliation(u.sub, id); }

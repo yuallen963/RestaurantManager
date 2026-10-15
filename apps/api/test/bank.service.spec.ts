@@ -1,5 +1,6 @@
 import { ConflictException, ForbiddenException, UnauthorizedException } from '@nestjs/common';
-import { BankCategorizationSource, BankConnectionStatus, BankReconciliationStatus, ExpenseSource, InvoiceMatchConfidence, MerchantRuleMatchType, Prisma } from '@prisma/client';
+import { BankCategorizationSource, BankConnectionStatus, BankReconciliationStatus, ExpenseSource, InvoiceMatchConfidence, MerchantRuleDecision, MerchantRuleMatchType, Prisma } from '@prisma/client';
+import { BankReviewDecision } from '../src/bank/dto';
 import { BankService, normalizeMerchant } from '../src/bank/bank.service';
 import { BankTokenEncryptionService } from '../src/bank/encryption.service';
 
@@ -247,6 +248,29 @@ describe('bank transaction foundation', () => {
     expect(prisma.bankTransaction.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ reconciliationStatus: BankReconciliationStatus.NEEDS_REVIEW }) }));
   });
 
+  it('finds similar candidates only inside the same safe matching boundary', async () => {
+    const { service, prisma } = setup();
+    prisma.bankTransaction.findUnique.mockResolvedValue({ id: 'bank-row', organizationId: 'org-a', restaurantLocationId: 'location-a', bankAccountId: 'account-a', merchantNameNormalized: 'Market', providerCategoryId: 'GROCERIES', amount: new Prisma.Decimal(20), pending: false });
+    await service.similarTransactions('user-a', 'bank-row');
+    expect(prisma.bankTransaction.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ organizationId: 'org-a', restaurantLocationId: 'location-a', bankAccountId: 'account-a', merchantNameNormalized: 'Market', providerCategoryId: 'GROCERIES', pending: false, reconciliationStatus: BankReconciliationStatus.NEEDS_REVIEW, amount: { gt: 0 }, expenseId: null, invoiceId: null, suggestedInvoiceId: null }) }));
+  });
+
+  it('classifies a posted personal transfer without creating an expense', async () => {
+    const { service, prisma } = setup();
+    prisma.bankTransaction.findUnique.mockResolvedValue({ id: 'bank-row', organizationId: 'org-a', restaurantLocationId: 'location-a', bankAccountId: 'account-a', merchantNameNormalized: 'Owner Transfer', providerCategoryId: 'TRANSFER', vendorId: null, categoryId: null, suggestedInvoiceId: null, invoiceId: null, expenseId: null, reconciliationStatus: BankReconciliationStatus.NEEDS_REVIEW, amount: new Prisma.Decimal(200), pending: false });
+    await service.review('user-a', 'bank-row', { decision: BankReviewDecision.PERSONAL_TRANSFER });
+    expect(prisma.expense.create).not.toHaveBeenCalled();
+    expect(prisma.bankTransaction.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ reconciliationStatus: BankReconciliationStatus.IGNORED, vendorId: null, categoryId: null }) }));
+  });
+
+  it('remembers personal-transfer decisions with account, direction, and type safeguards', async () => {
+    const { service, prisma } = setup();
+    prisma.bankTransaction.findUnique.mockResolvedValue({ id: 'bank-row', organizationId: 'org-a', restaurantLocationId: 'location-a', bankAccountId: 'account-a', merchantNameNormalized: 'Owner Transfer', providerCategoryId: 'TRANSFER', vendorId: null, categoryId: null, suggestedInvoiceId: null, invoiceId: null, expenseId: null, reconciliationStatus: BankReconciliationStatus.NEEDS_REVIEW, amount: new Prisma.Decimal(200), pending: false });
+    prisma.merchantRule.create.mockResolvedValue({ id: 'rule-a' });
+    await service.review('user-a', 'bank-row', { decision: BankReviewDecision.PERSONAL_TRANSFER, createMerchantRule: true });
+    expect(prisma.merchantRule.create).toHaveBeenCalledWith({ data: expect.objectContaining({ bankAccountId: 'account-a', providerCategoryId: 'TRANSFER', direction: 'OUTFLOW', decision: MerchantRuleDecision.PERSONAL_TRANSFER, autoConfirm: true, vendorId: null, expenseCategoryId: null }) });
+  });
+
   it('bulk review rejects transactions spanning restaurants', async () => {
     const { service, prisma } = setup();
     prisma.bankTransaction.findMany.mockResolvedValue([
@@ -281,6 +305,16 @@ describe('bank transaction foundation', () => {
     );
   });
 
+  it('supports a reviewed similarity group larger than one hundred transactions', async () => {
+    const { service, prisma } = setup();
+    const ids = Array.from({ length: 101 }, (_, index) =>
+      `00000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`,
+    );
+    prisma.bankTransaction.findMany.mockResolvedValue(ids.map((id) => ({ id, organizationId: 'org-a', restaurantLocationId: 'location-a' })));
+    jest.spyOn(service, 'review').mockImplementation(async (_userId, id) => ({ id }) as any);
+    await expect(service.bulkReview('user-a', { ids, decision: BankReviewDecision.REVIEW_LATER })).resolves.toEqual(expect.objectContaining({ requestedCount: 101, count: 101, failedCount: 0 }));
+  });
+
   it('reverses only a uniquely linked bank-created expense', async () => {
     const { service, prisma } = setup();
     const row = { id: 'bank-row', organizationId: 'org-a', expenseId: 'expense-created', reconciliationStatus: BankReconciliationStatus.MATCHED_EXPENSE };
@@ -300,6 +334,15 @@ describe('bank transaction foundation', () => {
     expect(prisma.expense.delete).toHaveBeenCalledWith({ where: { id: 'expense-created' } });
     expect(prisma.bankTransaction.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ expenseId: null, reconciliationStatus: BankReconciliationStatus.NEEDS_REVIEW }) }));
     expect(mutationOrder).toEqual(['unlink', 'delete']);
+  });
+
+  it('returns an ignored personal transfer to review without creating financial records', async () => {
+    const { service, prisma, audit } = setup();
+    prisma.bankTransaction.findUnique.mockResolvedValue({ id: 'bank-row', organizationId: 'org-a', expenseId: null, invoiceId: null, reconciliationStatus: BankReconciliationStatus.IGNORED });
+    prisma.bankTransaction.update.mockResolvedValue({ id: 'bank-row', reconciliationStatus: BankReconciliationStatus.NEEDS_REVIEW });
+    await expect(service.reverseReconciliation('user-a', 'bank-row')).resolves.toEqual(expect.objectContaining({ reconciliationStatus: BankReconciliationStatus.NEEDS_REVIEW }));
+    expect(prisma.expense.delete).not.toHaveBeenCalled();
+    expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({ action: 'bank.transaction_ignore_reversed' }));
   });
 
   it('creates an update-mode link token and preserves the existing connection on reauth', async () => {

@@ -31,10 +31,11 @@ describe('Prisma migration history', () => {
   });
 
   it('keeps provenance, bank automation, and auth security as ordered forward migrations', () => {
-    expect(migrations.slice(-3)).toEqual([
+    expect(migrations.slice(-4)).toEqual([
       '20261012190000_invoice_field_provenance',
       '20261012230000_bank_rule_auto_confirmation',
       '20261013010000_auth_security_foundation',
+      '20261014120000_smart_bank_transaction_rules',
     ]);
   });
 });

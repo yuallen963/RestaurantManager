@@ -145,6 +145,9 @@ class BankTransactionData {
     this.restaurantLocationId,
     this.invoiceNumber,
     this.suggestedInvoice,
+    this.bankAccountId,
+    this.bankAccountName,
+    this.providerCategoryId,
   });
   final String id,
       merchant,
@@ -161,12 +164,14 @@ class BankTransactionData {
       vendorName,
       restaurantLocationId,
       invoiceNumber;
+  final String? bankAccountId, bankAccountName, providerCategoryId;
   final SuggestedInvoiceData? suggestedInvoice;
   factory BankTransactionData.fromJson(Map<String, dynamic> json) {
     final category = json['category'] as Map?;
     final vendor = json['vendor'] as Map?;
     final invoice = json['invoice'] as Map?;
     final suggested = json['suggestedInvoice'] as Map?;
+    final account = json['bankAccount'] as Map?;
     return BankTransactionData(
       id: json['id'] as String,
       merchant:
@@ -179,6 +184,9 @@ class BankTransactionData {
       categorizationSource: json['categorizationSource'] as String,
       matchConfidence: json['matchConfidence'] as String? ?? 'NO_MATCH',
       pending: json['pending'] as bool? ?? false,
+      bankAccountId: json['bankAccountId'] as String?,
+      bankAccountName: account?['name'] as String?,
+      providerCategoryId: json['providerCategoryId'] as String?,
       categoryId: json['categoryId'] as String?,
       categoryName: category?['name'] as String?,
       vendorId: json['vendorId'] as String?,
@@ -191,6 +199,14 @@ class BankTransactionData {
     );
   }
 }
+
+enum BankReviewDecision { expense, personalTransfer, reviewLater }
+
+String _reviewDecisionName(BankReviewDecision decision) => switch (decision) {
+  BankReviewDecision.expense => 'EXPENSE',
+  BankReviewDecision.personalTransfer => 'PERSONAL_TRANSFER',
+  BankReviewDecision.reviewLater => 'REVIEW_LATER',
+};
 
 class BankLinkSetup {
   const BankLinkSetup(this.linkToken, this.demo, {this.updateMode = false});
@@ -211,10 +227,15 @@ class MerchantRuleData {
     this.categoryId,
     this.minimumAmount,
     this.maximumAmount,
+    this.decision = 'EXPENSE',
+    this.direction,
+    this.bankAccountId,
   });
   final String id, merchant;
+  final String decision;
   final bool active, autoConfirm;
   final String? vendorName, categoryName, vendorId, categoryId;
+  final String? direction, bankAccountId;
   final double? minimumAmount, maximumAmount;
 
   factory MerchantRuleData.fromJson(Map<String, dynamic> json) =>
@@ -223,6 +244,9 @@ class MerchantRuleData {
         merchant: json['normalizedMerchantName'] as String,
         active: json['active'] as bool? ?? true,
         autoConfirm: json['autoConfirm'] as bool? ?? false,
+        decision: json['decision'] as String? ?? 'EXPENSE',
+        direction: json['direction'] as String?,
+        bankAccountId: json['bankAccountId'] as String?,
         vendorName: (json['vendor'] as Map?)?['name'] as String?,
         categoryName: (json['expenseCategory'] as Map?)?['name'] as String?,
         vendorId: (json['vendor'] as Map?)?['id'] as String?,
@@ -353,6 +377,7 @@ class BankingRepository {
     String? categoryId,
     String? locationId,
     bool ignored = false,
+    BankReviewDecision? decision,
     bool createRule = false,
     bool autoConfirmFuture = false,
     double? minimumAmount,
@@ -364,18 +389,31 @@ class BankingRepository {
       'categoryId': categoryId,
       'restaurantLocationId': locationId,
       'ignored': ignored,
+      'decision': decision == null ? null : _reviewDecisionName(decision),
       'createMerchantRule': createRule,
       'autoConfirmFuture': autoConfirmFuture,
       'minimumAmount': minimumAmount,
       'maximumAmount': maximumAmount,
     },
   );
+  Future<List<BankTransactionData>> similarTransactions(String id) async =>
+      (await dio.get('/bank-transactions/$id/similar')).data
+          .map<BankTransactionData>(
+            (item) =>
+                BankTransactionData.fromJson(Map<String, dynamic>.from(item)),
+          )
+          .toList();
   Future<BulkReviewResult> bulkReview(
     List<String> ids, {
     String? vendorId,
     String? categoryId,
     required String locationId,
     bool ignored = false,
+    BankReviewDecision? decision,
+    bool createRule = false,
+    bool autoConfirmFuture = false,
+    double? minimumAmount,
+    double? maximumAmount,
   }) async {
     final response = await dio.post(
       '/bank-transactions/bulk-review',
@@ -385,6 +423,11 @@ class BankingRepository {
         'categoryId': categoryId,
         'restaurantLocationId': locationId,
         'ignored': ignored,
+        'decision': decision == null ? null : _reviewDecisionName(decision),
+        'createMerchantRule': createRule,
+        'autoConfirmFuture': autoConfirmFuture,
+        'minimumAmount': minimumAmount,
+        'maximumAmount': maximumAmount,
       },
     );
     return BulkReviewResult.fromJson(

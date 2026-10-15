@@ -1,10 +1,10 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
-import { BankCategorizationSource, BankConnectionStatus, BankProvider, BankReconciliationStatus, ExpenseSource, InvoiceMatchConfidence, MerchantRuleMatchType, OrganizationRole, Prisma, ReviewStatus } from '@prisma/client';
+import { BankCategorizationSource, BankConnectionStatus, BankProvider, BankReconciliationStatus, BankTransactionDirection, ExpenseSource, InvoiceMatchConfidence, MerchantRuleDecision, MerchantRuleMatchType, OrganizationRole, Prisma, ReviewStatus } from '@prisma/client';
 import { AuditService } from '../audit.service';
 import { OrganizationAccessService } from '../organizations/organization-access.service';
 import { PrismaService } from '../prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
-import { AssignBankAccountDto, BankTransactionQuery, BulkReviewBankTransactionsDto, ConfirmInvoiceMatchDto, ExchangeBankTokenDto, ReviewBankTransactionDto, UpdateMerchantRuleDto } from './dto';
+import { AssignBankAccountDto, BankReviewDecision, BankTransactionQuery, BulkReviewBankTransactionsDto, ConfirmInvoiceMatchDto, ExchangeBankTokenDto, ReviewBankTransactionDto, UpdateMerchantRuleDto } from './dto';
 import { BankTokenEncryptionService } from './encryption.service';
 import { BankProviderFactory, ProviderTransaction } from './bank.provider';
 
@@ -157,7 +157,9 @@ export class BankService {
     const account = accounts.find((candidate) => candidate.providerAccountId === transaction.accountId);
     if (!account || !account.active) return;
     const merchant = normalizeMerchant(transaction.merchantName ?? transaction.description);
-    const categorization = await this.categorize(organizationId, account.restaurantLocationId, merchant, transaction.categoryId ?? transaction.category);
+    const providerType = transaction.categoryId ?? transaction.category;
+    const direction = transaction.amount > 0 ? BankTransactionDirection.OUTFLOW : BankTransactionDirection.INFLOW;
+    const categorization = await this.categorize(organizationId, account.restaurantLocationId, account.id, direction, merchant, providerType);
     const invoiceMatch = account.restaurantLocationId && transaction.amount > 0 ? await this.matchInvoice(organizationId, account.restaurantLocationId, categorization.vendorId, merchant, transaction.amount, new Date(transaction.date)) : null;
     const raw = { restaurantLocationId: account.restaurantLocationId, postedDate: new Date(transaction.date), authorizedDate: transaction.authorizedDate ? new Date(transaction.authorizedDate) : null, merchantNameRaw: transaction.merchantName, merchantNameNormalized: merchant, description: transaction.description, amount: new Prisma.Decimal(transaction.amount), pending: transaction.pending, providerCategory: transaction.category, providerCategoryId: transaction.categoryId, removedAt: null };
     const proposed = { ...raw, categoryId: categorization.categoryId, vendorId: categorization.vendorId, suggestedInvoiceId: invoiceMatch?.invoiceId, matchConfidence: invoiceMatch?.confidence ?? InvoiceMatchConfidence.NO_MATCH, reconciliationStatus: BankReconciliationStatus.NEEDS_REVIEW, categorizationSource: categorization.source };
@@ -182,6 +184,10 @@ export class BankService {
     }
     if (pending) {
       const updated = await this.prisma.bankTransaction.update({ where: { id: pending.id }, data: { ...raw, providerTransactionId: transaction.id, suggestedInvoiceId: pending.suggestedInvoiceId ?? invoiceMatch?.invoiceId, matchConfidence: pending.matchConfidence === InvoiceMatchConfidence.NO_MATCH ? invoiceMatch?.confidence ?? InvoiceMatchConfidence.NO_MATCH : pending.matchConfidence } });
+      if (!updated.pending && updated.pendingReviewDecision === MerchantRuleDecision.PERSONAL_TRANSFER && !updated.expenseId && !updated.invoiceId && !updated.suggestedInvoiceId) {
+        await this.prisma.bankTransaction.update({ where: { id: updated.id }, data: { reconciliationStatus: BankReconciliationStatus.IGNORED, pendingReviewDecision: null } });
+        return;
+      }
       await this.autoReconcile(userId, updated, categorization.rule);
       return;
     }
@@ -189,10 +195,13 @@ export class BankService {
     await this.autoReconcile(userId, created, categorization.rule);
   }
 
-  private async categorize(organizationId: string, locationId: string | null, merchant: string, providerCategory?: string) {
+  private async categorize(organizationId: string, locationId: string | null, bankAccountId: string, direction: BankTransactionDirection, merchant: string, providerCategory?: string) {
     const canonical = cleanMerchant(merchant);
     const rules = await this.prisma.merchantRule.findMany({ where: { organizationId, active: true, OR: [{ restaurantLocationId: locationId }, { restaurantLocationId: null }] }, orderBy: [{ restaurantLocationId: 'desc' }, { createdAt: 'asc' }] });
-    const rule = rules.find((candidate) => candidate.matchType === MerchantRuleMatchType.EXACT ? canonical === candidate.matchValue : candidate.matchType === MerchantRuleMatchType.PREFIX ? canonical.startsWith(candidate.matchValue) : canonical.includes(candidate.matchValue));
+    const rule = rules.find((candidate) => (!candidate.bankAccountId || candidate.bankAccountId === bankAccountId)
+      && (!candidate.direction || candidate.direction === direction)
+      && (!candidate.providerCategoryId || candidate.providerCategoryId === providerCategory)
+      && (candidate.matchType === MerchantRuleMatchType.EXACT ? canonical === candidate.matchValue : candidate.matchType === MerchantRuleMatchType.PREFIX ? canonical.startsWith(candidate.matchValue) : canonical.includes(candidate.matchValue)));
     if (rule) return { vendorId: rule.vendorId, categoryId: rule.expenseCategoryId, source: BankCategorizationSource.USER_RULE, rule };
     const vendors = await this.prisma.vendor.findMany({ where: { organizationId }, select: { id: true, normalizedName: true } });
     const vendor = vendors.find((candidate) => canonical.includes(cleanMerchant(candidate.normalizedName)) || cleanMerchant(candidate.normalizedName).includes(canonical));
@@ -206,9 +215,19 @@ export class BankService {
   private async autoReconcile(userId: string, transaction: any, rule: any) {
     if (!rule?.active || !rule.autoConfirm || transaction.pending || transaction.expenseId
       || transaction.suggestedInvoiceId || transaction.reconciliationStatus !== BankReconciliationStatus.NEEDS_REVIEW
-      || !transaction.restaurantLocationId || !rule.vendorId || !rule.expenseCategoryId
+      || !transaction.restaurantLocationId
       || rule.restaurantLocationId !== transaction.restaurantLocationId
       || rule.matchType !== MerchantRuleMatchType.EXACT) return;
+    if (rule.bankAccountId && rule.bankAccountId !== transaction.bankAccountId) return;
+    const direction = new Prisma.Decimal(transaction.amount).gt(0) ? BankTransactionDirection.OUTFLOW : BankTransactionDirection.INFLOW;
+    if (rule.direction && rule.direction !== direction) return;
+    if (rule.providerCategoryId && rule.providerCategoryId !== (transaction.providerCategoryId ?? transaction.providerCategory)) return;
+    if (rule.decision === MerchantRuleDecision.PERSONAL_TRANSFER) {
+      await this.prisma.bankTransaction.updateMany({ where: { id: transaction.id, reconciliationStatus: BankReconciliationStatus.NEEDS_REVIEW, expenseId: null, invoiceId: null, suggestedInvoiceId: null }, data: { reconciliationStatus: BankReconciliationStatus.IGNORED, categorizationSource: BankCategorizationSource.USER_RULE } });
+      await this.audit.log({ userId, organizationId: transaction.organizationId, action: 'bank.transaction_auto_excluded', entityType: 'BankTransaction', entityId: transaction.id, metadata: { merchantRuleId: rule.id } });
+      return;
+    }
+    if (!rule.vendorId || !rule.expenseCategoryId) return;
     const exceptionText = `${transaction.description ?? ''} ${transaction.providerCategory ?? ''}`.toUpperCase();
     if (/\b(TRANSFER|REFUND|REVERSAL|LOAN|OWNER CONTRIBUTION)\b/.test(exceptionText)) return;
     const amount = new Prisma.Decimal(transaction.amount);
@@ -262,6 +281,24 @@ export class BankService {
     return rows.map((row) => ({ ...row, suggestedInvoice: row.suggestedInvoiceId ? byId.get(row.suggestedInvoiceId) ?? null : null }));
   }
 
+  async similarTransactions(userId: string, id: string) {
+    const transaction = await this.transaction(userId, id);
+    if (!transaction.merchantNameNormalized) return [];
+    const amount = new Prisma.Decimal(transaction.amount);
+    return this.prisma.bankTransaction.findMany({ where: {
+      organizationId: transaction.organizationId,
+      restaurantLocationId: transaction.restaurantLocationId,
+      bankAccountId: transaction.bankAccountId,
+      merchantNameNormalized: transaction.merchantNameNormalized,
+      providerCategoryId: transaction.providerCategoryId,
+      providerCategory: transaction.providerCategory,
+      pending: transaction.pending,
+      reconciliationStatus: BankReconciliationStatus.NEEDS_REVIEW,
+      expenseId: null, invoiceId: null, suggestedInvoiceId: null, removedAt: null,
+      amount: amount.gt(0) ? { gt: 0 } : { lte: 0 },
+    }, include: { category: { select: { id: true, name: true } }, vendor: { select: { id: true, name: true } }, bankAccount: { select: { id: true, name: true, mask: true } } }, orderBy: [{ postedDate: 'desc' }, { id: 'asc' }] });
+  }
+
   async review(userId: string, id: string, data: ReviewBankTransactionDto) {
     const transaction = await this.transaction(userId, id);
     if (data.restaurantLocationId) await this.validateLocation(transaction.organizationId, data.restaurantLocationId);
@@ -273,11 +310,16 @@ export class BankService {
     const locationId = data.restaurantLocationId ?? transaction.restaurantLocationId;
     const vendorId = data.vendorId === undefined ? transaction.vendorId : data.vendorId;
     const categoryId = data.categoryId === undefined ? transaction.categoryId : data.categoryId;
+    const decision = data.decision ?? (data.ignored ? BankReviewDecision.PERSONAL_TRANSFER : BankReviewDecision.EXPENSE);
+    if (transaction.expenseId || transaction.invoiceId || transaction.reconciliationStatus === BankReconciliationStatus.MATCHED_EXPENSE || transaction.reconciliationStatus === BankReconciliationStatus.MATCHED_INVOICE) throw new ConflictException('Transaction has already been reviewed');
     let saved;
-    if (data.ignored) {
-      saved = await this.prisma.bankTransaction.update({ where: { id }, data: { vendorId, categoryId, restaurantLocationId: locationId, categorizationSource: BankCategorizationSource.MANUAL, reconciliationStatus: BankReconciliationStatus.IGNORED } });
+    if (decision === BankReviewDecision.PERSONAL_TRANSFER) {
+      if (transaction.suggestedInvoiceId) throw new BadRequestException('Confirm or reject the suggested invoice match first');
+      saved = await this.prisma.bankTransaction.update({ where: { id }, data: { vendorId: null, categoryId: null, restaurantLocationId: locationId, pendingReviewDecision: transaction.pending ? MerchantRuleDecision.PERSONAL_TRANSFER : null, categorizationSource: BankCategorizationSource.MANUAL, reconciliationStatus: transaction.pending ? BankReconciliationStatus.NEEDS_REVIEW : BankReconciliationStatus.IGNORED } });
+    } else if (decision === BankReviewDecision.REVIEW_LATER) {
+      saved = await this.prisma.bankTransaction.update({ where: { id }, data: { vendorId, categoryId, restaurantLocationId: locationId, pendingReviewDecision: null, categorizationSource: BankCategorizationSource.MANUAL, reconciliationStatus: BankReconciliationStatus.NEEDS_REVIEW } });
     } else if (transaction.pending) {
-      saved = await this.prisma.bankTransaction.update({ where: { id }, data: { vendorId, categoryId, restaurantLocationId: locationId, categorizationSource: BankCategorizationSource.MANUAL, reconciliationStatus: BankReconciliationStatus.NEEDS_REVIEW } });
+      saved = await this.prisma.bankTransaction.update({ where: { id }, data: { vendorId, categoryId, restaurantLocationId: locationId, pendingReviewDecision: MerchantRuleDecision.EXPENSE, categorizationSource: BankCategorizationSource.MANUAL, reconciliationStatus: BankReconciliationStatus.NEEDS_REVIEW } });
     } else {
       if (!locationId) throw new BadRequestException('Assign a restaurant location before reconciling this transaction');
       if (!categoryId) throw new BadRequestException('Select an expense category before reconciling this transaction');
@@ -295,15 +337,18 @@ export class BankService {
         return tx.bankTransaction.update({ where: { id }, data: { vendorId, categoryId, restaurantLocationId: locationId, expenseId: expense.id, categorizationSource: BankCategorizationSource.MANUAL, reconciliationStatus: BankReconciliationStatus.MATCHED_EXPENSE } });
       }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
     }
-    await this.audit.log({ userId, organizationId: transaction.organizationId, action: data.ignored ? 'bank.transaction_ignored' : 'bank.transaction_categorized', entityType: 'BankTransaction', entityId: id });
-    if (data.createMerchantRule && transaction.merchantNameNormalized) {
+    await this.audit.log({ userId, organizationId: transaction.organizationId, action: decision === BankReviewDecision.PERSONAL_TRANSFER ? 'bank.transaction_ignored' : decision === BankReviewDecision.REVIEW_LATER ? 'bank.transaction_review_deferred' : 'bank.transaction_categorized', entityType: 'BankTransaction', entityId: id });
+    if (data.createMerchantRule && decision !== BankReviewDecision.REVIEW_LATER && transaction.merchantNameNormalized) {
       const matchValue = cleanMerchant(transaction.merchantNameNormalized);
       const locationId = data.restaurantLocationId ?? transaction.restaurantLocationId;
       const matchType = data.ruleMatchType ?? MerchantRuleMatchType.EXACT;
-      const existing = await this.prisma.merchantRule.findFirst({ where: { organizationId: transaction.organizationId, restaurantLocationId: locationId, matchType, matchValue } });
+      const direction = transaction.amount.gt(0) ? BankTransactionDirection.OUTFLOW : BankTransactionDirection.INFLOW;
+      const providerCategoryId = transaction.providerCategoryId ?? transaction.providerCategory;
+      const ruleDecision = decision === BankReviewDecision.PERSONAL_TRANSFER ? MerchantRuleDecision.PERSONAL_TRANSFER : MerchantRuleDecision.EXPENSE;
+      const existing = await this.prisma.merchantRule.findFirst({ where: { organizationId: transaction.organizationId, restaurantLocationId: locationId, bankAccountId: transaction.bankAccountId, direction, providerCategoryId, matchType, matchValue } });
       const rule = existing
-        ? await this.prisma.merchantRule.update({ where: { id: existing.id }, data: { active: true, autoConfirm: data.autoConfirmFuture ?? false, minimumAmount: data.minimumAmount, maximumAmount: data.maximumAmount, vendorId: data.vendorId ?? transaction.vendorId, expenseCategoryId: data.categoryId ?? transaction.categoryId, normalizedMerchantName: transaction.merchantNameNormalized } })
-        : await this.prisma.merchantRule.create({ data: { organizationId: transaction.organizationId, restaurantLocationId: locationId, matchType, matchValue, normalizedMerchantName: transaction.merchantNameNormalized, active: true, autoConfirm: data.autoConfirmFuture ?? false, minimumAmount: data.minimumAmount, maximumAmount: data.maximumAmount, vendorId: data.vendorId ?? transaction.vendorId, expenseCategoryId: data.categoryId ?? transaction.categoryId, createdByUserId: userId } });
+        ? await this.prisma.merchantRule.update({ where: { id: existing.id }, data: { active: true, decision: ruleDecision, autoConfirm: ruleDecision === MerchantRuleDecision.PERSONAL_TRANSFER ? true : data.autoConfirmFuture ?? false, minimumAmount: data.minimumAmount, maximumAmount: data.maximumAmount, vendorId: ruleDecision === MerchantRuleDecision.EXPENSE ? data.vendorId ?? transaction.vendorId : null, expenseCategoryId: ruleDecision === MerchantRuleDecision.EXPENSE ? data.categoryId ?? transaction.categoryId : null, normalizedMerchantName: transaction.merchantNameNormalized } })
+        : await this.prisma.merchantRule.create({ data: { organizationId: transaction.organizationId, restaurantLocationId: locationId, bankAccountId: transaction.bankAccountId, direction, providerCategoryId, decision: ruleDecision, matchType, matchValue, normalizedMerchantName: transaction.merchantNameNormalized, active: true, autoConfirm: ruleDecision === MerchantRuleDecision.PERSONAL_TRANSFER ? true : data.autoConfirmFuture ?? false, minimumAmount: data.minimumAmount, maximumAmount: data.maximumAmount, vendorId: ruleDecision === MerchantRuleDecision.EXPENSE ? data.vendorId ?? transaction.vendorId : null, expenseCategoryId: ruleDecision === MerchantRuleDecision.EXPENSE ? data.categoryId ?? transaction.categoryId : null, createdByUserId: userId } });
       await this.audit.log({ userId, organizationId: transaction.organizationId, action: 'bank.merchant_rule_created', entityType: 'MerchantRule', entityId: rule.id });
     }
     return saved;
@@ -345,7 +390,12 @@ export class BankService {
 
   async reverseReconciliation(userId: string, id: string) {
     const transaction = await this.transaction(userId, id);
-    if (transaction.reconciliationStatus !== BankReconciliationStatus.MATCHED_EXPENSE || !transaction.expenseId) throw new BadRequestException('Transaction is not reconciled to an expense');
+    if (transaction.reconciliationStatus === BankReconciliationStatus.IGNORED && !transaction.expenseId && !transaction.invoiceId) {
+      const restored = await this.prisma.bankTransaction.update({ where: { id }, data: { reconciliationStatus: BankReconciliationStatus.NEEDS_REVIEW, pendingReviewDecision: null } });
+      await this.audit.log({ userId, organizationId: transaction.organizationId, action: 'bank.transaction_ignore_reversed', entityType: 'BankTransaction', entityId: id });
+      return restored;
+    }
+    if (transaction.reconciliationStatus !== BankReconciliationStatus.MATCHED_EXPENSE || !transaction.expenseId) throw new BadRequestException('Transaction is not reversible');
     const result = await this.prisma.$transaction(async (tx) => {
       const current = await tx.bankTransaction.findUnique({ where: { id } });
       if (!current?.expenseId || current.reconciliationStatus !== BankReconciliationStatus.MATCHED_EXPENSE) throw new ConflictException('Transaction reconciliation changed');
