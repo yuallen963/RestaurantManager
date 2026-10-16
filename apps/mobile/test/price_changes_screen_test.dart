@@ -76,6 +76,9 @@ class FakePriceRepository extends PriceIntelligenceRepository {
   Future<PriceChangesData> changes({
     required String restaurantLocationId,
     required PriceChangeSort sort,
+    int lookbackDays = 90,
+    DateTime? startDate,
+    DateTime? endDate,
   }) {
     calls.add(restaurantLocationId);
     sorts.add(sort);
@@ -89,6 +92,9 @@ class FakePriceRepository extends PriceIntelligenceRepository {
   Future<PriceHistoryData> history({
     required String restaurantLocationId,
     required String itemKey,
+    int lookbackDays = 90,
+    DateTime? startDate,
+    DateTime? endDate,
   }) {
     return onHistory?.call(restaurantLocationId, itemKey) ??
         Future.value(
@@ -168,10 +174,7 @@ void main() {
     );
     expect(find.text('Cola Syrup'), findsOneWidget);
     expect(find.text('↓ 10.9%'), findsOneWidget);
-    expect(
-      find.textContaining('Est. savings -\$72.00/month'),
-      findsOneWidget,
-    );
+    expect(find.textContaining('Est. savings -\$72.00/month'), findsOneWidget);
     expect(
       find.text('NITRILE GLOVES LARGE'),
       findsNothing,

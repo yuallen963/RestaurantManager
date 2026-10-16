@@ -17,8 +17,13 @@ function setup() {
       delete: jest.fn().mockResolvedValue(invoice),
     },
     vendor: { findFirst: jest.fn().mockResolvedValue(null), findMany: jest.fn().mockResolvedValue([]) },
-    invoiceLineItem: { findFirst: jest.fn().mockResolvedValue(null) },
+    invoiceLineItem: {
+      findFirst: jest.fn().mockResolvedValue(null),
+      findMany: jest.fn().mockResolvedValue([]),
+      update: jest.fn().mockResolvedValue({}),
+    },
   };
+  prisma.$transaction = jest.fn((callback: any) => callback(prisma));
   const access: any = { requireMember: jest.fn().mockResolvedValue({ role: 'OWNER' }) };
   const audit: any = { log: jest.fn().mockResolvedValue({}) };
   const storage: any = { putUrl: jest.fn().mockResolvedValue('https://storage/upload'), exists: jest.fn().mockResolvedValue(undefined), get: jest.fn().mockResolvedValue(Buffer.from('invoice bytes')), remove: jest.fn().mockResolvedValue(undefined) };
@@ -150,6 +155,20 @@ describe('InvoicesService', () => {
       where: { id: 'invoice-a' },
       data: expect.objectContaining({ status: 'COMPLETED', reviewStatus: 'REVIEWED' }),
     });
+  });
+
+  it('marks preserved line evidence verified when the owner reviews the invoice', async () => {
+    const { service, prisma } = setup();
+    prisma.invoiceLineItem.findMany.mockResolvedValue([{ id: 'line-a', rawDescription: 'Chicken', fieldProvenance: { quantity: { kind: 'OBSERVED', verified: false }, unitPrice: { kind: 'MISSING', verified: false } } }]);
+    prisma.invoice.update.mockResolvedValueOnce({ ...invoice, extractedVendorName: 'Vendor', invoiceDate: new Date('2026-10-01'), total: '100' });
+    await service.review('user-a', 'invoice-a', { markReviewed: true });
+    expect(prisma.invoiceLineItem.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'line-a' },
+      data: { fieldProvenance: expect.objectContaining({
+        quantity: expect.objectContaining({ kind: 'OBSERVED', verified: true }),
+        unitPrice: expect.objectContaining({ kind: 'MISSING', verified: true }),
+      }) },
+    }));
   });
 
   it('records human corrections as verified provenance', async () => {

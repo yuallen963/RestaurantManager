@@ -9,6 +9,7 @@ import '../banking/bank_screens.dart';
 import '../banking/foundation.dart';
 import '../revenue/foundation.dart' show DailyRevenue;
 import '../revenue/revenue_screen.dart' show RevenueChart;
+import '../price_intelligence/price_changes_screen.dart';
 import 'foundation.dart';
 
 class VendorsScreen extends ConsumerStatefulWidget {
@@ -206,6 +207,18 @@ class VendorHeader extends ConsumerWidget {
             ),
             const DateRangeSelector(),
           ],
+        ),
+        Align(
+          alignment: Alignment.centerRight,
+          child: OutlinedButton.icon(
+            key: const Key('vendor-price-changes'),
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const PriceChangesScreen()),
+            ),
+            icon: const Icon(Icons.trending_up),
+            label: const Text('Price Changes'),
+          ),
         ),
         const SizedBox(height: 12),
         LocationSelector(

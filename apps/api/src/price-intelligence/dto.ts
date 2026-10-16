@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer';
-import { IsEnum, IsInt, IsOptional, IsUUID, Max, Min } from 'class-validator';
+import { IsDateString, IsEnum, IsInt, IsOptional, IsUUID, Max, Min } from 'class-validator';
 
 export enum PriceChangeSort {
   LARGEST_PERCENT_INCREASE = 'largestPercentIncrease',
@@ -35,6 +35,14 @@ export class PriceIntelligenceQuery {
   @IsOptional()
   @IsEnum(PriceChangeDirection)
   direction?: PriceChangeDirection;
+
+  @IsOptional()
+  @IsDateString()
+  startDate?: string;
+
+  @IsOptional()
+  @IsDateString()
+  endDate?: string;
 }
 
 export class PriceHistoryQuery {
@@ -47,4 +55,12 @@ export class PriceHistoryQuery {
   @Min(30)
   @Max(365)
   lookbackDays = 90;
+
+  @IsOptional()
+  @IsDateString()
+  startDate?: string;
+
+  @IsOptional()
+  @IsDateString()
+  endDate?: string;
 }

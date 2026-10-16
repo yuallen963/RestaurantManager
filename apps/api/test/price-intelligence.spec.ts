@@ -1,6 +1,6 @@
 import { ForbiddenException } from '@nestjs/common';
 import { PriceChangeDirection, PriceChangeSort } from '../src/price-intelligence/dto';
-import { analyzePriceObservations, canonicalDescription, PriceIntelligenceService, TrustedPriceObservation } from '../src/price-intelligence/price-intelligence.service';
+import { analyzePriceObservations, canonicalDescription, normalizePriceObservation, PriceIntelligenceService, TrustedPriceObservation } from '../src/price-intelligence/price-intelligence.service';
 
 const now = new Date('2026-10-08T12:00:00.000Z');
 const options = { lookbackDays: 90, percentThreshold: 5, absoluteThreshold: .5 };
@@ -14,8 +14,14 @@ const row = (overrides: Partial<TrustedPriceObservation> = {}): TrustedPriceObse
   sku: '384920',
   quantity: 12,
   unit: 'CASE',
-  packSize: '4 x 10 lb',
+  packSize: '1 EA',
+  measurementUnit: 'EA',
+  totalPackageQuantity: 1,
   unitPrice: 91,
+  extendedPrice: null,
+  currency: 'USD',
+  currencyProvenance: { currency: { kind: 'OBSERVED', verified: true } },
+  fieldProvenance: Object.fromEntries(['rawDescription', 'sku', 'quantity', 'unit', 'packSize', 'unitPrice', 'extendedPrice'].map((field) => [field, { kind: 'OBSERVED', verified: true }])),
   ...overrides,
 });
 
@@ -30,11 +36,15 @@ describe('price intelligence calculations', () => {
     expect(result[0].displayName).toBe('Different printed wording');
   });
 
-  it('uses conservative canonical raw descriptions when SKU and normalized name are absent', () => {
+  it('requires a confirmed product group when SKU is absent', () => {
     expect(canonicalDescription('  CHKN BRST, BNLS   SKLS 4/10 LB ')).toBe('CHKN BRST BNLS SKLS 4/10 LB');
-    const result = analyzePriceObservations([
+    expect(analyzePriceObservations([
       row({ sku: null, rawDescription: 'CHKN BRST, BNLS   SKLS 4/10 LB' }),
       row({ invoiceId: 'invoice-b', invoiceDate: now, sku: null, rawDescription: 'chkn brst bnls skls 4/10 lb', unitPrice: 98 }),
+    ], options)).toEqual([]);
+    const result = analyzePriceObservations([
+      row({ sku: null, productGroupId: 'confirmed-chicken' }),
+      row({ invoiceId: 'invoice-b', invoiceDate: now, sku: null, productGroupId: 'confirmed-chicken', unitPrice: 98 }),
     ], options);
     expect(result).toHaveLength(1);
   });
@@ -48,13 +58,58 @@ describe('price intelligence calculations', () => {
   });
 
   it.each([
-    [{ unit: 'CASE' }, { unit: 'LB' }],
-    [{ packSize: '4 x 10 lb' }, { packSize: '2 x 10 lb' }],
-  ])('excludes incompatible purchasing bases', (first, second) => {
+    [{ measurementUnit: 'LB', totalPackageQuantity: 40 }, { measurementUnit: 'GAL', totalPackageQuantity: 5 }],
+    [{ productAttributes: { organic: 'organic' } }, { productAttributes: { organic: 'conventional' } }],
+  ])('excludes incompatible product bases', (first, second) => {
     expect(analyzePriceObservations([
       row(first),
       row({ invoiceId: 'invoice-b', invoiceDate: now, unitPrice: 106.5, ...second }),
     ], options)).toHaveLength(0);
+  });
+
+  it('normalizes different verified case sizes to the same price per pound', () => {
+    const first = row({ quantity: 1, unitPrice: 120, packSize: '40 LB', measurementUnit: 'LB', totalPackageQuantity: 40 });
+    const second = row({ invoiceId: 'invoice-b', invoiceDate: now, quantity: 1, unitPrice: 30, packSize: '10 LB', measurementUnit: 'LB', totalPackageQuantity: 10 });
+    expect(normalizePriceObservation(first)?.normalizedUnitPrice.toNumber()).toBe(3);
+    const result = analyzePriceObservations([first, second], options)[0];
+    expect(result.unit).toBe('lb');
+    expect(result.previousUnitPrice).toBe(3);
+    expect(result.currentUnitPrice).toBe(3);
+  });
+
+  it('calculates multiple cases independently from package size and line cost', () => {
+    const normalized = normalizePriceObservation(row({
+      quantity: 3,
+      unitPrice: 120,
+      packSize: '40 LB',
+      measurementUnit: 'LB',
+      totalPackageQuantity: 40,
+    }))!;
+    expect(normalized.normalizedQuantity.toNumber()).toBe(120);
+    expect(normalized.purchasePrice.toNumber()).toBe(360);
+    expect(normalized.normalizedUnitPrice.toNumber()).toBe(3);
+  });
+
+  it('uses an observed discounted line extension and rejects credits', () => {
+    const discounted = normalizePriceObservation(row({
+      quantity: 3, unitPrice: 120, extendedPrice: 330,
+      packSize: '40 LB', measurementUnit: 'LB', totalPackageQuantity: 40,
+    }))!;
+    expect(discounted.normalizedUnitPrice.toNumber()).toBe(2.75);
+    const extensionOnly = normalizePriceObservation(row({
+      quantity: 3, unitPrice: null, extendedPrice: 360,
+      packSize: '40 LB', measurementUnit: 'LB', totalPackageQuantity: 40,
+    }))!;
+    expect(extensionOnly.normalizedQuantity.toNumber()).toBe(120);
+    expect(extensionOnly.purchasePrice.toNumber()).toBe(360);
+    expect(extensionOnly.normalizedUnitPrice.toNumber()).toBe(3);
+    expect(normalizePriceObservation(row({ unitPrice: -10 }))).toBeNull();
+  });
+
+  it('keeps fluid volume separate from weight and rejects unverified evidence', () => {
+    const fluid = row({ measurementUnit: 'FL OZ', totalPackageQuantity: 128, unitPrice: 20 });
+    expect(normalizePriceObservation(fluid)?.canonicalUnit).toBe('gallon');
+    expect(normalizePriceObservation(row({ fieldProvenance: { quantity: { kind: 'OBSERVED', verified: false } } }))).toBeNull();
   });
 
   it('calculates monthly volume and estimated monthly and annual impact', () => {
@@ -63,19 +118,52 @@ describe('price intelligence calculations', () => {
       row({ invoiceId: 'invoice-b', invoiceDate: new Date('2026-09-01'), unitPrice: 98, quantity: 12 }),
       row({ invoiceId: 'invoice-c', invoiceDate: now, unitPrice: 106.5, quantity: 12 }),
     ], options)[0];
-    expect(result.typicalMonthlyQuantity).toBe(12);
+    expect(result.typicalMonthlyQuantity).toBe(15.652);
     expect(result.absoluteChange).toBe(8.5);
-    expect(result.estimatedMonthlyImpact).toBe(102);
-    expect(result.estimatedAnnualImpact).toBe(1224);
+    expect(result.estimatedMonthlyImpact).toBe(133.04);
+    expect(result.estimatedAnnualImpact).toBe(1596.52);
   });
 
-  it('supports decreases and safely handles missing quantity', () => {
+  it('deduplicates observations and withholds impact for a one-time volume outlier', () => {
+    const observations = [
+      row({ quantity: 10 }),
+      row({ invoiceId: 'invoice-b', invoiceDate: new Date('2026-09-01'), unitPrice: 98, quantity: 10 }),
+      row({ invoiceId: 'invoice-c', invoiceDate: now, unitPrice: 106.5, quantity: 100 }),
+    ];
+    const result = analyzePriceObservations([...observations, observations[2]], options)[0];
+    expect(result.observationCount).toBe(3);
+    expect(result.estimatedMonthlyImpact).toBeNull();
+  });
+
+  it('never compares observations in different currencies', () => {
+    expect(analyzePriceObservations([
+      row({ currency: 'USD' }),
+      row({ invoiceId: 'invoice-b', invoiceDate: now, currency: 'CAD', unitPrice: 98 }),
+    ], options)).toEqual([]);
+  });
+
+  it('rejects missing or unverified currency instead of assuming USD', () => {
+    expect(analyzePriceObservations([
+      row({ currency: null }),
+      row({ invoiceId: 'invoice-b', invoiceDate: now, unitPrice: 98 }),
+    ], options)).toEqual([]);
+    expect(analyzePriceObservations([
+      row({ currencyProvenance: { currency: { kind: 'OBSERVED', verified: false } } }),
+      row({ invoiceId: 'invoice-b', invoiceDate: now, unitPrice: 98 }),
+    ], options)).toEqual([]);
+  });
+
+  it('supports decreases and excludes missing quantity', () => {
     const result = analyzePriceObservations([
-      row({ unitPrice: 55, quantity: null }),
-      row({ invoiceId: 'invoice-b', invoiceDate: now, unitPrice: 49, quantity: null }),
+      row({ unitPrice: 55 }),
+      row({ invoiceId: 'invoice-b', invoiceDate: now, unitPrice: 49 }),
     ], options)[0];
     expect(result.percentageChange).toBe(-10.91);
     expect(result.estimatedMonthlyImpact).toBeNull();
+    expect(analyzePriceObservations([
+      row({ quantity: null }),
+      row({ invoiceId: 'invoice-b', invoiceDate: now, quantity: null }),
+    ], options)).toEqual([]);
   });
 
   it('excludes zero and missing prices instead of producing NaN or Infinity', () => {
@@ -100,9 +188,19 @@ describe('PriceIntelligenceService', () => {
     sku: description,
     quantity: { toString: () => '12' },
     unit: 'CASE',
-    packSize: '4 x 10 lb',
+    packSize: '1 EA',
+    measurementUnit: 'EA',
+    totalPackageQuantity: { toString: () => '1' },
     unitPrice: { toString: () => String(price) },
-    invoice: invoice(`invoice-${id}`, vendorId, date),
+    extendedPrice: null,
+    productAttributes: null,
+    fieldProvenance: Object.fromEntries(['rawDescription', 'sku', 'quantity', 'unit', 'packSize', 'unitPrice'].map((field) => [field, { kind: 'OBSERVED', verified: true }])),
+    productGroupMemberships: [],
+    invoice: {
+      ...invoice(`invoice-${id}`, vendorId, date),
+      currency: 'USD',
+      fieldProvenance: { currency: { kind: 'OBSERVED', verified: true } },
+    },
   });
 
   function setup(lines: any[], requireMember = jest.fn()) {
@@ -130,6 +228,10 @@ describe('PriceIntelligenceService', () => {
       where: expect.objectContaining({
         organizationId: 'org-a',
         restaurantLocationId: location.id,
+        OR: [
+          { unitPrice: { not: null } },
+          { extendedPrice: { not: null } },
+        ],
         invoice: expect.objectContaining({ reviewStatus: 'REVIEWED' }),
       }),
     }));

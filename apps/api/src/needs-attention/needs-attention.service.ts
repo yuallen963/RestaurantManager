@@ -411,6 +411,22 @@ export class NeedsAttentionService {
       });
       return { item, persisted };
     }));
+    const currentPriceFingerprints = persistedItems
+      .filter(({ item }) => item.sourceType === 'PRICE_INTELLIGENCE')
+      .map(({ persisted }) => persisted.fingerprint);
+    // Price findings are derived, not immutable facts. If invoice evidence is
+    // corrected or ceases to be eligible, retire the prior active finding so
+    // stale prices cannot survive the next refresh.
+    await this.prisma.insight.updateMany({
+      where: {
+        organizationId: location.organizationId,
+        restaurantLocationId: location.id,
+        type: { in: ['ITEM_PRICE_INCREASE', 'REPEATED_ITEM_PRICE_INCREASE'] },
+        status: { in: [InsightStatus.ACTIVE, InsightStatus.REVIEWED] },
+        fingerprint: { notIn: currentPriceFingerprints },
+      },
+      data: { status: InsightStatus.RESOLVED, resolvedAt: new Date() },
+    });
     const visibleItems: AttentionItem[] = persistedItems
       .filter(({ persisted }) => persisted.status !== InsightStatus.DISMISSED && persisted.status !== InsightStatus.RESOLVED)
       .map(({ item, persisted }) => ({ ...item, id: persisted.id, status: persisted.status }));

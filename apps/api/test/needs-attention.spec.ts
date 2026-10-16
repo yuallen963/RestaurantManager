@@ -41,6 +41,7 @@ function setup({
       upsert: jest.fn().mockImplementation(({ create }: any) => ({ ...create, id: `insight-${create.fingerprint.slice(0, 8)}`, status: insightStatus })),
       findUnique: jest.fn(),
       update: jest.fn(),
+      updateMany: jest.fn().mockResolvedValue({ count: 0 }),
     },
   };
   const dashboardService: any = { get: jest.fn().mockResolvedValueOnce(currentDashboard).mockResolvedValueOnce(previousDashboard) };
@@ -163,6 +164,20 @@ describe('NeedsAttentionService', () => {
     const result = await dismissed.service.get('user-a', query);
     expect(result.items).toEqual([]);
     expect(dismissed.prisma.insight.upsert).toHaveBeenCalled();
+  });
+
+  it('resolves stale active price findings after supporting evidence changes', async () => {
+    const { service, prisma } = setup({ prices: [] });
+    await service.get('user-a', query);
+    expect(prisma.insight.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        organizationId: 'org-a',
+        restaurantLocationId: location.id,
+        type: { in: ['ITEM_PRICE_INCREASE', 'REPEATED_ITEM_PRICE_INCREASE'] },
+        fingerprint: { notIn: [] },
+      }),
+      data: expect.objectContaining({ status: InsightStatus.RESOLVED }),
+    }));
   });
 
   it('updates lifecycle status only after tenant authorization', async () => {

@@ -142,16 +142,24 @@ export function establishFieldProvenance(input: ExtractedInvoice): { data: Extra
 
 export function parsePackageSize(raw: string | null): ParsedPackageSize | null {
   if (!raw) return null;
-  const normalized = raw.trim().toUpperCase().replace(/×/g, 'X').replace(/\bPOUNDS?\b/g, 'LB').replace(/\s+/g, ' ');
-  const packed = normalized.match(/^(\d+(?:\.\d+)?)\s*(?:\/|X)\s*(\d+(?:\.\d+)?)\s*(LB|LBS|OZ|KG|G|CT|EA)$/);
+  const normalized = raw.trim().toUpperCase().replace(/×/g, 'X')
+    .replace(/\bFLUID\s+OUNCES?\b/g, 'FL OZ')
+    .replace(/\bPOUNDS?\b/g, 'LB').replace(/\bOUNCES?\b/g, 'OZ')
+    .replace(/\bGALLONS?\b/g, 'GAL').replace(/\bLIT(?:ER|RE)S?\b/g, 'L')
+    .replace(/\bMILLILIT(?:ER|RE)S?\b/g, 'ML')
+    .replace(/\s+/g, ' ');
+  const unitPattern = '(LB|LBS|OZ|KG|G|GAL|GALLON|FL\\s*OZ|FLOZ|L|LTR|ML|CT|EA|EACH)';
+  const packed = normalized.match(new RegExp(`^(\\d+(?:\\.\\d+)?)\\s*(?:/|X)\\s*(\\d+(?:\\.\\d+)?)\\s*${unitPattern}$`));
   if (packed) {
     const packCount = Number(packed[1]);
     const packUnitQuantity = Number(packed[2]);
-    return { packCount, packUnitQuantity, measurementUnit: packed[3] === 'LBS' ? 'LB' : packed[3], totalPackageQuantity: packCount * packUnitQuantity };
+    const measurementUnit = ({ LBS: 'LB', GALLON: 'GAL', FLOZ: 'FL OZ', LTR: 'L', EACH: 'EA' } as Record<string, string>)[packed[3].replace(/\s+/g, '')] ?? packed[3].replace(/\s+/g, ' ');
+    return { packCount, packUnitQuantity, measurementUnit, totalPackageQuantity: packCount * packUnitQuantity };
   }
-  const single = normalized.match(/^(\d+(?:\.\d+)?)\s*(LB|LBS|OZ|KG|G|CT|EA)$/);
+  const single = normalized.match(new RegExp(`^(\\d+(?:\\.\\d+)?)\\s*${unitPattern}$`));
   if (!single) return null;
-  return { packCount: null, packUnitQuantity: null, measurementUnit: single[2] === 'LBS' ? 'LB' : single[2], totalPackageQuantity: Number(single[1]) };
+  const measurementUnit = ({ LBS: 'LB', GALLON: 'GAL', FLOZ: 'FL OZ', LTR: 'L', EACH: 'EA' } as Record<string, string>)[single[2].replace(/\s+/g, '')] ?? single[2].replace(/\s+/g, ' ');
+  return { packCount: null, packUnitQuantity: null, measurementUnit, totalPackageQuantity: Number(single[1]) };
 }
 
 export function normalizeExtractedDate(value: string | null, now = new Date(), allowFuture = false): Date | null {

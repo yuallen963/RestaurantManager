@@ -8,6 +8,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../dashboard/foundation.dart';
 import '../dashboard/home_screen.dart' show formatCurrency;
 import '../expenses/foundation.dart';
+import '../needs_attention/foundation.dart';
+import '../price_intelligence/foundation.dart';
 import 'foundation.dart';
 import 'invoice_upload.dart';
 
@@ -850,6 +852,9 @@ class InvoiceReviewScreen extends ConsumerWidget {
         'markReviewed': true,
       });
       ref.invalidate(invoiceDetailProvider(invoice.id));
+      ref.invalidate(priceChangesProvider);
+      ref.invalidate(priceHistoryProvider);
+      ref.invalidate(needsAttentionProvider);
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Invoice marked reviewed')),
@@ -959,6 +964,9 @@ class InvoiceReviewScreen extends ConsumerWidget {
       },
     );
     ref.invalidate(invoiceLineItemsProvider(invoice.id));
+    ref.invalidate(priceChangesProvider);
+    ref.invalidate(priceHistoryProvider);
+    ref.invalidate(needsAttentionProvider);
   }
 }
 
@@ -1144,6 +1152,9 @@ class _InvoiceEditScreenState extends ConsumerState<InvoiceEditScreen> {
     }
     ref.invalidate(invoiceListProvider);
     ref.invalidate(invoiceDetailProvider(widget.invoice.id));
+    ref.invalidate(priceChangesProvider);
+    ref.invalidate(priceHistoryProvider);
+    ref.invalidate(needsAttentionProvider);
     if (mounted) Navigator.pop(context);
   }
 }

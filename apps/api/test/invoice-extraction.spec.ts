@@ -152,6 +152,9 @@ describe('invoice extraction', () => {
     ['40 LB', null, null, 'LB', 40],
     ['12/16 OZ', 12, 16, 'OZ', 192],
     ['20/50 CT', 20, 50, 'CT', 1000],
+    ['6 x 10 fl oz', 6, 10, 'FL OZ', 60],
+    ['4/1 gallon', 4, 1, 'GAL', 4],
+    ['12 x 500 ml', 12, 500, 'ML', 6000],
   ])('parses unambiguous package notation %s', (raw, count, quantity, unit, total) => {
     expect(parsePackageSize(raw)).toEqual({ packCount: count, packUnitQuantity: quantity, measurementUnit: unit, totalPackageQuantity: total });
   });
@@ -230,7 +233,8 @@ describe('invoice extraction', () => {
   it('records reviewedBy and reviewedAt only after required fields are present', async () => {
     const first = { id: 'inv', organizationId: 'org', reviewStatus: ReviewStatus.NEEDS_REVIEW, vendorId: 'vendor', extractedVendorName: 'Sysco', invoiceDate: new Date('2026-10-04'), total: 106 };
     const reviewed = { ...first, reviewStatus: ReviewStatus.REVIEWED, reviewedByUserId: 'user' };
-    const prisma: any = { invoice: { findUnique: jest.fn().mockResolvedValue(first), update: jest.fn().mockResolvedValueOnce(first).mockResolvedValueOnce(reviewed) }, invoiceLineItem: { findFirst: jest.fn().mockResolvedValue(null) }, vendor: { findFirst: jest.fn().mockResolvedValue({ id: 'vendor', organizationId: 'org' }) } };
+    const prisma: any = { invoice: { findUnique: jest.fn().mockResolvedValue(first), update: jest.fn().mockResolvedValueOnce(first).mockResolvedValueOnce(reviewed) }, invoiceLineItem: { findFirst: jest.fn().mockResolvedValue(null), findMany: jest.fn().mockResolvedValue([]), update: jest.fn() }, vendor: { findFirst: jest.fn().mockResolvedValue({ id: 'vendor', organizationId: 'org' }) } };
+    prisma.$transaction = jest.fn((callback: any) => callback(prisma));
     const audit: any = { log: jest.fn() };
     const service = new InvoicesService(prisma, { requireMember: jest.fn() } as any, audit, {} as any, {} as any);
     const result = await service.review('user', 'inv', { markReviewed: true });

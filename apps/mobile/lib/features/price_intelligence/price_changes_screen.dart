@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../dashboard/foundation.dart';
 import '../dashboard/home_screen.dart';
+import '../invoices/invoice_screens.dart';
 import 'foundation.dart';
 import '../product_matches/product_matches_screen.dart';
 import '../savings/savings_screen.dart';
@@ -91,6 +92,11 @@ class _PriceChangesContent extends ConsumerWidget {
               .select(selected),
         ),
         const SizedBox(height: 12),
+        const Align(
+          alignment: Alignment.centerRight,
+          child: DateRangeSelector(),
+        ),
+        const SizedBox(height: 8),
         Row(
           children: [
             Expanded(
@@ -116,6 +122,15 @@ class _PriceChangesContent extends ConsumerWidget {
           ],
         ),
         const SizedBox(height: 12),
+        if (data.excludedObservations > 0)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: Text(
+              '${data.excludedObservations} reviewed invoice ${data.excludedObservations == 1 ? 'line was' : 'lines were'} excluded because verified quantity, packaging, price, or product identity was incomplete.',
+              key: const Key('price-exclusions'),
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ),
         if (data.items.isEmpty)
           const Padding(
             padding: EdgeInsets.only(top: 48),
@@ -160,14 +175,13 @@ class _PriceChangeCard extends StatelessWidget {
                 ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
               ),
               Text(item.vendorName),
-              if (item.packSize != null)
-                Text('Package: ${item.packSize}'),
+              if (item.packSize != null) Text('Package: ${item.packSize}'),
               const SizedBox(height: 10),
               Row(
                 children: [
                   Expanded(
                     child: Text(
-                      '${priceCurrency(item.previousUnitPrice)} → ${priceCurrency(item.currentUnitPrice)} / ${item.unit}',
+                      '${priceCurrency(item.previousUnitPrice, item.currency)} → ${priceCurrency(item.currentUnitPrice, item.currency)} / ${item.unit}',
                     ),
                   ),
                   Text(
@@ -196,11 +210,11 @@ String _impactLabel(PriceChangeItem item) {
   final basis = item.typicalMonthlyQuantity == null
       ? 'observed volume unavailable'
       : item.typicalMonthlyQuantity! < 1
-          ? 'limited observed volume'
-          : 'based on ~${item.typicalMonthlyQuantity!.toStringAsFixed(1)} units/month';
+      ? 'limited observed volume'
+      : 'based on ~${item.typicalMonthlyQuantity!.toStringAsFixed(1)} units/month';
   final estimate = item.isIncrease
-      ? 'Est. added cost +${priceCurrency(impact)}/month'
-      : 'Est. savings -${priceCurrency(impact.abs())}/month';
+      ? 'Est. added cost +${priceCurrency(impact, item.currency)}/month'
+      : 'Est. savings -${priceCurrency(impact.abs(), item.currency)}/month';
   return '$estimate ($basis; estimate, not guaranteed)';
 }
 
@@ -247,9 +261,18 @@ class _PriceHistoryContent extends StatelessWidget {
           'Purchasing unit',
           '${item.unit}${item.packSize == null ? '' : ' • ${item.packSize}'}',
         ),
-        _details('Current price', priceCurrency(item.currentUnitPrice)),
-        _details('Previous price', priceCurrency(item.previousUnitPrice)),
-        _details('Absolute change', signedCurrency(item.absoluteChange)),
+        _details(
+          'Current price',
+          priceCurrency(item.currentUnitPrice, item.currency),
+        ),
+        _details(
+          'Previous price',
+          priceCurrency(item.previousUnitPrice, item.currency),
+        ),
+        _details(
+          'Absolute change',
+          signedCurrency(item.absoluteChange, item.currency),
+        ),
         _details(
           'Percentage change',
           '${item.percentageChange > 0 ? '+' : ''}${item.percentageChange.toStringAsFixed(1)}%',
@@ -264,13 +287,26 @@ class _PriceHistoryContent extends StatelessWidget {
           'Estimated monthly impact',
           item.estimatedMonthlyImpact == null
               ? 'Unavailable'
-              : signedCurrency(item.estimatedMonthlyImpact!),
+              : signedCurrency(item.estimatedMonthlyImpact!, item.currency),
+        ),
+        _details(
+          'Evidence',
+          '${item.observationCount} reviewed invoice observations',
+        ),
+        Padding(
+          padding: const EdgeInsets.only(bottom: 12),
+          child: Text(
+            item.impactExplanation ??
+                'Not enough purchase history to estimate monthly impact.',
+            key: const Key('impact-explanation'),
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
         ),
         _details(
           'Estimated annual impact',
           item.estimatedAnnualImpact == null
               ? 'Unavailable'
-              : signedCurrency(item.estimatedAnnualImpact!),
+              : signedCurrency(item.estimatedAnnualImpact!, item.currency),
         ),
         const SizedBox(height: 18),
         Text(
@@ -295,13 +331,19 @@ class _PriceHistoryContent extends StatelessWidget {
           ListTile(
             key: Key('price-point-${point.invoiceId}'),
             contentPadding: EdgeInsets.zero,
-            title: Text(priceCurrency(point.unitPrice)),
+            title: Text(priceCurrency(point.unitPrice, point.currency)),
             subtitle: Text(
-              '${shortPriceDate(point.date)} • Source invoice ${point.invoiceId.substring(0, math.min(8, point.invoiceId.length))}',
+              '${shortPriceDate(point.date)} • ${point.rawDescription.isEmpty ? 'Verified invoice line' : point.rawDescription}\nSource invoice ${point.invoiceId.substring(0, math.min(8, point.invoiceId.length))}',
             ),
             trailing: point.quantity == null
                 ? null
                 : Text('Qty ${compactNumber(point.quantity!)}'),
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => InvoiceDetailScreen(invoiceId: point.invoiceId),
+              ),
+            ),
           ),
       ],
     );
@@ -380,14 +422,14 @@ class PriceHistoryChartPainter extends CustomPainter {
       oldDelegate.points != points || oldDelegate.color != color;
 }
 
-String priceCurrency(double value) =>
-    '\$${value.abs().toStringAsFixed(2).replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (_) => ',')}';
-String signedCurrency(double value) =>
+String priceCurrency(double value, [String currency = 'USD']) =>
+    '${currency == 'USD' ? '\$' : '$currency '}${value.abs().toStringAsFixed(2).replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (_) => ',')}';
+String signedCurrency(double value, [String currency = 'USD']) =>
     '${value > 0
         ? '+'
         : value < 0
         ? '-'
-        : ''}${priceCurrency(value)}';
+        : ''}${priceCurrency(value, currency)}';
 String compactNumber(double value) => value == value.roundToDouble()
     ? value.toStringAsFixed(0)
     : value.toStringAsFixed(1);
