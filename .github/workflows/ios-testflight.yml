@@ -39,9 +39,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          xcodebuild -version
+          xcode_output="$(xcodebuild -version)"
+          printf '%s\n' "$xcode_output"
           sdk_version="$(xcrun --sdk iphoneos --show-sdk-version)"
-          xcode_version="$(xcodebuild -version | awk '/^Xcode / {print $2; exit}')"
+          xcode_version="$(awk '/^Xcode / {print $2; exit}' <<< "$xcode_output")"
           xcode_major="${xcode_version%%.*}"
           sdk_major="${sdk_version%%.*}"
           if [[ ! "$xcode_major" =~ ^[0-9]+$ || "$xcode_major" -lt 26 ]]; then
