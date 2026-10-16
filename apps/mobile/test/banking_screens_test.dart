@@ -71,7 +71,7 @@ class FakeBankingRepository extends BankingRepository {
       reauthenticationCalls = 0;
   bool failSync = false;
   bool failConfirm = false;
-  String? assignedLocation, confirmedInvoice, reversedTransaction;
+  String? assignedLocation, confirmedInvoice, reversedTransaction, bulkAnchor;
   Map<String, dynamic>? reviewData;
   List<String>? bulkIds;
   BulkReviewResult bulkResult = const BulkReviewResult(
@@ -81,6 +81,7 @@ class FakeBankingRepository extends BankingRepository {
   );
   final transactionStatuses = <String?>[];
   Map<String?, List<BankTransactionData>> transactionsByStatus = const {};
+  List<BankTransactionData> similarItems = const [];
   @override
   Future<BankLinkSetup> linkToken(String organizationId) async =>
       const BankLinkSetup('demo-link', true);
@@ -140,10 +141,12 @@ class FakeBankingRepository extends BankingRepository {
 
   @override
   Future<List<BankTransactionData>> similarTransactions(String id) async =>
-      transactionsByStatus.values
-          .expand((items) => items)
-          .where((item) => item.id == id)
-          .toList();
+      similarItems.isNotEmpty
+      ? similarItems
+      : transactionsByStatus.values
+            .expand((items) => items)
+            .where((item) => item.id == id)
+            .toList();
 
   @override
   Future<void> review(
@@ -181,8 +184,10 @@ class FakeBankingRepository extends BankingRepository {
     bool autoConfirmFuture = false,
     double? minimumAmount,
     double? maximumAmount,
+    String? groupAnchorId,
   }) async {
     bulkIds = ids;
+    bulkAnchor = groupAnchorId;
     return bulkResult;
   }
 }
@@ -855,4 +860,182 @@ void main() {
       expect(checkboxes.map((checkbox) => checkbox.value), [false, true]);
     },
   );
+
+  testWidgets('similar review selects only the opened transaction by default', (
+    tester,
+  ) async {
+    BankTransactionData transaction(String id, int day, double amount) =>
+        BankTransactionData(
+          id: id,
+          merchant: 'Robinhood',
+          description: 'ROBINHOOD',
+          amount: amount,
+          postedDate: DateTime(2026, 10, day),
+          status: 'NEEDS_REVIEW',
+          categorizationSource: 'PROVIDER',
+          matchConfidence: 'NO_MATCH',
+          pending: false,
+          restaurantLocationId: downtown.id,
+          bankAccountId: 'account',
+          providerCategoryId: 'TRANSFER',
+          direction: 'OUTFLOW',
+        );
+    final opened = transaction('opened', 14, 43);
+    final second = transaction('second', 12, 85);
+    final third = transaction('third', 10, 150);
+    final repository = FakeBankingRepository()
+      ..similarItems = [opened, second, third];
+
+    await tester.pumpWidget(transactionsApp(repository, [opened]));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Robinhood').first);
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('Personal / Transfer'));
+    await tester.tap(find.text('Personal / Transfer'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Outgoing — Money leaving your bank'), findsOneWidget);
+    expect(find.text('Decision: Personal / Transfer'), findsOneWidget);
+    expect(find.textContaining('Selected: 1 of 3'), findsOneWidget);
+    expect(find.text('Apply to 1 Transaction'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('similar-transaction-second')));
+    await tester.pump();
+    expect(find.textContaining('Selected: 2 of 3'), findsOneWidget);
+    expect(find.text('Apply to 2 Transactions'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('similar-transaction-opened')));
+    await tester.pump();
+    expect(find.textContaining('Selected: 1 of 3'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('select-all-similar')));
+    await tester.pump();
+    expect(find.textContaining('Selected: 3 of 3'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('deselect-all-similar')));
+    await tester.pump();
+    expect(find.textContaining('Selected: 0 of 3'), findsOneWidget);
+    final emptyButton = tester.widget<FilledButton>(
+      find.byKey(const Key('confirm-similar-selection')),
+    );
+    expect(emptyButton.onPressed, isNull);
+
+    await tester.tap(find.byKey(const Key('similar-transaction-opened')));
+    await tester.tap(find.byKey(const Key('similar-transaction-second')));
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('confirm-similar-selection')));
+    await tester.pumpAndSettle();
+    expect(repository.bulkIds, containsAllInOrder(['opened', 'second']));
+    expect(repository.bulkIds, isNot(contains('third')));
+    expect(repository.bulkAnchor, 'opened');
+  });
+
+  testWidgets('group selection supports more than one hundred transactions', (
+    tester,
+  ) async {
+    final items = List.generate(
+      101,
+      (index) => BankTransactionData(
+        id: 'row-$index',
+        merchant: 'Robinhood',
+        description: 'ROBINHOOD',
+        amount: 10 + index.toDouble(),
+        postedDate: DateTime(2026, 10, 14).subtract(Duration(days: index)),
+        status: 'NEEDS_REVIEW',
+        categorizationSource: 'PROVIDER',
+        matchConfidence: 'NO_MATCH',
+        pending: false,
+        restaurantLocationId: downtown.id,
+        direction: 'OUTFLOW',
+      ),
+    );
+    final repository = FakeBankingRepository()..similarItems = items;
+    await tester.pumpWidget(transactionsApp(repository, [items.first]));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Robinhood').first);
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('Personal / Transfer'));
+    await tester.tap(find.text('Personal / Transfer'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Selected: 1 of 101'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('select-all-similar')));
+    await tester.pump();
+    expect(find.text('Apply to 101 Transactions'), findsOneWidget);
+  });
+
+  testWidgets('complete grouped failure stays open without false success', (
+    tester,
+  ) async {
+    BankTransactionData transaction(String id, int day) => BankTransactionData(
+      id: id,
+      merchant: 'Robinhood',
+      description: 'ROBINHOOD',
+      amount: 50,
+      postedDate: DateTime(2026, 10, day),
+      status: 'NEEDS_REVIEW',
+      categorizationSource: 'PROVIDER',
+      matchConfidence: 'NO_MATCH',
+      pending: false,
+      restaurantLocationId: downtown.id,
+      direction: 'OUTFLOW',
+    );
+    final opened = transaction('opened', 14);
+    final second = transaction('second', 12);
+    final repository = FakeBankingRepository()
+      ..similarItems = [opened, second]
+      ..bulkResult = const BulkReviewResult(
+        requestedCount: 2,
+        confirmedCount: 0,
+        failedIds: ['opened', 'second'],
+      );
+    await tester.pumpWidget(transactionsApp(repository, [opened]));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Robinhood').first);
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('Personal / Transfer'));
+    await tester.tap(find.text('Personal / Transfer'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('select-all-similar')));
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('confirm-similar-selection')));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.textContaining(
+        'None of the selected transactions could be completed',
+      ),
+      findsOneWidget,
+    );
+    expect(find.text('Personal / Transfer'), findsOneWidget);
+  });
+
+  testWidgets('incoming transactions never offer expense actions', (
+    tester,
+  ) async {
+    final incoming = BankTransactionData(
+      id: 'incoming',
+      merchant: 'Robinhood',
+      description: 'ROBINHOOD CREDIT',
+      amount: -50,
+      postedDate: DateTime(2026, 10, 14),
+      status: 'NEEDS_REVIEW',
+      categorizationSource: 'PROVIDER',
+      matchConfidence: 'NO_MATCH',
+      pending: false,
+      restaurantLocationId: downtown.id,
+      direction: 'INFLOW',
+    );
+    await tester.pumpWidget(
+      transactionsApp(FakeBankingRepository(), [incoming]),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Robinhood').first);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('incoming-review-guidance')), findsOneWidget);
+    expect(find.text('Add to Expenses'), findsNothing);
+    expect(find.byKey(const Key('auto-confirm-future')), findsNothing);
+    expect(find.byKey(const Key('review-vendor')), findsNothing);
+    expect(find.byKey(const Key('review-category')), findsNothing);
+    expect(find.text('Personal / Transfer'), findsOneWidget);
+    expect(find.text('Review Later'), findsOneWidget);
+  });
 }

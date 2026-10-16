@@ -148,6 +148,7 @@ class BankTransactionData {
     this.bankAccountId,
     this.bankAccountName,
     this.providerCategoryId,
+    this.direction,
   });
   final String id,
       merchant,
@@ -165,6 +166,11 @@ class BankTransactionData {
       restaurantLocationId,
       invoiceNumber;
   final String? bankAccountId, bankAccountName, providerCategoryId;
+  final String? direction;
+  bool get isOutgoing =>
+      direction == 'OUTFLOW' || (direction == null && amount > 0);
+  bool get isIncoming =>
+      direction == 'INFLOW' || (direction == null && amount <= 0);
   final SuggestedInvoiceData? suggestedInvoice;
   factory BankTransactionData.fromJson(Map<String, dynamic> json) {
     final category = json['category'] as Map?;
@@ -187,6 +193,9 @@ class BankTransactionData {
       bankAccountId: json['bankAccountId'] as String?,
       bankAccountName: account?['name'] as String?,
       providerCategoryId: json['providerCategoryId'] as String?,
+      direction:
+          json['direction'] as String? ??
+          (_money(json['amount']) > 0 ? 'OUTFLOW' : 'INFLOW'),
       categoryId: json['categoryId'] as String?,
       categoryName: category?['name'] as String?,
       vendorId: json['vendorId'] as String?,
@@ -414,6 +423,7 @@ class BankingRepository {
     bool autoConfirmFuture = false,
     double? minimumAmount,
     double? maximumAmount,
+    String? groupAnchorId,
   }) async {
     final response = await dio.post(
       '/bank-transactions/bulk-review',
@@ -428,6 +438,7 @@ class BankingRepository {
         'autoConfirmFuture': autoConfirmFuture,
         'minimumAmount': minimumAmount,
         'maximumAmount': maximumAmount,
+        'groupAnchorId': groupAnchorId,
       },
     );
     return BulkReviewResult.fromJson(

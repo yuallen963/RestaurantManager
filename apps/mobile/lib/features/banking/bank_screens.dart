@@ -807,6 +807,144 @@ class TransactionReviewSheet extends ConsumerStatefulWidget {
       _TransactionReviewSheetState();
 }
 
+class _SimilarTransactionSelectionDialog extends StatefulWidget {
+  const _SimilarTransactionSelectionDialog({
+    required this.transactions,
+    required this.openedTransactionId,
+    required this.decision,
+  });
+
+  final List<BankTransactionData> transactions;
+  final String openedTransactionId;
+  final BankReviewDecision decision;
+
+  @override
+  State<_SimilarTransactionSelectionDialog> createState() =>
+      _SimilarTransactionSelectionDialogState();
+}
+
+class _SimilarTransactionSelectionDialogState
+    extends State<_SimilarTransactionSelectionDialog> {
+  late final Set<String> selectedIds = {widget.openedTransactionId};
+
+  String get decisionLabel => switch (widget.decision) {
+    BankReviewDecision.expense => 'Add to Expenses',
+    BankReviewDecision.personalTransfer => 'Personal / Transfer',
+    BankReviewDecision.reviewLater => 'Review Later',
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    final transactions = widget.transactions;
+    final selected = transactions
+        .where((transaction) => selectedIds.contains(transaction.id))
+        .toList();
+    final selectedTotal = selected.fold<double>(
+      0,
+      (sum, transaction) => sum + transaction.amount,
+    );
+    final allTotal = transactions.fold<double>(
+      0,
+      (sum, transaction) => sum + transaction.amount,
+    );
+    final dates = transactions.map((item) => item.postedDate).toList()..sort();
+    final direction = transactions.first.isOutgoing ? 'Outgoing' : 'Incoming';
+    final directionHelp = transactions.first.isOutgoing
+        ? 'Money leaving your bank'
+        : 'Money entering your bank';
+    final count = selectedIds.length;
+    final actionLabel =
+        'Apply to $count ${count == 1 ? 'Transaction' : 'Transactions'}';
+
+    return AlertDialog(
+      title: Text(transactions.first.merchant),
+      content: SizedBox(
+        width: double.maxFinite,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '$direction — $directionHelp',
+              key: const Key('group-direction'),
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 6),
+            Text('${transactions.length} matching transactions'),
+            Text(
+              '${_currency(allTotal)} total • ${_date(dates.first)}–${_date(dates.last)}',
+            ),
+            Text('Decision: $decisionLabel'),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                TextButton(
+                  key: const Key('select-all-similar'),
+                  onPressed: () => setState(
+                    () => selectedIds.addAll(
+                      transactions.map((transaction) => transaction.id),
+                    ),
+                  ),
+                  child: const Text('Select All'),
+                ),
+                TextButton(
+                  key: const Key('deselect-all-similar'),
+                  onPressed: selectedIds.isEmpty
+                      ? null
+                      : () => setState(selectedIds.clear),
+                  child: const Text('Deselect All'),
+                ),
+              ],
+            ),
+            Text(
+              'Selected: $count of ${transactions.length} • ${_currency(selectedTotal)}',
+              key: const Key('group-selection-summary'),
+            ),
+            const SizedBox(height: 8),
+            Flexible(
+              child: ListView.builder(
+                itemCount: transactions.length,
+                itemBuilder: (context, index) {
+                  final item = transactions[index];
+                  return CheckboxListTile(
+                    key: Key('similar-transaction-${item.id}'),
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    value: selectedIds.contains(item.id),
+                    onChanged: (checked) => setState(() {
+                      checked == true
+                          ? selectedIds.add(item.id)
+                          : selectedIds.remove(item.id);
+                    }),
+                    title: Text(_date(item.postedDate)),
+                    subtitle: Text(
+                      '${item.merchant} • ${item.pending ? 'Waiting to Post' : 'Needs Review'}',
+                    ),
+                    secondary: Text(_currency(item.amount)),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          key: const Key('confirm-similar-selection'),
+          onPressed: selectedIds.isEmpty
+              ? null
+              : () => Navigator.pop(context, Set<String>.of(selectedIds)),
+          child: Text(actionLabel),
+        ),
+      ],
+    );
+  }
+}
+
 class _TransactionReviewSheetState
     extends ConsumerState<TransactionReviewSheet> {
   String? vendorId, categoryId, locationId;
@@ -828,70 +966,26 @@ class _TransactionReviewSheetState
     try {
       final repository = ref.read(bankingRepositoryProvider);
       var ids = <String>[widget.transaction.id];
+      var groupedSelection = false;
       if (decision != BankReviewDecision.reviewLater) {
         final similar = await repository.similarTransactions(
           widget.transaction.id,
         );
         if (similar.length > 1 && mounted) {
-          final total = similar.fold<double>(
-            0,
-            (sum, item) => sum + item.amount,
-          );
-          final dates = similar.map((item) => item.postedDate).toList()..sort();
-          final applyAll = await showDialog<bool>(
+          final selectedIds = await showDialog<Set<String>>(
             context: context,
-            builder: (dialogContext) => AlertDialog(
-              title: Text('${similar.length} similar transactions'),
-              content: SizedBox(
-                width: double.maxFinite,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Text(
-                      'Same restaurant, bank account, merchant, direction, transaction type, pending state, and review status.',
-                    ),
-                    Text(
-                      '${_currency(total)} total • ${_date(dates.first)}–${_date(dates.last)} • ${widget.transaction.pending ? 'Waiting to Post' : 'Needs Review'}',
-                    ),
-                    const SizedBox(height: 12),
-                    SizedBox(
-                      height: 280,
-                      child: ListView(
-                        shrinkWrap: true,
-                        children: similar
-                            .map(
-                              (item) => ListTile(
-                                dense: true,
-                                title: Text(item.merchant),
-                                subtitle: Text(
-                                  '${_date(item.postedDate)} • ${item.pending ? 'Waiting to Post' : 'Needs Review'}',
-                                ),
-                                trailing: Text(_currency(item.amount)),
-                              ),
-                            )
-                            .toList(),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(dialogContext, false),
-                  child: const Text('This Transaction Only'),
-                ),
-                FilledButton(
-                  onPressed: () => Navigator.pop(dialogContext, true),
-                  child: Text('Apply to ${similar.length}'),
-                ),
-              ],
+            builder: (_) => _SimilarTransactionSelectionDialog(
+              transactions: similar,
+              openedTransactionId: widget.transaction.id,
+              decision: decision,
             ),
           );
-          if (applyAll == null) return;
-          if (applyAll) ids = similar.map((item) => item.id).toList();
+          if (selectedIds == null) return;
+          ids = selectedIds.toList();
+          groupedSelection = true;
         }
       }
-      if (ids.length == 1) {
+      if (ids.length == 1 && !groupedSelection) {
         await repository.review(
           ids.single,
           vendorId: vendorId,
@@ -922,7 +1016,17 @@ class _TransactionReviewSheetState
           maximumAmount: autoConfirmFuture
               ? widget.transaction.amount * 2
               : null,
+          groupAnchorId: groupedSelection ? widget.transaction.id : null,
         );
+        if (result.confirmedCount == 0) {
+          if (mounted) {
+            setState(
+              () => actionError =
+                  'None of the selected transactions could be completed. They still need review.',
+            );
+          }
+          return;
+        }
         if (result.failedIds.isNotEmpty && mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
@@ -1095,34 +1199,36 @@ class _TransactionReviewSheetState
                       .toList(),
                   onChanged: (value) => setState(() => locationId = value),
                 ),
-                DropdownButtonFormField<String>(
-                  key: const Key('review-vendor'),
-                  initialValue: vendorId,
-                  decoration: const InputDecoration(labelText: 'Vendor'),
-                  items: options.vendors
-                      .map(
-                        (item) => DropdownMenuItem(
-                          value: item.id,
-                          child: Text(item.name),
-                        ),
-                      )
-                      .toList(),
-                  onChanged: (value) => setState(() => vendorId = value),
-                ),
-                DropdownButtonFormField<String>(
-                  key: const Key('review-category'),
-                  initialValue: categoryId,
-                  decoration: const InputDecoration(labelText: 'Category'),
-                  items: options.categories
-                      .map(
-                        (item) => DropdownMenuItem(
-                          value: item.id,
-                          child: Text(item.name),
-                        ),
-                      )
-                      .toList(),
-                  onChanged: (value) => setState(() => categoryId = value),
-                ),
+                if (widget.transaction.isOutgoing) ...[
+                  DropdownButtonFormField<String>(
+                    key: const Key('review-vendor'),
+                    initialValue: vendorId,
+                    decoration: const InputDecoration(labelText: 'Vendor'),
+                    items: options.vendors
+                        .map(
+                          (item) => DropdownMenuItem(
+                            value: item.id,
+                            child: Text(item.name),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: (value) => setState(() => vendorId = value),
+                  ),
+                  DropdownButtonFormField<String>(
+                    key: const Key('review-category'),
+                    initialValue: categoryId,
+                    decoration: const InputDecoration(labelText: 'Category'),
+                    items: options.categories
+                        .map(
+                          (item) => DropdownMenuItem(
+                            value: item.id,
+                            child: Text(item.name),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: (value) => setState(() => categoryId = value),
+                  ),
+                ],
                 SwitchListTile(
                   contentPadding: EdgeInsets.zero,
                   title: const Text(
@@ -1131,19 +1237,20 @@ class _TransactionReviewSheetState
                   value: createRule,
                   onChanged: (value) => setState(() => createRule = value),
                 ),
-                SwitchListTile(
-                  key: const Key('auto-confirm-future'),
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('Automatically Track Future Expenses'),
-                  subtitle: const Text(
-                    'Optional and off by default. FundWell can automatically add future purchases from this approved business to Expenses. Unusual or uncertain purchases still require review.',
+                if (widget.transaction.isOutgoing)
+                  SwitchListTile(
+                    key: const Key('auto-confirm-future'),
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Automatically Track Future Expenses'),
+                    subtitle: const Text(
+                      'Optional and off by default. FundWell can automatically add future purchases from this approved business to Expenses. Unusual or uncertain purchases still require review.',
+                    ),
+                    value: autoConfirmFuture,
+                    onChanged: (value) => setState(() {
+                      autoConfirmFuture = value;
+                      if (value) createRule = true;
+                    }),
                   ),
-                  value: autoConfirmFuture,
-                  onChanged: (value) => setState(() {
-                    autoConfirmFuture = value;
-                    if (value) createRule = true;
-                  }),
-                ),
                 if (widget.transaction.status == 'MATCHED_EXPENSE')
                   Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1220,7 +1327,13 @@ class _TransactionReviewSheetState
                   Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      if (!widget.transaction.pending) ...[
+                      if (widget.transaction.isIncoming) ...[
+                        const Text(
+                          'Incoming — Money entering your bank. You can mark this as Personal / Transfer or review it later. It will not be counted as restaurant revenue automatically.',
+                          key: Key('incoming-review-guidance'),
+                        ),
+                        const SizedBox(height: 10),
+                      ] else if (!widget.transaction.pending) ...[
                         const Text(
                           'Adding this counts the transaction as a business expense in your financial reports. It will not affect your bank account.',
                         ),
@@ -1238,19 +1351,21 @@ class _TransactionReviewSheetState
                               child: const Text('Personal / Transfer'),
                             ),
                           ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: FilledButton(
-                              onPressed: saving
-                                  ? null
-                                  : () => save(BankReviewDecision.expense),
-                              child: Text(
-                                widget.transaction.pending
-                                    ? 'Save — Waiting to Post'
-                                    : 'Add to Expenses',
+                          if (widget.transaction.isOutgoing) ...[
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: FilledButton(
+                                onPressed: saving
+                                    ? null
+                                    : () => save(BankReviewDecision.expense),
+                                child: Text(
+                                  widget.transaction.pending
+                                      ? 'Save — Waiting to Post'
+                                      : 'Add to Expenses',
+                                ),
                               ),
                             ),
-                          ),
+                          ],
                         ],
                       ),
                       TextButton(

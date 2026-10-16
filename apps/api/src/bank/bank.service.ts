@@ -278,14 +278,14 @@ export class BankService {
     const rows = await this.prisma.bankTransaction.findMany({ where: { organizationId: query.organizationId, restaurantLocationId: query.restaurantLocationId, reconciliationStatus: query.status, removedAt: null }, include: { category: { select: { id: true, name: true } }, vendor: { select: { id: true, name: true } }, invoice: { select: { id: true, invoiceNumber: true } }, bankAccount: { select: { id: true, name: true, mask: true } } }, orderBy: [{ postedDate: 'desc' }, { id: 'asc' }] });
     const suggested = await this.prisma.invoice.findMany({ where: { id: { in: rows.map((row) => row.suggestedInvoiceId).filter(Boolean) as string[] }, organizationId: query.organizationId }, select: { id: true, invoiceNumber: true, total: true } });
     const byId = new Map(suggested.map((invoice) => [invoice.id, invoice]));
-    return rows.map((row) => ({ ...row, suggestedInvoice: row.suggestedInvoiceId ? byId.get(row.suggestedInvoiceId) ?? null : null }));
+    return rows.map((row) => ({ ...row, direction: row.amount.gt(0) ? BankTransactionDirection.OUTFLOW : BankTransactionDirection.INFLOW, suggestedInvoice: row.suggestedInvoiceId ? byId.get(row.suggestedInvoiceId) ?? null : null }));
   }
 
   async similarTransactions(userId: string, id: string) {
     const transaction = await this.transaction(userId, id);
     if (!transaction.merchantNameNormalized) return [];
     const amount = new Prisma.Decimal(transaction.amount);
-    return this.prisma.bankTransaction.findMany({ where: {
+    const rows = await this.prisma.bankTransaction.findMany({ where: {
       organizationId: transaction.organizationId,
       restaurantLocationId: transaction.restaurantLocationId,
       bankAccountId: transaction.bankAccountId,
@@ -297,6 +297,7 @@ export class BankService {
       expenseId: null, invoiceId: null, suggestedInvoiceId: null, removedAt: null,
       amount: amount.gt(0) ? { gt: 0 } : { lte: 0 },
     }, include: { category: { select: { id: true, name: true } }, vendor: { select: { id: true, name: true } }, bankAccount: { select: { id: true, name: true, mask: true } } }, orderBy: [{ postedDate: 'desc' }, { id: 'asc' }] });
+    return rows.map((row) => ({ ...row, direction: row.amount.gt(0) ? BankTransactionDirection.OUTFLOW : BankTransactionDirection.INFLOW }));
   }
 
   async review(userId: string, id: string, data: ReviewBankTransactionDto) {
@@ -364,21 +365,28 @@ export class BankService {
     await this.organization(userId, rows[0].organizationId);
     const reviewData: ReviewBankTransactionDto = { ...data };
     delete (reviewData as any).ids;
+    delete (reviewData as any).groupAnchorId;
     const results = [];
     const failures: Array<{ id: string; message: string }> = [];
-    let firstError: unknown;
-    for (const id of uniqueIds) {
+    let eligibleIds = uniqueIds;
+    if (data.groupAnchorId) {
+      const candidates = await this.similarTransactions(userId, data.groupAnchorId);
+      const candidateIds = new Set(candidates.map((candidate) => candidate.id));
+      eligibleIds = uniqueIds.filter((id) => candidateIds.has(id));
+      for (const id of uniqueIds) {
+        if (!candidateIds.has(id)) failures.push({ id, message: 'Transaction is no longer eligible for this group' });
+      }
+    }
+    for (const id of eligibleIds) {
       try {
         results.push(await this.review(userId, id, reviewData));
       } catch (error) {
-        firstError ??= error;
         failures.push({
           id,
           message: error instanceof Error ? error.message : 'Unable to review transaction',
         });
       }
     }
-    if (!results.length && firstError) throw firstError;
     return {
       requestedCount: uniqueIds.length,
       count: results.length,

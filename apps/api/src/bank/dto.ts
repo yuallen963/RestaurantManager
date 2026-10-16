@@ -22,6 +22,7 @@ export class ReviewBankTransactionDto {
 }
 export class BulkReviewBankTransactionsDto extends ReviewBankTransactionDto {
   @IsArray() @ArrayMinSize(1) @ArrayMaxSize(500) @IsUUID('4', { each: true }) ids!: string[];
+  @IsOptional() @IsUUID() groupAnchorId?: string;
 }
 export class UpdateMerchantRuleDto {
   @IsOptional() @IsBoolean() active?: boolean;

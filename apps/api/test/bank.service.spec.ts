@@ -305,6 +305,101 @@ describe('bank transaction foundation', () => {
     );
   });
 
+  it('revalidates explicit grouped ids and never broadens the selection', async () => {
+    const { service, prisma } = setup();
+    const anchorId = '00000000-0000-4000-8000-000000000001';
+    const selectedId = '00000000-0000-4000-8000-000000000002';
+    const unselectedId = '00000000-0000-4000-8000-000000000003';
+    prisma.bankTransaction.findMany
+      .mockResolvedValueOnce([
+        { id: anchorId, organizationId: 'org-a', restaurantLocationId: 'location-a' },
+        { id: selectedId, organizationId: 'org-a', restaurantLocationId: 'location-a' },
+      ])
+      .mockResolvedValueOnce([
+        { id: anchorId, amount: new Prisma.Decimal(20) },
+        { id: selectedId, amount: new Prisma.Decimal(30) },
+        { id: unselectedId, amount: new Prisma.Decimal(40) },
+      ]);
+    prisma.bankTransaction.findUnique.mockResolvedValue({
+      id: anchorId,
+      organizationId: 'org-a',
+      restaurantLocationId: 'location-a',
+      bankAccountId: 'account-a',
+      merchantNameNormalized: 'Robinhood',
+      providerCategoryId: 'TRANSFER',
+      providerCategory: 'Transfer',
+      amount: new Prisma.Decimal(20),
+      pending: false,
+    });
+    const review = jest.spyOn(service, 'review').mockImplementation(async (_userId, id) => ({ id }) as any);
+
+    await expect(service.bulkReview('user-a', {
+      ids: [anchorId, selectedId],
+      groupAnchorId: anchorId,
+      decision: BankReviewDecision.PERSONAL_TRANSFER,
+    })).resolves.toEqual(expect.objectContaining({ requestedCount: 2, count: 2, failedCount: 0 }));
+    expect(review.mock.calls.map((call) => call[1])).toEqual([anchorId, selectedId]);
+    expect(review.mock.calls.map((call) => call[1])).not.toContain(unselectedId);
+  });
+
+  it('reports a transaction that leaves the previewed group before confirmation', async () => {
+    const { service, prisma } = setup();
+    const anchorId = '00000000-0000-4000-8000-000000000001';
+    const staleId = '00000000-0000-4000-8000-000000000002';
+    prisma.bankTransaction.findMany
+      .mockResolvedValueOnce([
+        { id: anchorId, organizationId: 'org-a', restaurantLocationId: 'location-a' },
+        { id: staleId, organizationId: 'org-a', restaurantLocationId: 'location-a' },
+      ])
+      .mockResolvedValueOnce([{ id: anchorId, amount: new Prisma.Decimal(20) }]);
+    prisma.bankTransaction.findUnique.mockResolvedValue({
+      id: anchorId,
+      organizationId: 'org-a',
+      restaurantLocationId: 'location-a',
+      bankAccountId: 'account-a',
+      merchantNameNormalized: 'Robinhood',
+      providerCategoryId: 'TRANSFER',
+      providerCategory: 'Transfer',
+      amount: new Prisma.Decimal(20),
+      pending: false,
+    });
+    jest.spyOn(service, 'review').mockResolvedValue({ id: anchorId } as any);
+
+    await expect(service.bulkReview('user-a', {
+      ids: [anchorId, staleId],
+      groupAnchorId: anchorId,
+      decision: BankReviewDecision.PERSONAL_TRANSFER,
+    })).resolves.toEqual(expect.objectContaining({
+      requestedCount: 2,
+      count: 1,
+      failedCount: 1,
+      failures: [{ id: staleId, message: 'Transaction is no longer eligible for this group' }],
+    }));
+  });
+
+  it('reports complete bulk failure without claiming any transaction changed', async () => {
+    const { service, prisma } = setup();
+    const firstId = '00000000-0000-4000-8000-000000000001';
+    const secondId = '00000000-0000-4000-8000-000000000002';
+    prisma.bankTransaction.findMany.mockResolvedValue([
+      { id: firstId, organizationId: 'org-a', restaurantLocationId: 'location-a' },
+      { id: secondId, organizationId: 'org-a', restaurantLocationId: 'location-a' },
+    ]);
+    jest.spyOn(service, 'review')
+      .mockRejectedValueOnce(new ConflictException('First transaction changed'))
+      .mockRejectedValueOnce(new ConflictException('Second transaction changed'));
+
+    await expect(service.bulkReview('user-a', { ids: [firstId, secondId] })).resolves.toEqual(expect.objectContaining({
+      requestedCount: 2,
+      count: 0,
+      failedCount: 2,
+      failures: [
+        { id: firstId, message: 'First transaction changed' },
+        { id: secondId, message: 'Second transaction changed' },
+      ],
+    }));
+  });
+
   it('supports a reviewed similarity group larger than one hundred transactions', async () => {
     const { service, prisma } = setup();
     const ids = Array.from({ length: 101 }, (_, index) =>
