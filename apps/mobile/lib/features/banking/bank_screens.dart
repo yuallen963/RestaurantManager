@@ -2,13 +2,21 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:plaid_link_flutter/plaid_link_flutter.dart';
 
 import '../dashboard/foundation.dart';
 import '../expenses/foundation.dart';
 import '../needs_attention/foundation.dart';
 import '../vendors/foundation.dart';
 import 'foundation.dart';
+import 'plaid_link/plaid_link.dart';
+
+final plaidLinkLauncherProvider = Provider.autoDispose<PlaidLinkLauncher>((
+  ref,
+) {
+  final launcher = createPlaidLinkLauncher();
+  ref.onDispose(launcher.dispose);
+  return launcher;
+});
 
 void _invalidateBankDerivedProviders(WidgetRef ref) {
   ref.invalidate(bankTransactionsProvider);
@@ -31,7 +39,39 @@ class BankAccountsScreen extends ConsumerStatefulWidget {
 class _BankAccountsScreenState extends ConsumerState<BankAccountsScreen> {
   bool busy = false;
   String? actionError;
-  PlaidLinkSession? session;
+  bool oauthResumeAttempted = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _resumePlaidOAuth());
+  }
+
+  Future<void> _resumePlaidOAuth() async {
+    if (oauthResumeAttempted) return;
+    final location = ref.read(activeLocationProvider);
+    if (location == null) return;
+    final launcher = ref.read(plaidLinkLauncherProvider);
+    if (!launcher.isWeb) return;
+    oauthResumeAttempted = true;
+    setState(() {
+      busy = true;
+      actionError = null;
+    });
+    try {
+      final result = await launcher.resumeOAuth();
+      if (result != null) await _completePlaidLink(result);
+    } catch (_) {
+      if (mounted) {
+        setState(
+          () => actionError =
+              'Unable to resume the secure bank connection. Try again.',
+        );
+      }
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
+  }
 
   Future<void> connect([BankConnectionData? existing]) async {
     final location = ref.read(activeLocationProvider);
@@ -42,9 +82,16 @@ class _BankAccountsScreenState extends ConsumerState<BankAccountsScreen> {
     });
     try {
       final repository = ref.read(bankingRepositoryProvider);
+      final launcher = ref.read(plaidLinkLauncherProvider);
       final setup = existing == null
-          ? await repository.linkToken(location.organizationId)
-          : await repository.reauthenticationLinkToken(existing.id);
+          ? await repository.linkToken(
+              location.organizationId,
+              web: launcher.isWeb,
+            )
+          : await repository.reauthenticationLinkToken(
+              existing.id,
+              web: launcher.isWeb,
+            );
       if (setup.demo) {
         if (existing == null) {
           await repository.exchange(
@@ -58,39 +105,17 @@ class _BankAccountsScreenState extends ConsumerState<BankAccountsScreen> {
         await refresh();
         return;
       }
-      final completer = Completer<void>();
-      session = await createPlaidLinkSession(
-        LinkTokenConfiguration(
-          token: setup.linkToken,
-          onSuccess: (success) async {
-            try {
-              if (existing == null) {
-                await repository.exchange(
-                  location.organizationId,
-                  success.publicToken,
-                  location.id,
-                );
-              } else {
-                await repository.completeReauthentication(existing.id);
-              }
-              await refresh();
-              if (!completer.isCompleted) completer.complete();
-            } catch (error, stack) {
-              if (!completer.isCompleted) completer.completeError(error, stack);
-            }
-          },
-          onExit: (exit) {
-            if (completer.isCompleted) return;
-            final message = exit.error?.errorMessage;
-            message == null
-                ? completer.complete()
-                : completer.completeError(message);
-          },
-          onEvent: (_) {},
+      final result = await launcher.open(
+        PlaidLinkRequest(
+          linkToken: setup.linkToken,
+          context: PlaidLinkContext(
+            organizationId: location.organizationId,
+            locationId: location.id,
+            connectionId: existing?.id,
+          ),
         ),
       );
-      await session!.open(true);
-      await completer.future;
+      await _completePlaidLink(result);
     } catch (_) {
       if (mounted) {
         setState(
@@ -100,6 +125,30 @@ class _BankAccountsScreenState extends ConsumerState<BankAccountsScreen> {
     } finally {
       if (mounted) setState(() => busy = false);
     }
+  }
+
+  Future<void> _completePlaidLink(PlaidLinkResult result) async {
+    if (result.outcome == PlaidLinkOutcome.cancelled) return;
+    if (result.outcome == PlaidLinkOutcome.error) {
+      throw StateError(result.message ?? 'Plaid Link failed');
+    }
+    final location = ref.read(activeLocationProvider);
+    if (location == null ||
+        location.organizationId != result.context.organizationId ||
+        location.id != result.context.locationId) {
+      throw StateError('The active restaurant changed during bank connection.');
+    }
+    final repository = ref.read(bankingRepositoryProvider);
+    if (result.context.connectionId == null) {
+      await repository.exchange(
+        location.organizationId,
+        result.publicToken!,
+        location.id,
+      );
+    } else {
+      await repository.completeReauthentication(result.context.connectionId!);
+    }
+    await refresh();
   }
 
   Future<void> refresh() async {
@@ -117,13 +166,14 @@ class _BankAccountsScreenState extends ConsumerState<BankAccountsScreen> {
   }
 
   @override
-  void dispose() {
-    session?.dispose();
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) {
+    ref.listen<RestaurantLocation?>(activeLocationProvider, (_, location) {
+      if (location != null && !oauthResumeAttempted) {
+        WidgetsBinding.instance.addPostFrameCallback(
+          (_) => _resumePlaidOAuth(),
+        );
+      }
+    });
     final state = ref.watch(bankConnectionsProvider);
     return Scaffold(
       appBar: AppBar(title: const Text('Bank Accounts')),

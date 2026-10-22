@@ -51,6 +51,16 @@ describe('Plaid bank provider', () => {
     expect(global.fetch).not.toHaveBeenCalled();
   });
 
+  it('uses a separate web redirect without exposing credentials', async () => {
+    (global.fetch as jest.Mock).mockResolvedValue(response({ link_token: 'web-link-token' }));
+    const provider = new BankProviderFactory().get('PLAID');
+    await expect(provider.createLinkToken('user-a', undefined, 'https://app.example.com/banking')).resolves.toBe('web-link-token');
+    const request = JSON.parse((global.fetch as jest.Mock).mock.calls[0][1].body);
+    expect(request.redirect_uri).toBe('https://app.example.com/banking');
+    expect(request).not.toHaveProperty('client_secret');
+    expect(JSON.stringify(request)).not.toContain('configured-secret');
+  });
+
   it('exchanges a token, imports accounts, and resolves institution metadata', async () => {
     (global.fetch as jest.Mock)
       .mockResolvedValueOnce(response({ access_token: 'access', item_id: 'item' }))

@@ -8,7 +8,7 @@ export type ProviderExchange = { accessToken: string; itemId: string; institutio
 
 export interface BankProviderClient {
   readonly name: 'PLAID' | 'DEMO';
-  createLinkToken(userId: string, accessToken?: string): Promise<string>;
+  createLinkToken(userId: string, accessToken?: string, redirectUri?: string | null): Promise<string>;
   exchange(publicToken: string): Promise<ProviderExchange>;
   sync(accessToken: string, cursor?: string | null): Promise<ProviderSync>;
   disconnect(accessToken: string): Promise<void>;
@@ -54,8 +54,8 @@ class PlaidBankProvider implements BankProviderClient {
     }
     return data;
   }
-  async createLinkToken(userId: string, accessToken?: string) {
-    const redirectUri = process.env.PLAID_REDIRECT_URI?.trim();
+  async createLinkToken(userId: string, accessToken?: string, requestedRedirectUri?: string | null) {
+    const redirectUri = requestedRedirectUri === undefined ? process.env.PLAID_REDIRECT_URI?.trim() : requestedRedirectUri ?? undefined;
     if (process.env.PLAID_ENV === 'production' && !redirectUri) throw new ServiceUnavailableException('Plaid OAuth redirect is not configured');
     const data = await this.post('/link/token/create', { client_name: 'Profit Lens', language: 'en', country_codes: (process.env.PLAID_COUNTRY_CODES ?? 'US').split(','), products: accessToken ? undefined : (process.env.PLAID_PRODUCTS ?? 'transactions').split(','), user: { client_user_id: userId }, access_token: accessToken, redirect_uri: redirectUri || undefined, webhook: process.env.PLAID_WEBHOOK_URL || undefined, transactions: accessToken ? undefined : { days_requested: 90 } });
     return data.link_token as string;

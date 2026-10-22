@@ -1,6 +1,6 @@
 import { ConflictException, ForbiddenException, UnauthorizedException } from '@nestjs/common';
 import { BankCategorizationSource, BankConnectionStatus, BankReconciliationStatus, ExpenseSource, InvoiceMatchConfidence, MerchantRuleDecision, MerchantRuleMatchType, Prisma } from '@prisma/client';
-import { BankReviewDecision } from '../src/bank/dto';
+import { BankLinkClientPlatform, BankReviewDecision } from '../src/bank/dto';
 import { BankService, normalizeMerchant } from '../src/bank/bank.service';
 import { BankTokenEncryptionService } from '../src/bank/encryption.service';
 
@@ -445,13 +445,73 @@ describe('bank transaction foundation', () => {
     provider.createLinkToken.mockResolvedValue('update-link');
     const setupResult = await service.reauthenticationLinkToken('user-a', 'connection-a');
     expect(setupResult).toEqual(expect.objectContaining({ linkToken: 'update-link', updateMode: true }));
-    expect(provider.createLinkToken).toHaveBeenCalledWith('user-a', 'provider-token');
+    expect(provider.createLinkToken).toHaveBeenCalledWith('user-a', 'provider-token', undefined);
     provider.sync.mockResolvedValue({ added: [], modified: [], removed: [], cursor: 'cursor' });
     await service.completeReauthentication('user-a', 'connection-a');
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(prisma.bankConnection.create).not.toHaveBeenCalled();
     expect(prisma.bankConnection.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: BankConnectionStatus.CONNECTED }) }));
     expect(provider.sync).toHaveBeenCalled();
+  });
+
+  it('uses only the dedicated configured redirect for web Link tokens', async () => {
+    const previousEnvironment = process.env.PLAID_ENV;
+    const previousWebRedirect = process.env.PLAID_WEB_REDIRECT_URI;
+    process.env.PLAID_ENV = 'production';
+    process.env.PLAID_WEB_REDIRECT_URI = 'https://app.example.com/banking';
+    try {
+      const { service, provider } = setup();
+      provider.createLinkToken.mockResolvedValue('web-link');
+      await service.linkToken('user-a', 'org-a', BankLinkClientPlatform.WEB);
+      expect(provider.createLinkToken).toHaveBeenCalledWith(
+        'user-a',
+        undefined,
+        'https://app.example.com/banking',
+      );
+    } finally {
+      if (previousEnvironment == null) delete process.env.PLAID_ENV;
+      else process.env.PLAID_ENV = previousEnvironment;
+      if (previousWebRedirect == null) delete process.env.PLAID_WEB_REDIRECT_URI;
+      else process.env.PLAID_WEB_REDIRECT_URI = previousWebRedirect;
+    }
+  });
+
+  it('fails web Link safely in production when its HTTPS redirect is absent', async () => {
+    const previousEnvironment = process.env.PLAID_ENV;
+    const previousWebRedirect = process.env.PLAID_WEB_REDIRECT_URI;
+    process.env.PLAID_ENV = 'production';
+    delete process.env.PLAID_WEB_REDIRECT_URI;
+    try {
+      const { service, provider } = setup();
+      await expect(
+        service.linkToken('user-a', 'org-a', BankLinkClientPlatform.WEB),
+      ).rejects.toThrow('Web bank connection is not configured yet.');
+      expect(provider.createLinkToken).not.toHaveBeenCalled();
+    } finally {
+      if (previousEnvironment == null) delete process.env.PLAID_ENV;
+      else process.env.PLAID_ENV = previousEnvironment;
+      if (previousWebRedirect == null) delete process.env.PLAID_WEB_REDIRECT_URI;
+      else process.env.PLAID_WEB_REDIRECT_URI = previousWebRedirect;
+    }
+  });
+
+  it('rejects an insecure web redirect in production', async () => {
+    const previousEnvironment = process.env.PLAID_ENV;
+    const previousWebRedirect = process.env.PLAID_WEB_REDIRECT_URI;
+    process.env.PLAID_ENV = 'production';
+    process.env.PLAID_WEB_REDIRECT_URI = 'http://app.example.com/banking';
+    try {
+      const { service, provider } = setup();
+      await expect(
+        service.linkToken('user-a', 'org-a', BankLinkClientPlatform.WEB),
+      ).rejects.toThrow('Web bank connection requires a secure HTTPS redirect.');
+      expect(provider.createLinkToken).not.toHaveBeenCalled();
+    } finally {
+      if (previousEnvironment == null) delete process.env.PLAID_ENV;
+      else process.env.PLAID_ENV = previousEnvironment;
+      if (previousWebRedirect == null) delete process.env.PLAID_WEB_REDIRECT_URI;
+      else process.env.PLAID_WEB_REDIRECT_URI = previousWebRedirect;
+    }
   });
 
   it('disconnects remotely, deactivates sync, and does not delete transaction history', async () => {

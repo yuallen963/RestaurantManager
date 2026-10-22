@@ -3,7 +3,10 @@ import { ArrayMaxSize, ArrayMinSize, IsArray, IsBoolean, IsEnum, IsNumber, IsOpt
 
 export enum BankReviewDecision { EXPENSE = 'EXPENSE', PERSONAL_TRANSFER = 'PERSONAL_TRANSFER', REVIEW_LATER = 'REVIEW_LATER' }
 
+export enum BankLinkClientPlatform { WEB = 'WEB' }
 export class OrganizationDto { @IsUUID() organizationId!: string; }
+export class CreateBankLinkTokenDto extends OrganizationDto { @IsOptional() @IsEnum(BankLinkClientPlatform) clientPlatform?: BankLinkClientPlatform; }
+export class BankLinkTokenDto { @IsOptional() @IsEnum(BankLinkClientPlatform) clientPlatform?: BankLinkClientPlatform; }
 export class BankSyncStatusQuery extends OrganizationDto { @IsUUID() restaurantLocationId!: string; }
 export class ExchangeBankTokenDto extends OrganizationDto { @IsString() publicToken!: string; @IsOptional() @IsUUID() restaurantLocationId?: string; }
 export class AssignBankAccountDto { @IsOptional() @IsUUID() restaurantLocationId?: string | null; @IsOptional() @IsBoolean() active?: boolean; }

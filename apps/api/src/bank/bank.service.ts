@@ -4,7 +4,7 @@ import { AuditService } from '../audit.service';
 import { OrganizationAccessService } from '../organizations/organization-access.service';
 import { PrismaService } from '../prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
-import { AssignBankAccountDto, BankReviewDecision, BankTransactionQuery, BulkReviewBankTransactionsDto, ConfirmInvoiceMatchDto, ExchangeBankTokenDto, ReviewBankTransactionDto, UpdateMerchantRuleDto } from './dto';
+import { AssignBankAccountDto, BankLinkClientPlatform, BankReviewDecision, BankTransactionQuery, BulkReviewBankTransactionsDto, ConfirmInvoiceMatchDto, ExchangeBankTokenDto, ReviewBankTransactionDto, UpdateMerchantRuleDto } from './dto';
 import { BankTokenEncryptionService } from './encryption.service';
 import { BankProviderFactory, ProviderTransaction } from './bank.provider';
 
@@ -30,17 +30,29 @@ export class BankService {
   private async transaction(userId: string, id: string) { const row = await this.prisma.bankTransaction.findUnique({ where: { id } }); if (!row) throw new NotFoundException('Bank transaction not found'); await this.organization(userId, row.organizationId); return row; }
   private safeConnection(row: any) { const { encryptedAccessToken: _secret, ...safe } = row; return safe; }
 
-  async linkToken(userId: string, organizationId: string) {
-    await this.organization(userId, organizationId);
-    const provider = this.providers.get();
-    return { linkToken: await provider.createLinkToken(userId), provider: provider.name, demo: provider.name === 'DEMO' };
+  private linkRedirectUri(clientPlatform?: BankLinkClientPlatform) {
+    if (clientPlatform !== BankLinkClientPlatform.WEB) return undefined;
+    const redirectUri = process.env.PLAID_WEB_REDIRECT_URI?.trim();
+    if (process.env.PLAID_ENV === 'production' && !redirectUri) {
+      throw new BadRequestException('Web bank connection is not configured yet.');
+    }
+    if (process.env.PLAID_ENV === 'production' && !redirectUri?.startsWith('https://')) {
+      throw new BadRequestException('Web bank connection requires a secure HTTPS redirect.');
+    }
+    return redirectUri || null;
   }
 
-  async reauthenticationLinkToken(userId: string, id: string) {
+  async linkToken(userId: string, organizationId: string, clientPlatform?: BankLinkClientPlatform) {
+    await this.organization(userId, organizationId);
+    const provider = this.providers.get();
+    return { linkToken: await provider.createLinkToken(userId, undefined, this.linkRedirectUri(clientPlatform)), provider: provider.name, demo: provider.name === 'DEMO' };
+  }
+
+  async reauthenticationLinkToken(userId: string, id: string, clientPlatform?: BankLinkClientPlatform) {
     const connection = await this.connection(userId, id);
     if (connection.status === BankConnectionStatus.DISCONNECTED) throw new BadRequestException('Bank connection is disconnected');
     const provider = this.providers.get(connection.provider);
-    return { linkToken: await provider.createLinkToken(userId, this.encryption.decrypt(connection.encryptedAccessToken)), provider: provider.name, demo: provider.name === 'DEMO', updateMode: true };
+    return { linkToken: await provider.createLinkToken(userId, this.encryption.decrypt(connection.encryptedAccessToken), this.linkRedirectUri(clientPlatform)), provider: provider.name, demo: provider.name === 'DEMO', updateMode: true };
   }
 
   async completeReauthentication(userId: string, id: string) {

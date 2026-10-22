@@ -3,13 +3,13 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { BankService } from './bank.service';
-import { AssignBankAccountDto, BankSyncStatusQuery, BankTransactionQuery, BulkReviewBankTransactionsDto, ConfirmInvoiceMatchDto, ExchangeBankTokenDto, OrganizationDto, ReviewBankTransactionDto, UpdateMerchantRuleDto } from './dto';
+import { AssignBankAccountDto, BankLinkTokenDto, BankSyncStatusQuery, BankTransactionQuery, BulkReviewBankTransactionsDto, ConfirmInvoiceMatchDto, CreateBankLinkTokenDto, ExchangeBankTokenDto, ReviewBankTransactionDto, UpdateMerchantRuleDto } from './dto';
 
 @ApiTags('banking') @ApiBearerAuth() @UseGuards(JwtAuthGuard) @Controller()
 export class BankController {
   constructor(private readonly service: BankService) {}
-  @Post('bank/link-token') linkToken(@CurrentUser() u: { sub: string }, @Body() d: OrganizationDto) { return this.service.linkToken(u.sub, d.organizationId); }
-  @Post('bank/connections/:id/link-token') reauthenticationLinkToken(@CurrentUser() u: { sub: string }, @Param('id') id: string) { return this.service.reauthenticationLinkToken(u.sub, id); }
+  @Post('bank/link-token') linkToken(@CurrentUser() u: { sub: string }, @Body() d: CreateBankLinkTokenDto) { return this.service.linkToken(u.sub, d.organizationId, d.clientPlatform); }
+  @Post('bank/connections/:id/link-token') reauthenticationLinkToken(@CurrentUser() u: { sub: string }, @Param('id') id: string, @Body() d?: BankLinkTokenDto) { return this.service.reauthenticationLinkToken(u.sub, id, d?.clientPlatform); }
   @Post('bank/connections/:id/reauthenticated') reauthenticated(@CurrentUser() u: { sub: string }, @Param('id') id: string) { return this.service.completeReauthentication(u.sub, id); }
   @Post('bank/exchange-token') exchange(@CurrentUser() u: { sub: string }, @Body() d: ExchangeBankTokenDto) { return this.service.exchange(u.sub, d); }
   @Get('bank/connections') connections(@CurrentUser() u: { sub: string }, @Query('organizationId') organizationId: string) { return this.service.connections(u.sub, organizationId); }

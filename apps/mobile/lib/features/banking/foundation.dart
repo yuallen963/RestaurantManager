@@ -292,10 +292,16 @@ class BulkReviewResult {
 class BankingRepository {
   BankingRepository(this.dio);
   final Dio dio;
-  Future<BankLinkSetup> linkToken(String organizationId) async {
+  Future<BankLinkSetup> linkToken(
+    String organizationId, {
+    bool web = false,
+  }) async {
     final response = await dio.post(
       '/bank/link-token',
-      data: {'organizationId': organizationId},
+      data: {
+        'organizationId': organizationId,
+        if (web) 'clientPlatform': 'WEB',
+      },
     );
     return BankLinkSetup(
       response.data['linkToken'] as String,
@@ -303,9 +309,13 @@ class BankingRepository {
     );
   }
 
-  Future<BankLinkSetup> reauthenticationLinkToken(String connectionId) async {
+  Future<BankLinkSetup> reauthenticationLinkToken(
+    String connectionId, {
+    bool web = false,
+  }) async {
     final response = await dio.post(
       '/bank/connections/$connectionId/link-token',
+      data: {if (web) 'clientPlatform': 'WEB'},
     );
     return BankLinkSetup(
       response.data['linkToken'] as String,

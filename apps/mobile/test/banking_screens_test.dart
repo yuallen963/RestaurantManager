@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:restaurant_profit_mobile/features/banking/bank_screens.dart';
 import 'package:restaurant_profit_mobile/features/banking/foundation.dart';
+import 'package:restaurant_profit_mobile/features/banking/plaid_link/plaid_link.dart';
 import 'package:restaurant_profit_mobile/features/dashboard/foundation.dart';
 import 'package:restaurant_profit_mobile/features/expenses/foundation.dart';
 
@@ -82,9 +83,17 @@ class FakeBankingRepository extends BankingRepository {
   final transactionStatuses = <String?>[];
   Map<String?, List<BankTransactionData>> transactionsByStatus = const {};
   List<BankTransactionData> similarItems = const [];
+  bool demoLink = true;
+  bool? requestedWebLink;
   @override
-  Future<BankLinkSetup> linkToken(String organizationId) async =>
-      const BankLinkSetup('demo-link', true);
+  Future<BankLinkSetup> linkToken(
+    String organizationId, {
+    bool web = false,
+  }) async {
+    requestedWebLink = web;
+    return BankLinkSetup('link-token', demoLink);
+  }
+
   @override
   Future<void> exchange(
     String organizationId,
@@ -95,8 +104,13 @@ class FakeBankingRepository extends BankingRepository {
   }
 
   @override
-  Future<BankLinkSetup> reauthenticationLinkToken(String connectionId) async =>
-      const BankLinkSetup('update-link', true, updateMode: true);
+  Future<BankLinkSetup> reauthenticationLinkToken(
+    String connectionId, {
+    bool web = false,
+  }) async {
+    requestedWebLink = web;
+    return BankLinkSetup('update-link', demoLink, updateMode: true);
+  }
 
   @override
   Future<void> completeReauthentication(String connectionId) async {
@@ -192,6 +206,30 @@ class FakeBankingRepository extends BankingRepository {
   }
 }
 
+class FakePlaidLinkLauncher implements PlaidLinkLauncher {
+  FakePlaidLinkLauncher({this.web = true, this.nextResult, this.oauthResult});
+
+  final bool web;
+  PlaidLinkResult? nextResult;
+  PlaidLinkResult? oauthResult;
+  PlaidLinkRequest? request;
+
+  @override
+  bool get isWeb => web;
+
+  @override
+  Future<PlaidLinkResult> open(PlaidLinkRequest request) async {
+    this.request = request;
+    return nextResult ?? PlaidLinkResult.cancelled(request.context);
+  }
+
+  @override
+  Future<PlaidLinkResult?> resumeOAuth() async => oauthResult;
+
+  @override
+  void dispose() {}
+}
+
 class DeferredBankingRepository extends BankingRepository {
   DeferredBankingRepository() : super(Dio());
   final requests = <String, Completer<List<BankTransactionData>>>{};
@@ -209,12 +247,14 @@ class DeferredBankingRepository extends BankingRepository {
 
 Widget accountsApp(
   FakeBankingRepository repository,
-  Future<List<BankConnectionData>> Function() load,
-) => ProviderScope(
+  Future<List<BankConnectionData>> Function() load, {
+  PlaidLinkLauncher? launcher,
+}) => ProviderScope(
   overrides: [
     activeLocationProvider.overrideWithValue(downtown),
     availableLocationsProvider.overrideWithValue(const [downtown, lakeside]),
     bankingRepositoryProvider.overrideWithValue(repository),
+    if (launcher != null) plaidLinkLauncherProvider.overrideWithValue(launcher),
     bankConnectionsProvider.overrideWith((_) => load()),
   ],
   child: const MaterialApp(home: BankAccountsScreen()),
@@ -253,6 +293,73 @@ void main() {
     await tester.tap(find.byKey(const Key('connect-bank')));
     await tester.pumpAndSettle();
     expect(repository.exchangeCalls, 1);
+  });
+
+  testWidgets(
+    'browser Link exchanges the public token and refreshes accounts',
+    (tester) async {
+      final repository = FakeBankingRepository()..demoLink = false;
+      final context = const PlaidLinkContext(
+        organizationId: 'org',
+        locationId: 'downtown',
+      );
+      final launcher = FakePlaidLinkLauncher(
+        nextResult: PlaidLinkResult.success('public-token', context),
+      );
+      await tester.pumpWidget(
+        accountsApp(repository, () async => [], launcher: launcher),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('connect-bank')));
+      await tester.pumpAndSettle();
+      expect(repository.requestedWebLink, isTrue);
+      expect(launcher.request?.linkToken, 'link-token');
+      expect(repository.exchangeCalls, 1);
+      expect(
+        find.text('Unable to connect the bank account. Try again.'),
+        findsNothing,
+      );
+    },
+  );
+
+  testWidgets('browser Link cancellation does not exchange a token', (
+    tester,
+  ) async {
+    final repository = FakeBankingRepository()..demoLink = false;
+    final launcher = FakePlaidLinkLauncher();
+    await tester.pumpWidget(
+      accountsApp(repository, () async => [], launcher: launcher),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('connect-bank')));
+    await tester.pumpAndSettle();
+    expect(repository.exchangeCalls, 0);
+    expect(
+      find.text('Unable to connect the bank account. Try again.'),
+      findsNothing,
+    );
+  });
+
+  testWidgets('browser OAuth return exchanges once and refreshes connections', (
+    tester,
+  ) async {
+    final repository = FakeBankingRepository()..demoLink = false;
+    final launcher = FakePlaidLinkLauncher(
+      oauthResult: PlaidLinkResult.success(
+        'oauth-public-token',
+        const PlaidLinkContext(organizationId: 'org', locationId: 'downtown'),
+      ),
+    );
+    var loads = 0;
+    await tester.pumpWidget(
+      accountsApp(repository, () async {
+        loads++;
+        return [];
+      }, launcher: launcher),
+    );
+    await tester.pumpAndSettle();
+    expect(repository.exchangeCalls, 1);
+    expect(loads, greaterThanOrEqualTo(2));
   });
 
   testWidgets(

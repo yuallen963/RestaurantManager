@@ -16,6 +16,7 @@ import 'features/onboarding/foundation.dart';
 import 'features/onboarding/onboarding_screen.dart';
 import 'features/auth/auth_screens.dart';
 import 'features/auth/auth_links.dart';
+import 'features/banking/plaid_link/plaid_link.dart';
 
 const storage = FlutterSecureStorage();
 const apiBaseUrl = String.fromEnvironment(
@@ -349,11 +350,19 @@ class _AuthBootstrapState extends ConsumerState<AuthBootstrap> {
         forceHome ||
         (await ref.read(onboardingRepositoryProvider).get()).completed;
     if (!mounted) return;
-    Navigator.of(context).pushReplacement(
+    final navigator = Navigator.of(context);
+    navigator.pushReplacement(
       MaterialPageRoute(
         builder: (_) => completed ? const Home() : const Onboarding(),
       ),
     );
+    if (completed && isPlaidOAuthReturn(Uri.base)) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        navigator.push(
+          MaterialPageRoute(builder: (_) => const BankAccountsScreen()),
+        );
+      });
+    }
     widget.onReady?.call();
   }
 
