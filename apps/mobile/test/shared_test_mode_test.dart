@@ -36,6 +36,10 @@ void main() {
     var sharedSessionCalls = 0;
     final dio = _dio((options) {
       expect(options.path, '/auth/shared-test-session');
+      expect(
+        options.headers['X-FundWell-Shared-Test-Token'],
+        sharedTestClientToken,
+      );
       sharedSessionCalls++;
       return {'accessToken': 'shared-access', 'refreshToken': 'shared-refresh'};
     });

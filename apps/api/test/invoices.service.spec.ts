@@ -2,7 +2,8 @@ import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { InvoicesService } from '../src/invoices/invoices.service';
 
 const location = { id: 'loc-a', organizationId: 'org-a' };
-const invoice = { id: 'invoice-a', organizationId: 'org-a', restaurantLocationId: 'loc-a', vendorId: null, storageKey: 'org/file.pdf', status: 'UPLOADED', attachmentHash: 'hash-a', reviewStatus: 'NOT_REVIEWED', extractionStatus: 'NOT_STARTED', extractionStartedAt: null, extractionAttemptCount: 0 };
+const invoiceBytes = Buffer.from('%PDF-invoice bytes');
+const invoice = { id: 'invoice-a', organizationId: 'org-a', restaurantLocationId: 'loc-a', vendorId: null, storageKey: 'org/file.pdf', fileType: 'application/pdf', fileSize: invoiceBytes.length, status: 'UPLOADED', attachmentHash: 'hash-a', reviewStatus: 'NOT_REVIEWED', extractionStatus: 'NOT_STARTED', extractionStartedAt: null, extractionAttemptCount: 0 };
 
 function setup() {
   const prisma: any = {
@@ -26,7 +27,7 @@ function setup() {
   prisma.$transaction = jest.fn((callback: any) => callback(prisma));
   const access: any = { requireMember: jest.fn().mockResolvedValue({ role: 'OWNER' }) };
   const audit: any = { log: jest.fn().mockResolvedValue({}) };
-  const storage: any = { putUrl: jest.fn().mockResolvedValue('https://storage/upload'), exists: jest.fn().mockResolvedValue(undefined), get: jest.fn().mockResolvedValue(Buffer.from('invoice bytes')), remove: jest.fn().mockResolvedValue(undefined) };
+  const storage: any = { putUrl: jest.fn().mockResolvedValue('https://storage/upload'), exists: jest.fn().mockResolvedValue(undefined), get: jest.fn().mockResolvedValue(invoiceBytes), remove: jest.fn().mockResolvedValue(undefined) };
   const extraction: any = { isConfigured: jest.fn().mockReturnValue(false), process: jest.fn() };
   return { prisma, access, audit, storage, extraction, service: new InvoicesService(prisma, access, audit, storage, extraction) };
 }
@@ -106,6 +107,22 @@ describe('InvoicesService', () => {
     await expect(service.complete('user-a', 'invoice-a', { etag: 'uploaded' })).rejects.toThrow('uploaded invoice file is unavailable');
     expect(prisma.invoice.updateMany).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: 'FAILED', extractionStatus: 'FAILED' }) }));
     expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({ action: 'invoice.upload_completion_failed', metadata: expect.objectContaining({ errorCode: 'STORAGE_OBJECT_UNAVAILABLE' }) }));
+  });
+
+  it('rejects a browser upload whose bytes do not match its declared MIME type', async () => {
+    const { service, prisma, storage, audit } = setup();
+    storage.get.mockResolvedValue(Buffer.alloc(invoiceBytes.length, 0));
+    await expect(service.complete('user-a', 'invoice-a', { etag: 'uploaded' })).rejects.toThrow('does not match');
+    expect(storage.remove).toHaveBeenCalledWith(invoice.storageKey);
+    expect(prisma.invoice.updateMany).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: 'FAILED' }) }));
+    expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({ metadata: expect.objectContaining({ errorCode: 'FILE_SIGNATURE_MISMATCH' }) }));
+  });
+
+  it('rejects a browser upload whose stored size differs from the intent', async () => {
+    const { service, storage, audit } = setup();
+    storage.get.mockResolvedValue(Buffer.from('%PDF-short'));
+    await expect(service.complete('user-a', 'invoice-a', { etag: 'uploaded' })).rejects.toThrow('does not match');
+    expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({ metadata: expect.objectContaining({ errorCode: 'FILE_SIZE_MISMATCH' }) }));
   });
 
   it('claims extraction once when concurrent requests arrive', async () => {

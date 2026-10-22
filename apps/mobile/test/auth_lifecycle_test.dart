@@ -216,7 +216,12 @@ void main() {
         ..httpClientAdapter = resourceAdapter;
       final refreshClient = Dio(BaseOptions(baseUrl: 'https://fundwell.test'))
         ..httpClientAdapter = refreshAdapter;
-      installAuthRefreshInterceptor(client, refreshClient: refreshClient);
+      var sessionExpiredCalls = 0;
+      installAuthRefreshInterceptor(
+        client,
+        refreshClient: refreshClient,
+        onSessionExpired: () => sessionExpiredCalls++,
+      );
 
       await expectLater(
         client.get('/expenses'),
@@ -230,8 +235,36 @@ void main() {
       );
       expect(resourceAdapter.calls, 1);
       expect(refreshAdapter.calls, 1);
+      expect(await storage.read(key: 'accessToken'), isNull);
+      expect(await storage.read(key: 'refreshToken'), isNull);
+      expect(sessionExpiredCalls, 1);
     },
   );
+
+  test('a public login rejection never attempts token refresh', () async {
+    var expiredCalls = 0;
+    final resourceAdapter = _AuthAdapter(
+      (_) => _jsonResponse(401, {'message': 'Unauthorized'}),
+    );
+    final refreshAdapter = _AuthAdapter(
+      (_) => _jsonResponse(200, {
+        'accessToken': 'unexpected',
+        'refreshToken': 'unexpected',
+      }),
+    );
+    final client = Dio(BaseOptions(baseUrl: 'https://fundwell.test'))
+      ..httpClientAdapter = resourceAdapter;
+    installAuthRefreshInterceptor(
+      client,
+      refreshClient: Dio(BaseOptions(baseUrl: 'https://fundwell.test'))
+        ..httpClientAdapter = refreshAdapter,
+      onSessionExpired: () => expiredCalls++,
+    );
+
+    await expectLater(client.post('/auth/login'), throwsA(isA<DioException>()));
+    expect(refreshAdapter.calls, 0);
+    expect(expiredCalls, 0);
+  });
 }
 
 ResponseBody _jsonResponse(int status, Map<String, dynamic> body) =>

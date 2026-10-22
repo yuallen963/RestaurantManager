@@ -10,6 +10,7 @@ const mail = () => ({ developmentMode: false, assertConfigured: jest.fn(), sendV
 describe('auth service', () => {
   const originalSharedMode = process.env.SHARED_TEST_USER_MODE;
   const originalSharedEmail = process.env.SHARED_TEST_USER_EMAIL;
+  const originalSharedClientToken = process.env.SHARED_TEST_CLIENT_TOKEN;
   const originalPrivateEmail = process.env.PRIVATE_BETA_USER_EMAIL;
   const originalPrivateHash = process.env.PRIVATE_BETA_ACCESS_CODE_HASH;
   beforeEach(() => jest.clearAllMocks());
@@ -18,6 +19,8 @@ describe('auth service', () => {
     else process.env.SHARED_TEST_USER_MODE = originalSharedMode;
     if (originalSharedEmail === undefined) delete process.env.SHARED_TEST_USER_EMAIL;
     else process.env.SHARED_TEST_USER_EMAIL = originalSharedEmail;
+    if (originalSharedClientToken === undefined) delete process.env.SHARED_TEST_CLIENT_TOKEN;
+    else process.env.SHARED_TEST_CLIENT_TOKEN = originalSharedClientToken;
     if (originalPrivateEmail === undefined) delete process.env.PRIVATE_BETA_USER_EMAIL;
     else process.env.PRIVATE_BETA_USER_EMAIL = originalPrivateEmail;
     if (originalPrivateHash === undefined) delete process.env.PRIVATE_BETA_ACCESS_CODE_HASH;
@@ -27,13 +30,14 @@ describe('auth service', () => {
   it('issues a session only for the configured shared test owner when enabled', async () => {
     process.env.SHARED_TEST_USER_MODE = 'true';
     process.env.SHARED_TEST_USER_EMAIL = 'test@profitlens.local';
+    process.env.SHARED_TEST_CLIENT_TOKEN = 'internal-client-token';
     const prisma: any = {
       user: { findFirst: jest.fn().mockResolvedValue({ id: 'shared-user', email: 'test@profitlens.local' }) },
       refreshToken: { create: jest.fn() },
     };
     const jwt = { signAsync: jest.fn().mockResolvedValueOnce('access').mockResolvedValueOnce('refresh') };
     const service = new AuthService(prisma, jwt as any, mail() as any, audit as any);
-    await expect(service.sharedTestSession()).resolves.toMatchObject({ accessToken: 'access', refreshToken: 'refresh' });
+    await expect(service.sharedTestSession('internal-client-token')).resolves.toMatchObject({ accessToken: 'access', refreshToken: 'refresh' });
     expect(prisma.user.findFirst).toHaveBeenCalledWith(expect.objectContaining({
       where: expect.objectContaining({ email: 'test@profitlens.local', memberships: { some: { role: OrganizationRole.OWNER } } }),
     }));
@@ -46,8 +50,19 @@ describe('auth service', () => {
     await expect(service.sharedTestSession()).rejects.toBeInstanceOf(NotFoundException);
     expect(prisma.user.findFirst).not.toHaveBeenCalled();
     process.env.SHARED_TEST_USER_MODE = 'true';
+    process.env.SHARED_TEST_CLIENT_TOKEN = 'internal-client-token';
     prisma.user.findFirst.mockResolvedValue(null);
+    await expect(service.sharedTestSession('internal-client-token')).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('fails closed before account lookup when the internal client token is absent or incorrect', async () => {
+    process.env.SHARED_TEST_USER_MODE = 'true';
+    process.env.SHARED_TEST_CLIENT_TOKEN = 'internal-client-token';
+    const prisma: any = { user: { findFirst: jest.fn() } };
+    const service = new AuthService(prisma, {} as any, mail() as any, audit as any);
     await expect(service.sharedTestSession()).rejects.toBeInstanceOf(NotFoundException);
+    await expect(service.sharedTestSession('wrong-client-token')).rejects.toBeInstanceOf(NotFoundException);
+    expect(prisma.user.findFirst).not.toHaveBeenCalled();
   });
 
   it.each(['false', 'TRUE', '1', 'yes', ' true '])('does not enable shared mode for invalid value %s', async (value) => {

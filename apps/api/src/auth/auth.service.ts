@@ -2,7 +2,7 @@ import { ConflictException, ForbiddenException, Injectable, NotFoundException, S
 import { JwtService } from '@nestjs/jwt';
 import { OrganizationRole, SecurityEmailType } from '@prisma/client';
 import * as argon2 from 'argon2';
-import { createHash, randomBytes, randomUUID } from 'crypto';
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'crypto';
 import { AuditService } from '../audit.service';
 import { PrismaService } from '../prisma.service';
 import { AuthEmailService } from './auth-email.service';
@@ -77,8 +77,13 @@ export class AuthService {
    * test account. It is intentionally unavailable unless the server-side flag
    * is enabled, and it cannot authenticate an arbitrary user.
    */
-  async sharedTestSession() {
+  async sharedTestSession(clientToken?: string) {
     if (process.env.SHARED_TEST_USER_MODE !== 'true') throw new NotFoundException();
+    const configuredToken = process.env.SHARED_TEST_CLIENT_TOKEN?.trim();
+    if (!configuredToken || !clientToken) throw new NotFoundException();
+    const expected = Buffer.from(configuredToken);
+    const received = Buffer.from(clientToken);
+    if (expected.length !== received.length || !timingSafeEqual(expected, received)) throw new NotFoundException();
     const email = normalizeEmail(process.env.SHARED_TEST_USER_EMAIL ?? 'test@profitlens.local');
     const user = await this.prisma.user.findFirst({
       where: {

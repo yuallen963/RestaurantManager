@@ -1,11 +1,17 @@
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
 import '../../main.dart'
-    show AccountSessionMode, api, sessionModeStorageKey, storage;
+    show
+        AccountSessionMode,
+        api,
+        sessionModeStorageKey,
+        sharedTestClientToken,
+        storage;
 import '../dashboard/foundation.dart';
+import '../auth/auth_session_store_interface.dart';
 
 class MoreAccountData {
   const MoreAccountData({
@@ -55,7 +61,7 @@ class MoreRepository {
   MoreRepository(this.dio, this.secureStorage);
 
   final Dio dio;
-  final FlutterSecureStorage secureStorage;
+  final AuthSessionStore secureStorage;
 
   Future<MoreAccountData> load(RestaurantLocation location) async {
     final responses = await Future.wait([
@@ -105,15 +111,25 @@ class MoreRepository {
 
   Future<void> returnToBeta() async {
     final privateRefresh = await secureStorage.read(key: 'refreshToken');
-    if (privateRefresh != null) {
+    if (privateRefresh != null || kIsWeb) {
       try {
-        await dio.post('/auth/logout', data: {'refreshToken': privateRefresh});
+        await dio.post(
+          '/auth/logout',
+          data: privateRefresh == null
+              ? const <String, dynamic>{}
+              : {'refreshToken': privateRefresh},
+        );
       } on DioException {
         // Replacing local private credentials must not expose stale private data.
       }
     }
     dio.options.headers.remove('Authorization');
-    final response = await dio.post('/auth/shared-test-session');
+    final response = await dio.post(
+      '/auth/shared-test-session',
+      options: Options(
+        headers: {'X-FundWell-Shared-Test-Token': sharedTestClientToken},
+      ),
+    );
     await _installSession(
       Map<String, dynamic>.from(response.data as Map),
       AccountSessionMode.standard,
@@ -125,9 +141,11 @@ class MoreRepository {
     AccountSessionMode mode,
   ) async {
     final accessToken = data['accessToken'] as String;
-    final refreshToken = data['refreshToken'] as String;
+    final refreshToken = data['refreshToken'] as String?;
     await secureStorage.write(key: 'accessToken', value: accessToken);
-    await secureStorage.write(key: 'refreshToken', value: refreshToken);
+    if (refreshToken != null) {
+      await secureStorage.write(key: 'refreshToken', value: refreshToken);
+    }
     await secureStorage.write(key: sessionModeStorageKey, value: mode.name);
     dio.options.headers['Authorization'] = 'Bearer $accessToken';
   }
@@ -144,9 +162,14 @@ class MoreRepository {
       }
     }
     final refreshToken = await secureStorage.read(key: 'refreshToken');
-    if (refreshToken != null) {
+    if (refreshToken != null || kIsWeb) {
       try {
-        await dio.post('/auth/logout', data: {'refreshToken': refreshToken});
+        await dio.post(
+          '/auth/logout',
+          data: refreshToken == null
+              ? const <String, dynamic>{}
+              : {'refreshToken': refreshToken},
+        );
       } on DioException {
         // Local credentials must still be cleared if remote revocation fails.
       }

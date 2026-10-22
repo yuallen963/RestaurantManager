@@ -13,7 +13,16 @@ async function bootstrap() {
       { path: 'reset-password', method: RequestMethod.GET },
     ],
   });
-  app.enableCors({ origin: process.env.CORS_ORIGIN?.split(',') ?? true, credentials: true });
+  const configuredOrigins = (process.env.CORS_ORIGIN ?? '').split(',').map((origin) => origin.trim()).filter(Boolean);
+  app.enableCors({
+    origin(origin: string | undefined, callback: (error: Error | null, allow?: boolean) => void) {
+      if (!origin || configuredOrigins.includes(origin)) return callback(null, true);
+      if (process.env.NODE_ENV !== 'production' && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return callback(null, true);
+      return callback(new Error('Origin is not allowed by CORS'), false);
+    },
+    credentials: true,
+    allowedHeaders: ['Authorization', 'Content-Type', 'X-FundWell-Client'],
+  });
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
   const config = new DocumentBuilder().setTitle('Restaurant Profit API').setVersion('1.0').addBearerAuth().build();
   SwaggerModule.setup('api/docs', app, SwaggerModule.createDocument(app, config));

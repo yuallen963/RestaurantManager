@@ -7,7 +7,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:go_router/go_router.dart';
 import 'features/tabs.dart';
 import 'features/notifications/notification_screen.dart';
 import 'features/notifications/push_service.dart';
@@ -16,9 +16,16 @@ import 'features/onboarding/foundation.dart';
 import 'features/onboarding/onboarding_screen.dart';
 import 'features/auth/auth_screens.dart';
 import 'features/auth/auth_links.dart';
+import 'features/auth/auth_session_store_interface.dart';
+import 'features/auth/auth_session_store_native.dart'
+    if (dart.library.html) 'features/auth/auth_session_store_web.dart'
+    as auth_store;
+import 'features/auth/api_client_config_native.dart'
+    if (dart.library.html) 'features/auth/api_client_config_web.dart'
+    as api_client_config;
 import 'features/banking/plaid_link/plaid_link.dart';
 
-const storage = FlutterSecureStorage();
+final AuthSessionStore storage = auth_store.createAuthSessionStore();
 const apiBaseUrl = String.fromEnvironment(
   'API_BASE_URL',
   defaultValue: 'http://localhost:3000/api/v1',
@@ -29,23 +36,53 @@ BaseOptions apiOptions() => BaseOptions(
   receiveTimeout: const Duration(seconds: 15),
 );
 
-Dio createApiClient({Dio? refreshClient}) {
+Dio createApiClient({Dio? refreshClient, VoidCallback? onSessionExpired}) {
   final client = Dio(apiOptions());
+  api_client_config.configureApiClient(client);
+  final tokenClient = refreshClient ?? Dio(apiOptions());
+  api_client_config.configureApiClient(tokenClient);
   installAuthRefreshInterceptor(
     client,
-    refreshClient: refreshClient ?? Dio(apiOptions()),
+    refreshClient: tokenClient,
+    onSessionExpired: onSessionExpired,
   );
   return client;
 }
 
-void installAuthRefreshInterceptor(Dio client, {required Dio refreshClient}) {
+const _publicAuthPaths = {
+  '/auth/register',
+  '/auth/verify-email',
+  '/auth/resend-verification',
+  '/auth/login',
+  '/auth/login-challenge',
+  '/auth/login-challenge/resend',
+  '/auth/shared-test-session',
+  '/auth/private-session',
+  '/auth/forgot-password',
+  '/auth/reset-password',
+};
+
+void installAuthRefreshInterceptor(
+  Dio client, {
+  required Dio refreshClient,
+  VoidCallback? onSessionExpired,
+}) {
   client.interceptors.add(
     QueuedInterceptorsWrapper(
       onError: (error, handler) async {
         final request = error.requestOptions;
         if (error.response?.statusCode != 401 ||
             request.path == '/auth/refresh' ||
-            request.extra['authRetried'] == true) {
+            _publicAuthPaths.contains(request.path) ||
+            request.headers['Authorization'] == null) {
+          handler.next(error);
+          return;
+        }
+        if (request.extra['authRetried'] == true) {
+          await storage.delete(key: 'accessToken');
+          await storage.delete(key: 'refreshToken');
+          client.options.headers.remove('Authorization');
+          onSessionExpired?.call();
           handler.next(error);
           return;
         }
@@ -55,26 +92,31 @@ void installAuthRefreshInterceptor(Dio client, {required Dio refreshClient}) {
           var authorization = client.options.headers['Authorization'];
           if (authorization == null || authorization == failedAuthorization) {
             final refreshToken = await storage.read(key: 'refreshToken');
-            if (refreshToken == null) {
+            if (refreshToken == null && !kIsWeb) {
               handler.next(error);
               return;
             }
             final response = await refreshClient.post<Map<String, dynamic>>(
               '/auth/refresh',
-              data: {'refreshToken': refreshToken},
+              data: kIsWeb
+                  ? const <String, dynamic>{}
+                  : {'refreshToken': refreshToken},
             );
             final data = response.data;
             final accessToken = data?['accessToken'] as String?;
             final replacementRefreshToken = data?['refreshToken'] as String?;
-            if (accessToken == null || replacementRefreshToken == null) {
+            if (accessToken == null ||
+                (!kIsWeb && replacementRefreshToken == null)) {
               handler.next(error);
               return;
             }
             await storage.write(key: 'accessToken', value: accessToken);
-            await storage.write(
-              key: 'refreshToken',
-              value: replacementRefreshToken,
-            );
+            if (!kIsWeb) {
+              await storage.write(
+                key: 'refreshToken',
+                value: replacementRefreshToken,
+              );
+            }
             authorization = 'Bearer $accessToken';
             client.options.headers['Authorization'] = authorization;
           }
@@ -83,6 +125,10 @@ void installAuthRefreshInterceptor(Dio client, {required Dio refreshClient}) {
           request.extra['authRetried'] = true;
           handler.resolve(await client.fetch<dynamic>(request));
         } catch (_) {
+          await storage.delete(key: 'accessToken');
+          await storage.delete(key: 'refreshToken');
+          client.options.headers.remove('Authorization');
+          onSessionExpired?.call();
           handler.next(error);
         }
       },
@@ -90,7 +136,14 @@ void installAuthRefreshInterceptor(Dio client, {required Dio refreshClient}) {
   );
 }
 
-final api = Provider((_) => createApiClient());
+final authSessionExpiredProvider = StateProvider<bool>((_) => false);
+final api = Provider(
+  (ref) => createApiClient(
+    onSessionExpired: () {
+      ref.read(authSessionExpiredProvider.notifier).state = true;
+    },
+  ),
+);
 void main() {
   if (kDebugMode) debugPrint('[DEV] API base URL: $apiBaseUrl');
   runApp(const ProviderScope(child: ProfitApp()));
@@ -103,8 +156,16 @@ final demoModeProvider = Provider<bool>(
 const sharedTestUserModeRequested = bool.fromEnvironment(
   'SHARED_TEST_USER_MODE',
 );
+const sharedTestClientToken = String.fromEnvironment(
+  'SHARED_TEST_CLIENT_TOKEN',
+);
+bool sharedTestModeAllowed({required bool requested, required bool isWeb}) =>
+    requested && !isWeb;
 final sharedTestUserModeProvider = Provider<bool>(
-  (_) => sharedTestUserModeRequested,
+  (_) => sharedTestModeAllowed(
+    requested: sharedTestUserModeRequested,
+    isWeb: kIsWeb,
+  ),
 );
 
 enum AccountSessionMode { standard, private }
@@ -135,21 +196,47 @@ final accountSessionModeProvider = StateProvider<AccountSessionMode>(
 const _demoEmail = 'demo@profitlens.local';
 const _demoPassword = 'DemoProfit2026!';
 
-class ProfitApp extends StatefulWidget {
+class ProfitApp extends ConsumerStatefulWidget {
   const ProfitApp({super.key});
   @override
-  State<ProfitApp> createState() => _ProfitAppState();
+  ConsumerState<ProfitApp> createState() => _ProfitAppState();
 }
 
-class _ProfitAppState extends State<ProfitApp> {
+class _ProfitAppState extends ConsumerState<ProfitApp> {
   final navigatorKey = GlobalKey<NavigatorState>();
+  late final GoRouter webRouter = GoRouter(
+    navigatorKey: navigatorKey,
+    routes: [
+      GoRoute(
+        path: '/',
+        builder: (_, _) => AuthBootstrap(onReady: links.ready),
+      ),
+      GoRoute(path: '/login', builder: (_, _) => const AuthScreen()),
+      GoRoute(
+        path: '/forgot-password',
+        builder: (_, _) => const ForgotPasswordScreen(),
+      ),
+      GoRoute(
+        path: '/verify-email',
+        builder: (_, state) => VerifyEmailLinkScreen(
+          token: state.uri.queryParameters['token'] ?? '',
+        ),
+      ),
+      GoRoute(
+        path: '/reset-password',
+        builder: (_, state) => ResetPasswordScreen(
+          initialToken: state.uri.queryParameters['token'],
+        ),
+      ),
+    ],
+  );
   late final AuthLinkCoordinator links = AuthLinkCoordinator(
     navigatorKey: navigatorKey,
   );
   @override
   void initState() {
     super.initState();
-    links.start();
+    if (!kIsWeb) links.start();
   }
 
   @override
@@ -159,12 +246,35 @@ class _ProfitAppState extends State<ProfitApp> {
   }
 
   @override
-  Widget build(BuildContext context) => MaterialApp(
-    navigatorKey: navigatorKey,
-    title: 'Profit Lens',
-    theme: ThemeData(useMaterial3: true),
-    home: AuthBootstrap(onReady: links.ready),
-  );
+  Widget build(BuildContext context) {
+    ref.listen(authSessionExpiredProvider, (_, expired) {
+      if (!expired) return;
+      ref.read(authSessionExpiredProvider.notifier).state = false;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (kIsWeb) {
+          webRouter.go('/login');
+        } else {
+          navigatorKey.currentState?.pushAndRemoveUntil(
+            MaterialPageRoute(builder: (_) => const AuthScreen()),
+            (_) => false,
+          );
+        }
+      });
+    });
+    if (kIsWeb) {
+      return MaterialApp.router(
+        title: 'Profit Lens',
+        theme: ThemeData(useMaterial3: true),
+        routerConfig: webRouter,
+      );
+    }
+    return MaterialApp(
+      navigatorKey: navigatorKey,
+      title: 'Profit Lens',
+      theme: ThemeData(useMaterial3: true),
+      home: AuthBootstrap(onReady: links.ready),
+    );
+  }
 }
 
 class AuthBootstrap extends ConsumerStatefulWidget {
@@ -234,10 +344,10 @@ class _AuthBootstrapState extends ConsumerState<AuthBootstrap> {
         await _enterAuthenticatedApp();
         return;
       }
-      if (refresh != null) {
+      if (refresh != null || kIsWeb) {
         final response = await client.post(
           '/auth/refresh',
-          data: {'refreshToken': refresh},
+          data: kIsWeb ? const <String, dynamic>{} : {'refreshToken': refresh},
         );
         await _save(
           response.data as Map<String, dynamic>,
@@ -263,17 +373,16 @@ class _AuthBootstrapState extends ConsumerState<AuthBootstrap> {
         await _enterAuthenticatedApp(forceHome: true);
         return;
       }
-      if (mounted)
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (_) => const AuthScreen()),
-        );
+      if (mounted) _showLogin();
       widget.onReady?.call();
     } catch (_) {
-      if (refresh != null) {
+      if (refresh != null || kIsWeb) {
         try {
           final response = await client.post(
             '/auth/refresh',
-            data: {'refreshToken': refresh},
+            data: kIsWeb
+                ? const <String, dynamic>{}
+                : {'refreshToken': refresh},
           );
           await _save(
             response.data as Map<String, dynamic>,
@@ -327,21 +436,37 @@ class _AuthBootstrapState extends ConsumerState<AuthBootstrap> {
             );
           widget.onReady?.call();
         }
-      } else if (mounted)
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (_) => const AuthScreen()),
-        );
+      } else if (mounted) {
+        _showLogin();
+      }
       if (!sharedTestUserMode && !devAutoLogin) widget.onReady?.call();
     }
   }
 
   Future<void> _sharedTestSession() async {
-    final response = await ref.read(api).post('/auth/shared-test-session');
+    final response = await ref
+        .read(api)
+        .post(
+          '/auth/shared-test-session',
+          options: Options(
+            headers: {'X-FundWell-Shared-Test-Token': sharedTestClientToken},
+          ),
+        );
     await _save(
       response.data as Map<String, dynamic>,
       mode: AccountSessionMode.standard,
     );
     await _enterAuthenticatedApp(forceHome: true);
+  }
+
+  void _showLogin() {
+    if (kIsWeb) {
+      context.go('/login');
+    } else {
+      Navigator.of(
+        context,
+      ).pushReplacement(MaterialPageRoute(builder: (_) => const AuthScreen()));
+    }
   }
 
   Future<void> _enterAuthenticatedApp({bool forceHome = false}) async {
@@ -350,6 +475,16 @@ class _AuthBootstrapState extends ConsumerState<AuthBootstrap> {
         forceHome ||
         (await ref.read(onboardingRepositoryProvider).get()).completed;
     if (!mounted) return;
+    if (kIsWeb) {
+      final navigator = Navigator.of(context);
+      navigator.pushReplacement(
+        MaterialPageRoute(
+          builder: (_) => completed ? const Home() : const Onboarding(),
+        ),
+      );
+      widget.onReady?.call();
+      return;
+    }
     final navigator = Navigator.of(context);
     navigator.pushReplacement(
       MaterialPageRoute(
@@ -376,10 +511,10 @@ class _AuthBootstrapState extends ConsumerState<AuthBootstrap> {
     );
     ref.read(api).options.headers['Authorization'] =
         'Bearer ${data['accessToken']}';
-    await storage.write(
-      key: 'refreshToken',
-      value: data['refreshToken'] as String,
-    );
+    final refreshToken = data['refreshToken'] as String?;
+    if (refreshToken != null) {
+      await storage.write(key: 'refreshToken', value: refreshToken);
+    }
     await storage.write(key: sessionModeStorageKey, value: mode.name);
     ref.read(accountSessionModeProvider.notifier).state = mode;
   }
@@ -458,37 +593,46 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
           key: pendingAuthChallengeModeKey,
           value: AccountSessionMode.standard.name,
         );
-        if (mounted)
-          Navigator.pushReplacement(
-            context,
-            MaterialPageRoute(
-              builder: (_) => LoginChallengeScreen(
-                challengeId: challengeId,
-                method: method,
+        if (mounted) {
+          if (kIsWeb) {
+            context.go('/');
+          } else {
+            Navigator.pushReplacement(
+              context,
+              MaterialPageRoute(
+                builder: (_) => LoginChallengeScreen(
+                  challengeId: challengeId,
+                  method: method,
+                ),
               ),
-            ),
-          );
+            );
+          }
+        }
         return;
       }
       await storage.write(
         key: 'accessToken',
         value: response.data['accessToken'],
       );
-      await storage.write(
-        key: 'refreshToken',
-        value: response.data['refreshToken'],
-      );
+      final refreshToken = response.data['refreshToken'] as String?;
+      if (refreshToken != null) {
+        await storage.write(key: 'refreshToken', value: refreshToken);
+      }
       ref.read(api).options.headers['Authorization'] =
           'Bearer ${response.data['accessToken']}';
       final onboarding = await ref.read(onboardingRepositoryProvider).get();
       if (mounted) {
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(
-            builder: (_) =>
-                onboarding.completed ? const Home() : const Onboarding(),
-          ),
-        );
+        if (kIsWeb) {
+          context.go('/');
+        } else {
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(
+              builder: (_) =>
+                  onboarding.completed ? const Home() : const Onboarding(),
+            ),
+          );
+        }
       }
     } on DioException catch (exception) {
       if (!creatingAccount && exception.response?.statusCode == 403) {
@@ -556,12 +700,18 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
               TextButton(
                 onPressed: busy
                     ? null
-                    : () => Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => const ForgotPasswordScreen(),
-                        ),
-                      ),
+                    : () {
+                        if (kIsWeb) {
+                          context.go('/forgot-password');
+                        } else {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => const ForgotPasswordScreen(),
+                            ),
+                          );
+                        }
+                      },
                 child: const Text('Forgot password?'),
               ),
           ],

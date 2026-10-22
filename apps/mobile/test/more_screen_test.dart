@@ -243,6 +243,10 @@ void main() {
                 );
               }
               if (options.path == '/auth/shared-test-session') {
+                expect(
+                  options.headers['X-FundWell-Shared-Test-Token'],
+                  sharedTestClientToken,
+                );
                 return handler.resolve(
                   Response(
                     requestOptions: options,

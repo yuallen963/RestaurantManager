@@ -1,6 +1,8 @@
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../main.dart'
     show
@@ -52,10 +54,10 @@ class _LoginChallengeScreenState extends ConsumerState<LoginChallengeScreen> {
         key: 'accessToken',
         value: response.data['accessToken'],
       );
-      await storage.write(
-        key: 'refreshToken',
-        value: response.data['refreshToken'],
-      );
+      final refreshToken = response.data['refreshToken'] as String?;
+      if (refreshToken != null) {
+        await storage.write(key: 'refreshToken', value: refreshToken);
+      }
       await storage.delete(key: pendingAuthChallengeKey);
       await storage.delete(key: pendingAuthChallengeMethodKey);
       await storage.delete(key: pendingAuthChallengeModeKey);
@@ -68,14 +70,18 @@ class _LoginChallengeScreenState extends ConsumerState<LoginChallengeScreen> {
           'Bearer ${response.data['accessToken']}';
       final onboarding = await ref.read(onboardingRepositoryProvider).get();
       if (mounted) {
-        Navigator.pushAndRemoveUntil(
-          context,
-          MaterialPageRoute(
-            builder: (_) =>
-                onboarding.completed ? const Home() : const Onboarding(),
-          ),
-          (_) => false,
-        );
+        if (kIsWeb) {
+          context.go('/');
+        } else {
+          Navigator.pushAndRemoveUntil(
+            context,
+            MaterialPageRoute(
+              builder: (_) =>
+                  onboarding.completed ? const Home() : const Onboarding(),
+            ),
+            (_) => false,
+          );
+        }
       }
     } on DioException catch (exception) {
       if (mounted) {
@@ -155,10 +161,16 @@ class _LoginChallengeScreenState extends ConsumerState<LoginChallengeScreen> {
                   await storage.delete(key: pendingAuthChallengeKey);
                   await storage.delete(key: pendingAuthChallengeMethodKey);
                   await storage.delete(key: pendingAuthChallengeModeKey);
-                  if (context.mounted &&
-                      widget.accountMode == AccountSessionMode.private) {
+                  if (!context.mounted) return;
+                  if (kIsWeb) {
+                    context.go(
+                      widget.accountMode == AccountSessionMode.private
+                          ? '/'
+                          : '/login',
+                    );
+                  } else if (widget.accountMode == AccountSessionMode.private) {
                     Navigator.pop(context);
-                  } else if (context.mounted) {
+                  } else {
                     Navigator.pushAndRemoveUntil(
                       context,
                       MaterialPageRoute(builder: (_) => const AuthScreen()),

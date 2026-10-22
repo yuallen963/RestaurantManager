@@ -3,8 +3,7 @@
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/foundation.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-import '../../main.dart' show api;
+import '../../main.dart' show api, storage;
 
 enum DatePreset { thisMonth, lastMonth, last30Days, custom }
 
@@ -388,7 +387,7 @@ final dashboardRepositoryProvider = Provider(
   (ref) => DashboardRepository(ref.watch(api)),
 );
 const _locationKey = 'activeRestaurantLocationId';
-final locationStorageProvider = Provider((_) => const FlutterSecureStorage());
+final locationStorageProvider = Provider((_) => storage);
 
 class ActiveLocationState {
   const ActiveLocationState(this.locations, this.active);

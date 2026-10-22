@@ -13,9 +13,17 @@ class AuthLinkTarget {
   final String token;
 }
 
-AuthLinkTarget? parseAuthLink(Uri uri) {
-  if (uri.scheme != 'https' ||
-      uri.host != 'restaurantmanager-production-6231.up.railway.app') {
+AuthLinkTarget? parseAuthLink(Uri uri, {Uri? appBase}) {
+  final isApiHost =
+      uri.scheme == 'https' &&
+      uri.host == 'restaurantmanager-production-6231.up.railway.app';
+  final isWebAppHost =
+      appBase != null &&
+      appBase.scheme == 'https' &&
+      uri.scheme == appBase.scheme &&
+      uri.host == appBase.host &&
+      uri.port == appBase.port;
+  if (!isApiHost && !isWebAppHost) {
     return null;
   }
   final token = uri.queryParameters['token'];
@@ -64,7 +72,7 @@ class AuthLinkCoordinator {
   }
 
   void _receive(Uri uri) {
-    final target = parseAuthLink(uri);
+    final target = parseAuthLink(uri, appBase: Uri.base);
     if (target == null) return;
     final identity = '${target.kind.name}:${target.token}';
     if (_lastHandled == identity) return;
