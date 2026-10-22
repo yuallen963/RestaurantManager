@@ -14,6 +14,11 @@ enum OrganizationRole {
   VIEWER
 }
 
+enum BetaInvitationType {
+  NEW_ORGANIZATION
+  JOIN_ORGANIZATION
+}
+
 enum ImportStatus {
   PENDING
   UPLOADING
@@ -27,6 +32,13 @@ enum RevenueSource {
   MANUAL
   CSV_IMPORT
   POS_IMPORT
+  OTHER
+}
+
+enum ManualRevenueType {
+  CASH
+  CARD
+  ONLINE
   OTHER
 }
 
@@ -268,6 +280,8 @@ model User {
   mfaRecoveryCodes       MfaRecoveryCode[]
   recognizedDevices      RecognizedDevice[]
   securityEmailEvents    SecurityEmailEvent[]
+  createdBetaInvitations BetaInvitation[]       @relation("BetaInvitationCreator")
+  redeemedBetaInvitations BetaInvitation[]      @relation("BetaInvitationRedeemer")
 }
 
 model Organization {
@@ -292,6 +306,30 @@ model Organization {
   notifications         Notification[]
   notificationPreferences NotificationPreference[]
   onboardingStates      OnboardingState[]
+  betaInvitations       BetaInvitation[]
+}
+
+model BetaInvitation {
+  id               String             @id @default(uuid())
+  email            String
+  tokenHash        String             @unique
+  type             BetaInvitationType
+  organizationId   String?
+  organizationName String?
+  role             OrganizationRole?
+  expiresAt        DateTime
+  revokedAt        DateTime?
+  redeemedAt       DateTime?
+  createdAt        DateTime           @default(now())
+  createdByUserId  String
+  redeemedByUserId String?
+  organization     Organization?      @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  createdBy        User               @relation("BetaInvitationCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  redeemedBy       User?              @relation("BetaInvitationRedeemer", fields: [redeemedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([email, expiresAt])
+  @@index([organizationId, createdAt])
+  @@index([createdByUserId])
 }
 
 model OrganizationMember {
@@ -485,6 +523,8 @@ model RevenueEntry {
   amount               Decimal        @db.Decimal(14, 2)
   date                 DateTime
   source               RevenueSource  @default(MANUAL)
+  manualType           ManualRevenueType?
+  additionalToPos      Boolean        @default(false)
   notes                String?
   importId             String?
   createdByUserId      String?
@@ -493,6 +533,7 @@ model RevenueEntry {
   posDailySales        PosDailySales?
 
   @@index([organizationId, restaurantLocationId, date])
+  @@unique([organizationId, restaurantLocationId, date, source, manualType, additionalToPos], map: "RevenueEntry_manual_business_day_key")
   @@index([importId])
 }
 
@@ -1033,6 +1074,7 @@ model BankTransaction {
 
   @@unique([bankAccountId, providerTransactionId])
   @@index([organizationId, restaurantLocationId, reconciliationStatus, postedDate], map: "BankTransaction_organizationId_restaurantLocationId_reconciliat")
+  @@index([expenseId])
   @@index([invoiceId])
   @@index([suggestedInvoiceId])
 }

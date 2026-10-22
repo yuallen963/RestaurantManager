@@ -1150,6 +1150,68 @@ class _TransactionReviewSheetState
     }
   }
 
+  Future<void> reverseMatch({required bool invoicePayment}) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(
+          invoicePayment
+              ? 'Remove invoice payment link?'
+              : 'Remove from Expenses?',
+        ),
+        content: Text(
+          invoicePayment
+              ? 'The invoice will be preserved. This bank transaction will return to Needs Review.'
+              : 'A bank-created expense will be removed. An expense entered separately will be preserved, and this transaction will return to Needs Review.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Keep Match'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: Text(
+              invoicePayment ? 'Remove Payment Link' : 'Remove from Expenses',
+            ),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() {
+      saving = true;
+      actionError = null;
+    });
+    try {
+      await ref.read(bankingRepositoryProvider).reverse(widget.transaction.id);
+      _invalidateBankDerivedProviders(ref);
+      if (mounted) {
+        Navigator.pop(context);
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text(
+              invoicePayment
+                  ? 'Invoice payment link removed. Transaction returned to Needs Review.'
+                  : 'Expense match removed. Transaction returned to Needs Review.',
+            ),
+          ),
+        );
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(
+          () => actionError = invoicePayment
+              ? 'Unable to remove this invoice payment link safely.'
+              : 'Unable to remove this transaction from Expenses safely.',
+        );
+      }
+    } finally {
+      if (mounted) setState(() => saving = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final lookups = ref.watch(expenseLookupsProvider);
@@ -1199,7 +1261,8 @@ class _TransactionReviewSheetState
                     ),
                   ),
                 const SizedBox(height: 16),
-                if (widget.transaction.suggestedInvoice != null)
+                if (widget.transaction.suggestedInvoice != null &&
+                    widget.transaction.status != 'MATCHED_INVOICE')
                   Card(
                     color: Theme.of(context).colorScheme.primaryContainer,
                     child: Padding(
@@ -1306,34 +1369,34 @@ class _TransactionReviewSheetState
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       const Text(
-                        'This removes the expense from your financial reports. The original bank transaction remains and returns to Needs Review.',
+                        'This removes the bank transaction\'s expense match and returns it to Needs Review. FundWell removes a bank-created expense, but preserves an expense that was entered separately.',
                       ),
                       const SizedBox(height: 10),
                       OutlinedButton.icon(
                         key: const Key('reverse-reconciliation'),
                         onPressed: saving
                             ? null
-                            : () async {
-                                setState(() => saving = true);
-                                try {
-                                  await ref
-                                      .read(bankingRepositoryProvider)
-                                      .reverse(widget.transaction.id);
-                                  _invalidateBankDerivedProviders(ref);
-                                  if (mounted) Navigator.pop(this.context);
-                                } catch (_) {
-                                  if (mounted) {
-                                    setState(
-                                      () => actionError =
-                                          'Unable to remove this transaction from Expenses safely.',
-                                    );
-                                  }
-                                } finally {
-                                  if (mounted) setState(() => saving = false);
-                                }
-                              },
+                            : () => reverseMatch(invoicePayment: false),
                         icon: const Icon(Icons.undo),
                         label: const Text('Remove from Expenses'),
+                      ),
+                    ],
+                  )
+                else if (widget.transaction.status == 'MATCHED_INVOICE')
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      const Text(
+                        'This removes the payment link from the invoice. The bank transaction remains and returns to Needs Review.',
+                      ),
+                      const SizedBox(height: 10),
+                      OutlinedButton.icon(
+                        key: const Key('reverse-invoice-match'),
+                        onPressed: saving
+                            ? null
+                            : () => reverseMatch(invoicePayment: true),
+                        icon: const Icon(Icons.link_off),
+                        label: const Text('Remove Invoice Payment Link'),
                       ),
                     ],
                   )

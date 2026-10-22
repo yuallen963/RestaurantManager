@@ -19,15 +19,17 @@ export const normalizeMerchant = (value?: string | null) => {
   if (/\bRESTAURANT DEPOT\b/.test(clean)) return 'Restaurant Depot';
   return clean.toLowerCase().replace(/\b\w/g, (letter) => letter.toUpperCase());
 };
+const financialManagementRoles = [OrganizationRole.OWNER, OrganizationRole.ADMIN, OrganizationRole.MANAGER];
+const connectionManagementRoles = [OrganizationRole.OWNER, OrganizationRole.ADMIN];
 
 @Injectable()
 export class BankService {
   constructor(private readonly prisma: PrismaService, private readonly access: OrganizationAccessService, private readonly audit: AuditService, private readonly encryption: BankTokenEncryptionService, private readonly providers: BankProviderFactory, private readonly notifications?: NotificationsService) {}
 
-  private async organization(userId: string, organizationId: string) { await this.access.requireMember(userId, organizationId); return organizationId; }
-  private async connection(userId: string, id: string) { const row = await this.prisma.bankConnection.findUnique({ where: { id }, include: { accounts: true } }); if (!row) throw new NotFoundException('Bank connection not found'); await this.organization(userId, row.organizationId); return row; }
-  private async account(userId: string, id: string) { const row = await this.prisma.bankAccount.findUnique({ where: { id } }); if (!row) throw new NotFoundException('Bank account not found'); await this.organization(userId, row.organizationId); return row; }
-  private async transaction(userId: string, id: string) { const row = await this.prisma.bankTransaction.findUnique({ where: { id } }); if (!row) throw new NotFoundException('Bank transaction not found'); await this.organization(userId, row.organizationId); return row; }
+  private async organization(userId: string, organizationId: string, roles?: OrganizationRole[]) { await this.access.requireMember(userId, organizationId, roles); return organizationId; }
+  private async connection(userId: string, id: string, roles?: OrganizationRole[]) { const row = await this.prisma.bankConnection.findUnique({ where: { id }, include: { accounts: true } }); if (!row) throw new NotFoundException('Bank connection not found'); await this.organization(userId, row.organizationId, roles); return row; }
+  private async account(userId: string, id: string, roles?: OrganizationRole[]) { const row = await this.prisma.bankAccount.findUnique({ where: { id } }); if (!row) throw new NotFoundException('Bank account not found'); await this.organization(userId, row.organizationId, roles); return row; }
+  private async transaction(userId: string, id: string, roles?: OrganizationRole[]) { const row = await this.prisma.bankTransaction.findUnique({ where: { id } }); if (!row) throw new NotFoundException('Bank transaction not found'); await this.organization(userId, row.organizationId, roles); return row; }
   private safeConnection(row: any) { const { encryptedAccessToken: _secret, ...safe } = row; return safe; }
 
   private linkRedirectUri(clientPlatform?: BankLinkClientPlatform) {
@@ -43,20 +45,20 @@ export class BankService {
   }
 
   async linkToken(userId: string, organizationId: string, clientPlatform?: BankLinkClientPlatform) {
-    await this.organization(userId, organizationId);
+    await this.organization(userId, organizationId, connectionManagementRoles);
     const provider = this.providers.get();
     return { linkToken: await provider.createLinkToken(userId, undefined, this.linkRedirectUri(clientPlatform)), provider: provider.name, demo: provider.name === 'DEMO' };
   }
 
   async reauthenticationLinkToken(userId: string, id: string, clientPlatform?: BankLinkClientPlatform) {
-    const connection = await this.connection(userId, id);
+    const connection = await this.connection(userId, id, connectionManagementRoles);
     if (connection.status === BankConnectionStatus.DISCONNECTED) throw new BadRequestException('Bank connection is disconnected');
     const provider = this.providers.get(connection.provider);
     return { linkToken: await provider.createLinkToken(userId, this.encryption.decrypt(connection.encryptedAccessToken), this.linkRedirectUri(clientPlatform)), provider: provider.name, demo: provider.name === 'DEMO', updateMode: true };
   }
 
   async completeReauthentication(userId: string, id: string) {
-    const connection = await this.connection(userId, id);
+    const connection = await this.connection(userId, id, connectionManagementRoles);
     if (connection.status === BankConnectionStatus.DISCONNECTED) throw new BadRequestException('Bank connection is disconnected');
     const saved = await this.prisma.bankConnection.update({ where: { id }, data: { status: BankConnectionStatus.CONNECTED, lastError: null } });
     await this.audit.log({ userId, organizationId: connection.organizationId, action: 'bank.reauthenticated', entityType: 'BankConnection', entityId: id });
@@ -65,7 +67,7 @@ export class BankService {
   }
 
   async exchange(userId: string, data: ExchangeBankTokenDto) {
-    await this.organization(userId, data.organizationId);
+    await this.organization(userId, data.organizationId, connectionManagementRoles);
     if (data.restaurantLocationId) await this.validateLocation(data.organizationId, data.restaurantLocationId);
     const provider = this.providers.get();
     const exchanged = await provider.exchange(data.publicToken);
@@ -134,8 +136,7 @@ export class BankService {
   }
 
   async assignAccount(userId: string, id: string, data: AssignBankAccountDto) {
-    const account = await this.account(userId, id);
-    await this.access.requireMember(userId, account.organizationId, [OrganizationRole.OWNER, OrganizationRole.ADMIN]);
+    const account = await this.account(userId, id, connectionManagementRoles);
     if (data.restaurantLocationId) await this.validateLocation(account.organizationId, data.restaurantLocationId);
     const saved = await this.prisma.bankAccount.update({ where: { id }, data: { restaurantLocationId: data.restaurantLocationId, active: data.active } });
     if (data.restaurantLocationId !== undefined) await this.prisma.bankTransaction.updateMany({ where: { bankAccountId: id, reconciliationStatus: { in: [BankReconciliationStatus.UNMATCHED, BankReconciliationStatus.NEEDS_REVIEW] } }, data: { restaurantLocationId: data.restaurantLocationId ?? null, reconciliationStatus: BankReconciliationStatus.NEEDS_REVIEW } });
@@ -144,15 +145,18 @@ export class BankService {
   }
 
   async sync(userId: string, id: string) {
-    const connection = await this.connection(userId, id);
+    const connection = await this.connection(userId, id, connectionManagementRoles);
     if (connection.status === BankConnectionStatus.DISCONNECTED) throw new BadRequestException('Bank connection is disconnected');
     const staleBefore = new Date(Date.now() - 10 * 60 * 1000);
     const locked = await this.prisma.bankConnection.updateMany({ where: { id, OR: [{ status: { not: BankConnectionStatus.SYNCING } }, { updatedAt: { lt: staleBefore } }] }, data: { status: BankConnectionStatus.SYNCING, lastError: null } });
     if (!locked.count) throw new ConflictException('Bank connection is already syncing');
     try {
       const updates = await this.providers.get(connection.provider).sync(this.encryption.decrypt(connection.encryptedAccessToken), connection.syncCursor);
-      for (const removedId of updates.removed) await this.prisma.bankTransaction.updateMany({ where: { bankAccount: { bankConnectionId: id }, providerTransactionId: removedId }, data: { removedAt: new Date(), reconciliationStatus: BankReconciliationStatus.IGNORED } });
       for (const transaction of [...updates.added, ...updates.modified]) await this.ingest(userId, connection.organizationId, connection.accounts, transaction);
+      // Plaid can remove a pending transaction in the same response that adds
+      // its posted replacement. Move replacements first so the stable row is
+      // no longer addressable by the removed pending provider id.
+      for (const removedId of updates.removed) await this.removeProviderTransaction(userId, id, connection.organizationId, removedId);
       const saved = await this.prisma.bankConnection.update({ where: { id }, data: { syncCursor: updates.cursor, status: BankConnectionStatus.CONNECTED, lastSyncAt: new Date(), lastError: null } });
       await this.audit.log({ userId, organizationId: connection.organizationId, action: 'bank.synced', entityType: 'BankConnection', entityId: id, metadata: { added: updates.added.length, modified: updates.modified.length, removed: updates.removed.length } });
       return this.safeConnection(saved);
@@ -163,6 +167,102 @@ export class BankService {
       await this.notifications?.notifyOperational({ organizationId: connection.organizationId, type: reauth ? 'BANK_REAUTH_REQUIRED' : 'BANK_SYNC_FAILED', severity: 'HIGH', title: reauth ? 'Reconnect your bank account' : 'Bank sync failed', body: reauth ? 'Reconnect your bank account to continue syncing transactions.' : 'We could not sync this bank connection. Try again shortly.', deepLinkType: 'OPEN_BANK_ACCOUNTS', deepLinkId: id, dedupeKey: reauth ? `bank-reauth:${id}` : `bank-sync-failed:${id}:${error instanceof Error ? error.name : 'unknown'}` });
       throw error;
     }
+  }
+
+  private async removeProviderTransaction(userId: string, connectionId: string, organizationId: string, providerTransactionId: string) {
+    const result = await this.prisma.$transaction(async (tx) => {
+      const current = await tx.bankTransaction.findFirst({ where: { organizationId, providerTransactionId, bankAccount: { bankConnectionId: connectionId } } });
+      if (!current) return null;
+      let deleteExpenseId: string | null = null;
+      let deletedExpenseSnapshot: { amount: string; date: Date; source: ExpenseSource } | null = null;
+      let preservedExpense = false;
+      if (current.expenseId) {
+        const expense = await tx.expense.findUnique({ where: { id: current.expenseId } });
+        const links = await tx.bankTransaction.count({ where: { expenseId: current.expenseId } });
+        const ownedBankExpense = expense?.source === ExpenseSource.BANK_IMPORT
+          && expense.organizationId === current.organizationId
+          && expense.restaurantLocationId === current.restaurantLocationId
+          && links === 1;
+        if (ownedBankExpense) {
+          deleteExpenseId = expense!.id;
+          deletedExpenseSnapshot = {
+            amount: expense!.amount.toString(),
+            date: expense!.date,
+            source: expense!.source,
+          };
+        }
+        else preservedExpense = expense != null;
+      }
+      const removed = await tx.bankTransaction.update({ where: { id: current.id }, data: {
+        removedAt: new Date(), reconciliationStatus: BankReconciliationStatus.IGNORED,
+        expenseId: null, invoiceId: null, suggestedInvoiceId: null, pendingReviewDecision: null,
+      } });
+      if (deleteExpenseId) await tx.expense.delete({ where: { id: deleteExpenseId } });
+      return {
+        removed,
+        deletedBankExpense: deleteExpenseId != null,
+        deletedExpenseId: deleteExpenseId,
+        deletedExpenseSnapshot,
+        preservedExpense,
+        unlinkedInvoice: current.invoiceId != null,
+      };
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    if (result) await this.audit.log({ userId, organizationId, action: 'bank.transaction_removed', entityType: 'BankTransaction', entityId: result.removed.id, metadata: {
+      deletedBankExpense: result.deletedBankExpense, deletedExpenseId: result.deletedExpenseId,
+      deletedExpenseSnapshot: result.deletedExpenseSnapshot,
+      preservedExpense: result.preservedExpense, unlinkedInvoice: result.unlinkedInvoice,
+    } });
+  }
+
+  private async completePendingDecision(tx: any, transaction: any, userId: string) {
+    const decision = transaction.pendingReviewDecision as MerchantRuleDecision | null;
+    if (transaction.pending || !decision) return transaction;
+    if (transaction.expenseId || transaction.invoiceId) {
+      return tx.bankTransaction.update({ where: { id: transaction.id }, data: { pendingReviewDecision: null } });
+    }
+    if (decision === MerchantRuleDecision.PERSONAL_TRANSFER && !transaction.suggestedInvoiceId) {
+      return tx.bankTransaction.update({ where: { id: transaction.id }, data: {
+        reconciliationStatus: BankReconciliationStatus.IGNORED,
+        pendingReviewDecision: null,
+      } });
+    }
+    if (decision === MerchantRuleDecision.EXPENSE
+      && transaction.restaurantLocationId && transaction.categoryId && transaction.amount.gt(0)
+      && !transaction.suggestedInvoiceId) {
+      const expense = await tx.expense.create({ data: {
+        organizationId: transaction.organizationId,
+        restaurantLocationId: transaction.restaurantLocationId,
+        vendorId: transaction.vendorId,
+        expenseCategoryId: transaction.categoryId,
+        amount: transaction.amount,
+        date: transaction.postedDate,
+        description: transaction.description,
+        source: ExpenseSource.BANK_IMPORT,
+        createdByUserId: userId,
+      } });
+      return tx.bankTransaction.update({ where: { id: transaction.id }, data: {
+        expenseId: expense.id,
+        reconciliationStatus: BankReconciliationStatus.MATCHED_EXPENSE,
+        pendingReviewDecision: null,
+      } });
+    }
+    // A new invoice suggestion, missing restaurant/category, or changed
+    // direction makes the original decision unsafe to apply automatically.
+    // Clear the latent instruction and return the posted transaction visibly
+    // to review instead of silently applying it later.
+    return tx.bankTransaction.update({ where: { id: transaction.id }, data: {
+      reconciliationStatus: BankReconciliationStatus.NEEDS_REVIEW,
+      pendingReviewDecision: null,
+    } });
+  }
+
+  private async auditPendingDecision(userId: string, organizationId: string, decision: MerchantRuleDecision, transaction: any) {
+    const action = transaction.reconciliationStatus === BankReconciliationStatus.MATCHED_EXPENSE
+      ? 'bank.pending_expense_completed'
+      : transaction.reconciliationStatus === BankReconciliationStatus.IGNORED
+      ? 'bank.pending_personal_transfer_completed'
+      : 'bank.pending_decision_returned_to_review';
+    await this.audit.log({ userId, organizationId, action, entityType: 'BankTransaction', entityId: transaction.id, metadata: { decision } });
   }
 
   private async ingest(userId: string, organizationId: string, accounts: any[], transaction: ProviderTransaction) {
@@ -178,29 +278,52 @@ export class BankService {
     const posted = await this.prisma.bankTransaction.findUnique({ where: { bankAccountId_providerTransactionId: { bankAccountId: account.id, providerTransactionId: transaction.id } } });
     const pending = transaction.pendingTransactionId ? await this.prisma.bankTransaction.findFirst({ where: { bankAccountId: account.id, providerTransactionId: transaction.pendingTransactionId, pending: true } }) : null;
     if (posted) {
-      if (pending && pending.id !== posted.id) await this.prisma.bankTransaction.delete({ where: { id: pending.id } });
-      const amountChanged = posted.amount != null && !new Prisma.Decimal(posted.amount).eq(transaction.amount);
-      const dateChanged = posted.postedDate && new Date(posted.postedDate).toISOString().slice(0, 10) !== transaction.date;
-      let reconciliation = {};
-      if (posted.expenseId && (amountChanged || dateChanged)) {
-        const expense = await this.prisma.expense.findUnique({ where: { id: posted.expenseId } });
-        if (expense?.source === ExpenseSource.BANK_IMPORT) {
-          await this.prisma.expense.update({ where: { id: expense.id }, data: { amount: raw.amount, date: raw.postedDate, description: raw.description } });
-        } else {
-          reconciliation = { expenseId: null, reconciliationStatus: BankReconciliationStatus.NEEDS_REVIEW };
+      const result = await this.prisma.$transaction(async (tx) => {
+        const current = await tx.bankTransaction.findUnique({ where: { id: posted.id } });
+        if (!current) throw new NotFoundException('Bank transaction not found');
+        if (pending && pending.id !== current.id) await tx.bankTransaction.delete({ where: { id: pending.id } });
+        const amountChanged = current.amount != null && !new Prisma.Decimal(current.amount).eq(transaction.amount);
+        const dateChanged = current.postedDate != null && new Date(current.postedDate).toISOString().slice(0, 10) !== transaction.date;
+        let reconciliation: { expenseId?: null; reconciliationStatus?: BankReconciliationStatus } = current.removedAt
+          ? { reconciliationStatus: BankReconciliationStatus.NEEDS_REVIEW }
+          : {};
+        if (current.expenseId && (amountChanged || dateChanged)) {
+          const expense = await tx.expense.findUnique({ where: { id: current.expenseId } });
+          if (expense?.source === ExpenseSource.BANK_IMPORT) {
+            await tx.expense.update({ where: { id: expense.id }, data: { amount: raw.amount, date: raw.postedDate, description: raw.description } });
+          } else {
+            reconciliation = { expenseId: null, reconciliationStatus: BankReconciliationStatus.NEEDS_REVIEW };
+          }
         }
+        const updated = await tx.bankTransaction.update({ where: { id: current.id }, data: { ...raw, ...reconciliation } });
+        return {
+          transaction: await this.completePendingDecision(tx, updated, userId),
+          pendingDecision: current.pendingReviewDecision,
+        };
+      }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+      if (result.pendingDecision) {
+        await this.auditPendingDecision(userId, organizationId, result.pendingDecision, result.transaction);
+        return;
       }
-      const updated = await this.prisma.bankTransaction.update({ where: { id: posted.id }, data: { ...raw, ...reconciliation } });
-      await this.autoReconcile(userId, updated, categorization.rule);
+      await this.autoReconcile(userId, result.transaction, categorization.rule);
       return;
     }
     if (pending) {
-      const updated = await this.prisma.bankTransaction.update({ where: { id: pending.id }, data: { ...raw, providerTransactionId: transaction.id, suggestedInvoiceId: pending.suggestedInvoiceId ?? invoiceMatch?.invoiceId, matchConfidence: pending.matchConfidence === InvoiceMatchConfidence.NO_MATCH ? invoiceMatch?.confidence ?? InvoiceMatchConfidence.NO_MATCH : pending.matchConfidence } });
-      if (!updated.pending && updated.pendingReviewDecision === MerchantRuleDecision.PERSONAL_TRANSFER && !updated.expenseId && !updated.invoiceId && !updated.suggestedInvoiceId) {
-        await this.prisma.bankTransaction.update({ where: { id: updated.id }, data: { reconciliationStatus: BankReconciliationStatus.IGNORED, pendingReviewDecision: null } });
+      const result = await this.prisma.$transaction(async (tx) => {
+        const current = await tx.bankTransaction.findUnique({ where: { id: pending.id } });
+        if (!current) return null;
+        const updated = await tx.bankTransaction.update({ where: { id: current.id }, data: { ...raw, providerTransactionId: transaction.id, suggestedInvoiceId: current.suggestedInvoiceId ?? invoiceMatch?.invoiceId, matchConfidence: current.matchConfidence === InvoiceMatchConfidence.NO_MATCH ? invoiceMatch?.confidence ?? InvoiceMatchConfidence.NO_MATCH : current.matchConfidence } });
+        return {
+          transaction: await this.completePendingDecision(tx, updated, userId),
+          pendingDecision: current.pendingReviewDecision,
+        };
+      }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+      if (!result) return;
+      if (result.pendingDecision) {
+        await this.auditPendingDecision(userId, organizationId, result.pendingDecision, result.transaction);
         return;
       }
-      await this.autoReconcile(userId, updated, categorization.rule);
+      await this.autoReconcile(userId, result.transaction, categorization.rule);
       return;
     }
     const created = await this.prisma.bankTransaction.create({ data: { organizationId, bankAccountId: account.id, providerTransactionId: transaction.id, ...proposed } });
@@ -313,7 +436,7 @@ export class BankService {
   }
 
   async review(userId: string, id: string, data: ReviewBankTransactionDto) {
-    const transaction = await this.transaction(userId, id);
+    const transaction = await this.transaction(userId, id, financialManagementRoles);
     if (data.restaurantLocationId) await this.validateLocation(transaction.organizationId, data.restaurantLocationId);
     if (data.vendorId && !(await this.prisma.vendor.findFirst({ where: { id: data.vendorId, organizationId: transaction.organizationId } }))) throw new ForbiddenException('Vendor is not available');
     if (data.categoryId && !(await this.prisma.expenseCategory.findFirst({ where: { id: data.categoryId, OR: [{ organizationId: null }, { organizationId: transaction.organizationId }] } }))) throw new ForbiddenException('Category is not available');
@@ -324,6 +447,14 @@ export class BankService {
     const vendorId = data.vendorId === undefined ? transaction.vendorId : data.vendorId;
     const categoryId = data.categoryId === undefined ? transaction.categoryId : data.categoryId;
     const decision = data.decision ?? (data.ignored ? BankReviewDecision.PERSONAL_TRANSFER : BankReviewDecision.EXPENSE);
+    if (decision === BankReviewDecision.EXPENSE
+      && transaction.reconciliationStatus === BankReconciliationStatus.MATCHED_EXPENSE
+      && transaction.expenseId && !transaction.invoiceId) {
+      const sameClassification = locationId === transaction.restaurantLocationId
+        && vendorId === transaction.vendorId && categoryId === transaction.categoryId;
+      if (sameClassification && !data.createMerchantRule && !data.autoConfirmFuture) return transaction;
+      throw new ConflictException('This transaction is already in Expenses. Remove it from Expenses before changing its classification.');
+    }
     if (transaction.expenseId || transaction.invoiceId || transaction.reconciliationStatus === BankReconciliationStatus.MATCHED_EXPENSE || transaction.reconciliationStatus === BankReconciliationStatus.MATCHED_INVOICE) throw new ConflictException('Transaction has already been reviewed');
     let saved;
     if (decision === BankReviewDecision.PERSONAL_TRANSFER) {
@@ -338,17 +469,24 @@ export class BankService {
       if (!categoryId) throw new BadRequestException('Select an expense category before reconciling this transaction');
       if (transaction.amount.lte(0)) throw new BadRequestException('Credits cannot be reconciled as expenses');
       if (transaction.suggestedInvoiceId) throw new BadRequestException('Confirm or reject the suggested invoice match first');
-      saved = await this.prisma.$transaction(async (tx) => {
-        const current = await tx.bankTransaction.findUnique({ where: { id } });
-        if (!current) throw new NotFoundException('Bank transaction not found');
-        if (current.expenseId) return tx.bankTransaction.update({ where: { id }, data: { vendorId, categoryId, restaurantLocationId: locationId, categorizationSource: BankCategorizationSource.MANUAL, reconciliationStatus: BankReconciliationStatus.MATCHED_EXPENSE } });
-        const start = new Date(current.postedDate); start.setUTCDate(start.getUTCDate() - 3);
-        const end = new Date(current.postedDate); end.setUTCDate(end.getUTCDate() + 3);
-        const matchingExpenses = await tx.expense.findMany({ where: { organizationId: current.organizationId, restaurantLocationId: locationId, amount: current.amount, date: { gte: start, lte: end }, vendorId: vendorId ?? undefined, expenseCategoryId: categoryId, bankTransactions: { none: {} } }, take: 2 });
-        if (matchingExpenses.length > 1) throw new ConflictException('Multiple matching expenses require manual reconciliation');
-        const expense = matchingExpenses[0] ?? await tx.expense.create({ data: { organizationId: current.organizationId, restaurantLocationId: locationId, vendorId, expenseCategoryId: categoryId, amount: current.amount, date: current.postedDate, description: current.description, source: ExpenseSource.BANK_IMPORT, createdByUserId: userId } });
-        return tx.bankTransaction.update({ where: { id }, data: { vendorId, categoryId, restaurantLocationId: locationId, expenseId: expense.id, categorizationSource: BankCategorizationSource.MANUAL, reconciliationStatus: BankReconciliationStatus.MATCHED_EXPENSE } });
-      }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+      try {
+        saved = await this.prisma.$transaction(async (tx) => {
+          const current = await tx.bankTransaction.findUnique({ where: { id } });
+          if (!current) throw new NotFoundException('Bank transaction not found');
+          if (current.expenseId) return tx.bankTransaction.update({ where: { id }, data: { vendorId, categoryId, restaurantLocationId: locationId, categorizationSource: BankCategorizationSource.MANUAL, reconciliationStatus: BankReconciliationStatus.MATCHED_EXPENSE } });
+          const start = new Date(current.postedDate); start.setUTCDate(start.getUTCDate() - 3);
+          const end = new Date(current.postedDate); end.setUTCDate(end.getUTCDate() + 3);
+          const matchingExpenses = await tx.expense.findMany({ where: { organizationId: current.organizationId, restaurantLocationId: locationId, amount: current.amount, date: { gte: start, lte: end }, vendorId: vendorId ?? undefined, expenseCategoryId: categoryId, bankTransactions: { none: {} } }, take: 2 });
+          if (matchingExpenses.length > 1) throw new ConflictException('Multiple matching expenses require manual reconciliation');
+          const expense = matchingExpenses[0] ?? await tx.expense.create({ data: { organizationId: current.organizationId, restaurantLocationId: locationId, vendorId, expenseCategoryId: categoryId, amount: current.amount, date: current.postedDate, description: current.description, source: ExpenseSource.BANK_IMPORT, createdByUserId: userId } });
+          return tx.bankTransaction.update({ where: { id }, data: { vendorId, categoryId, restaurantLocationId: locationId, expenseId: expense.id, categorizationSource: BankCategorizationSource.MANUAL, reconciliationStatus: BankReconciliationStatus.MATCHED_EXPENSE } });
+        }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+      } catch (error) {
+        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+          throw new ConflictException('This expense is already linked to another bank transaction');
+        }
+        throw error;
+      }
     }
     await this.audit.log({ userId, organizationId: transaction.organizationId, action: decision === BankReviewDecision.PERSONAL_TRANSFER ? 'bank.transaction_ignored' : decision === BankReviewDecision.REVIEW_LATER ? 'bank.transaction_review_deferred' : 'bank.transaction_categorized', entityType: 'BankTransaction', entityId: id });
     if (data.createMerchantRule && decision !== BankReviewDecision.REVIEW_LATER && transaction.merchantNameNormalized) {
@@ -374,7 +512,7 @@ export class BankService {
     const organizationIds = new Set(rows.map((row) => row.organizationId));
     const locationIds = new Set(rows.map((row) => row.restaurantLocationId));
     if (organizationIds.size !== 1 || locationIds.size !== 1) throw new BadRequestException('Bulk review requires transactions from one restaurant');
-    await this.organization(userId, rows[0].organizationId);
+    await this.organization(userId, rows[0].organizationId, financialManagementRoles);
     const reviewData: ReviewBankTransactionDto = { ...data };
     delete (reviewData as any).ids;
     delete (reviewData as any).groupAnchorId;
@@ -409,26 +547,42 @@ export class BankService {
   }
 
   async reverseReconciliation(userId: string, id: string) {
-    const transaction = await this.transaction(userId, id);
+    const transaction = await this.transaction(userId, id, financialManagementRoles);
     if (transaction.reconciliationStatus === BankReconciliationStatus.IGNORED && !transaction.expenseId && !transaction.invoiceId) {
       const restored = await this.prisma.bankTransaction.update({ where: { id }, data: { reconciliationStatus: BankReconciliationStatus.NEEDS_REVIEW, pendingReviewDecision: null } });
       await this.audit.log({ userId, organizationId: transaction.organizationId, action: 'bank.transaction_ignore_reversed', entityType: 'BankTransaction', entityId: id });
       return restored;
+    }
+    if (transaction.reconciliationStatus === BankReconciliationStatus.MATCHED_INVOICE && transaction.invoiceId) {
+      const reversed = await this.prisma.$transaction(async (tx) => {
+        const current = await tx.bankTransaction.findUnique({ where: { id } });
+        if (!current?.invoiceId || current.reconciliationStatus !== BankReconciliationStatus.MATCHED_INVOICE) throw new ConflictException('Transaction reconciliation changed');
+        return tx.bankTransaction.update({ where: { id }, data: {
+          invoiceId: null,
+          suggestedInvoiceId: null,
+          matchConfidence: InvoiceMatchConfidence.NO_MATCH,
+          reconciliationStatus: BankReconciliationStatus.NEEDS_REVIEW,
+          categorizationSource: BankCategorizationSource.MANUAL,
+        } });
+      }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+      await this.audit.log({ userId, organizationId: transaction.organizationId, action: 'bank.invoice_match_reversed', entityType: 'BankTransaction', entityId: id, metadata: { invoiceId: transaction.invoiceId } });
+      return reversed;
     }
     if (transaction.reconciliationStatus !== BankReconciliationStatus.MATCHED_EXPENSE || !transaction.expenseId) throw new BadRequestException('Transaction is not reversible');
     const result = await this.prisma.$transaction(async (tx) => {
       const current = await tx.bankTransaction.findUnique({ where: { id } });
       if (!current?.expenseId || current.reconciliationStatus !== BankReconciliationStatus.MATCHED_EXPENSE) throw new ConflictException('Transaction reconciliation changed');
       const expense = await tx.expense.findUnique({ where: { id: current.expenseId } });
-      if (!expense || expense.source !== ExpenseSource.BANK_IMPORT) throw new BadRequestException('Only bank-created expenses can be reversed here');
+      if (!expense) throw new ConflictException('The linked expense no longer exists');
       const links = await tx.bankTransaction.count({ where: { expenseId: expense.id } });
       if (links !== 1) throw new ConflictException('Expense has multiple financial links');
       const reversed = await tx.bankTransaction.update({ where: { id }, data: { expenseId: null, reconciliationStatus: BankReconciliationStatus.NEEDS_REVIEW } });
-      await tx.expense.delete({ where: { id: expense.id } });
-      return reversed;
+      const deletedBankExpense = expense.source === ExpenseSource.BANK_IMPORT;
+      if (deletedBankExpense) await tx.expense.delete({ where: { id: expense.id } });
+      return { reversed, deletedBankExpense };
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
-    await this.audit.log({ userId, organizationId: transaction.organizationId, action: 'bank.transaction_reconciliation_reversed', entityType: 'BankTransaction', entityId: id });
-    return result;
+    await this.audit.log({ userId, organizationId: transaction.organizationId, action: 'bank.transaction_reconciliation_reversed', entityType: 'BankTransaction', entityId: id, metadata: { deletedBankExpense: result.deletedBankExpense } });
+    return result.reversed;
   }
 
   async merchantRules(userId: string, organizationId: string, locationId: string) {
@@ -440,7 +594,7 @@ export class BankService {
   async updateMerchantRule(userId: string, id: string, data: UpdateMerchantRuleDto) {
     const rule = await this.prisma.merchantRule.findUnique({ where: { id } });
     if (!rule) throw new NotFoundException('Merchant rule not found');
-    await this.organization(userId, rule.organizationId);
+    await this.organization(userId, rule.organizationId, financialManagementRoles);
     if (data.minimumAmount != null && data.maximumAmount != null && data.minimumAmount > data.maximumAmount) throw new BadRequestException('Minimum amount cannot exceed maximum amount');
     if (data.autoConfirm === true && (data.minimumAmount ?? rule.minimumAmount) == null) throw new BadRequestException('Automatic confirmation requires a minimum amount');
     if (data.autoConfirm === true && (data.maximumAmount ?? rule.maximumAmount) == null) throw new BadRequestException('Automatic confirmation requires a maximum amount');
@@ -452,29 +606,43 @@ export class BankService {
   }
 
   async confirmMatch(userId: string, id: string, data: ConfirmInvoiceMatchDto) {
-    const transaction = await this.transaction(userId, id);
-    if (transaction.pending) throw new BadRequestException('Wait for the transaction to post before matching an invoice');
-    if (transaction.expenseId) throw new BadRequestException('Transaction is already reconciled to an expense');
-    if (!transaction.restaurantLocationId) throw new BadRequestException('Assign a restaurant location first');
-    if (transaction.suggestedInvoiceId !== data.invoiceId) throw new BadRequestException('Invoice is not a current match candidate');
-    const invoice = await this.prisma.invoice.findFirst({ where: { id: data.invoiceId, organizationId: transaction.organizationId, restaurantLocationId: transaction.restaurantLocationId, reviewStatus: ReviewStatus.REVIEWED } });
-    if (!invoice) throw new ForbiddenException('Invoice is not available');
-    const alreadyMatched = await this.prisma.bankTransaction.findFirst({ where: { invoiceId: invoice.id, reconciliationStatus: BankReconciliationStatus.MATCHED_INVOICE, id: { not: id } } });
-    if (alreadyMatched) throw new BadRequestException('Invoice is already matched');
-    const saved = await this.prisma.bankTransaction.update({ where: { id }, data: { invoiceId: invoice.id, suggestedInvoiceId: invoice.id, matchConfidence: transaction.matchConfidence === InvoiceMatchConfidence.NO_MATCH ? InvoiceMatchConfidence.LIKELY : transaction.matchConfidence, reconciliationStatus: BankReconciliationStatus.MATCHED_INVOICE, categorizationSource: BankCategorizationSource.INVOICE_MATCH, vendorId: invoice.vendorId } });
-    await this.audit.log({ userId, organizationId: transaction.organizationId, action: 'bank.invoice_match_confirmed', entityType: 'BankTransaction', entityId: id, metadata: { invoiceId: invoice.id } });
-    return saved;
+    const transaction = await this.transaction(userId, id, financialManagementRoles);
+    try {
+      const result = await this.prisma.$transaction(async (tx) => {
+        const current = await tx.bankTransaction.findUnique({ where: { id } });
+        if (!current) throw new NotFoundException('Bank transaction not found');
+        if (current.invoiceId === data.invoiceId && current.reconciliationStatus === BankReconciliationStatus.MATCHED_INVOICE) return { saved: current, changed: false };
+        if (current.pending) throw new BadRequestException('Wait for the transaction to post before matching an invoice');
+        if (current.expenseId || current.invoiceId) throw new ConflictException('Transaction has already been reviewed');
+        if (!current.restaurantLocationId) throw new BadRequestException('Assign a restaurant location first');
+        if (current.suggestedInvoiceId !== data.invoiceId) throw new BadRequestException('Invoice is not a current match candidate');
+        const invoice = await tx.invoice.findFirst({ where: { id: data.invoiceId, organizationId: current.organizationId, restaurantLocationId: current.restaurantLocationId, reviewStatus: ReviewStatus.REVIEWED } });
+        if (!invoice) throw new ForbiddenException('Invoice is not available');
+        const alreadyMatched = await tx.bankTransaction.findFirst({ where: { invoiceId: invoice.id, reconciliationStatus: BankReconciliationStatus.MATCHED_INVOICE, removedAt: null, id: { not: id } } });
+        if (alreadyMatched) throw new ConflictException('Invoice is already linked to another bank transaction');
+        const saved = await tx.bankTransaction.update({ where: { id }, data: { invoiceId: invoice.id, suggestedInvoiceId: invoice.id, matchConfidence: current.matchConfidence === InvoiceMatchConfidence.NO_MATCH ? InvoiceMatchConfidence.LIKELY : current.matchConfidence, reconciliationStatus: BankReconciliationStatus.MATCHED_INVOICE, categorizationSource: BankCategorizationSource.INVOICE_MATCH, vendorId: invoice.vendorId } });
+        return { saved, changed: true };
+      }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+      if (result.changed) await this.audit.log({ userId, organizationId: transaction.organizationId, action: 'bank.invoice_match_confirmed', entityType: 'BankTransaction', entityId: id, metadata: { invoiceId: data.invoiceId } });
+      return result.saved;
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') throw new ConflictException('Invoice is already linked to another bank transaction');
+      throw error;
+    }
   }
 
   async rejectMatch(userId: string, id: string) {
-    const transaction = await this.transaction(userId, id);
+    const transaction = await this.transaction(userId, id, financialManagementRoles);
+    if (transaction.invoiceId || transaction.reconciliationStatus === BankReconciliationStatus.MATCHED_INVOICE) {
+      throw new ConflictException('Remove the invoice payment link before rejecting an invoice suggestion');
+    }
     const saved = await this.prisma.bankTransaction.update({ where: { id }, data: { suggestedInvoiceId: null, matchConfidence: InvoiceMatchConfidence.NO_MATCH, reconciliationStatus: BankReconciliationStatus.NEEDS_REVIEW } });
     await this.audit.log({ userId, organizationId: transaction.organizationId, action: 'bank.invoice_match_rejected', entityType: 'BankTransaction', entityId: id });
     return saved;
   }
 
   async disconnect(userId: string, id: string) {
-    const connection = await this.connection(userId, id);
+    const connection = await this.connection(userId, id, connectionManagementRoles);
     if (connection.status === BankConnectionStatus.DISCONNECTED) return;
     await this.providers.get(connection.provider).disconnect(this.encryption.decrypt(connection.encryptedAccessToken));
     await this.prisma.bankConnection.update({ where: { id }, data: { status: BankConnectionStatus.DISCONNECTED, encryptedAccessToken: this.encryption.encrypt('revoked'), syncCursor: null } });

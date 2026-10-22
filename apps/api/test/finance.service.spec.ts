@@ -1,9 +1,40 @@
 import { ConflictException, ForbiddenException } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { OrganizationRole, Prisma } from '@prisma/client';
 import { FinanceService } from '../src/finance/finance.service';
 
 describe('FinanceService tenant enforcement', () => {
   const audit = { log: jest.fn() } as any;
+  it('requires a financial manager role before creating an expense', async () => {
+    const prisma: any = {
+      restaurantLocation: { findUnique: jest.fn().mockResolvedValue({ id: 'loc-a', organizationId: 'org-a' }) },
+      expenseCategory: { findFirst: jest.fn().mockResolvedValue({ id: 'category-a' }) },
+      expense: { create: jest.fn().mockResolvedValue({ id: 'expense-a' }) },
+    };
+    const access = { requireMember: jest.fn().mockResolvedValue({}) } as any;
+    await new FinanceService(prisma, access, audit).expense('user-a', {
+      restaurantLocationId: 'loc-a', expenseCategoryId: 'category-a',
+      amount: 10, date: '2026-10-01', description: 'Supplies',
+    });
+    expect(access.requireMember).toHaveBeenCalledWith('user-a', 'org-a', [
+      OrganizationRole.OWNER,
+      OrganizationRole.ADMIN,
+      OrganizationRole.MANAGER,
+    ]);
+  });
+  it('rejects a viewer before mutating financial records', async () => {
+    const prisma: any = {
+      restaurantLocation: { findUnique: jest.fn().mockResolvedValue({ id: 'loc-a', organizationId: 'org-a' }) },
+      expense: { create: jest.fn() },
+    };
+    const access = { requireMember: jest.fn((_userId, _organizationId, roles) => {
+      if (roles) throw new ForbiddenException();
+    }) } as any;
+    await expect(new FinanceService(prisma, access, audit).expense('viewer', {
+      restaurantLocationId: 'loc-a', expenseCategoryId: 'category-a',
+      amount: 10, date: '2026-10-01', description: 'Supplies',
+    })).rejects.toBeInstanceOf(ForbiddenException);
+    expect(prisma.expense.create).not.toHaveBeenCalled();
+  });
   it('denies a revenue record belonging to another organization', async () => {
     const prisma: any = { revenueEntry: { findUnique: jest.fn().mockResolvedValue({ id: 'revenue-b', organizationId: 'org-b' }) } };
     const access = { requireMember: jest.fn().mockRejectedValue(new ForbiddenException()) } as any;
@@ -28,6 +59,116 @@ describe('FinanceService tenant enforcement', () => {
     const access = { requireMember: jest.fn().mockResolvedValue({}) } as any;
     await expect(new FinanceService(prisma, access, audit).revenue('user-a', { restaurantLocationId: 'loc-a', amount: 100, date: '2026-10-01' })).rejects.toBeInstanceOf(ConflictException);
     expect(prisma.revenueEntry.create).not.toHaveBeenCalled();
+  });
+  it('creates typed manual revenue and preserves its audit snapshot', async () => {
+    const created = {
+      id: 'revenue-a', organizationId: 'org-a', restaurantLocationId: 'loc-a',
+      amount: new Prisma.Decimal(125.25), date: new Date('2026-10-01T00:00:00.000Z'),
+      source: 'MANUAL', manualType: 'CASH', additionalToPos: false, notes: 'Lunch',
+    };
+    const prisma: any = {
+      restaurantLocation: { findUnique: jest.fn().mockResolvedValue({ id: 'loc-a', organizationId: 'org-a' }) },
+      revenueEntry: { findFirst: jest.fn().mockResolvedValue(null), create: jest.fn().mockResolvedValue(created) },
+    };
+    const access = { requireMember: jest.fn().mockResolvedValue({}) } as any;
+    const result = await new FinanceService(prisma, access, audit).revenue('user-a', {
+      restaurantLocationId: 'loc-a', amount: 125.25, date: '2026-10-01', manualType: 'CASH', notes: ' Lunch ',
+    });
+    expect(result).toBe(created);
+    expect(prisma.revenueEntry.create).toHaveBeenCalledWith({ data: expect.objectContaining({
+      organizationId: 'org-a', restaurantLocationId: 'loc-a', source: 'MANUAL', manualType: 'CASH', notes: 'Lunch',
+    }) });
+    expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'revenue.created', metadata: expect.objectContaining({ amount: '125.25', manualType: 'CASH' }),
+    }));
+  });
+  it('requires editing instead of creating a same-day sales-type duplicate', async () => {
+    const existing = { id: 'existing', source: 'MANUAL' };
+    const prisma: any = {
+      restaurantLocation: { findUnique: jest.fn().mockResolvedValue({ id: 'loc-a', organizationId: 'org-a' }) },
+      revenueEntry: {
+        findFirst: jest.fn().mockResolvedValueOnce(null).mockResolvedValueOnce(existing),
+        create: jest.fn(),
+      },
+    };
+    const access = { requireMember: jest.fn().mockResolvedValue({}) } as any;
+    const service = new FinanceService(prisma, access, audit);
+    await expect(service.revenue('user-a', {
+      restaurantLocationId: 'loc-a', amount: 100, date: '2026-10-01', manualType: 'CARD',
+    })).rejects.toBeInstanceOf(ConflictException);
+    expect(prisma.revenueEntry.create).not.toHaveBeenCalled();
+
+  });
+  it('allows explicitly acknowledged off-POS sales without replacing Square', async () => {
+    const square = { id: 'square-day', source: 'POS_IMPORT' };
+    const created = {
+      id: 'additional', amount: new Prisma.Decimal(25), date: new Date('2026-10-01'),
+      source: 'MANUAL', manualType: 'CASH', additionalToPos: true, restaurantLocationId: 'loc-a',
+    };
+    const prisma: any = {
+      restaurantLocation: { findUnique: jest.fn().mockResolvedValue({ id: 'loc-a', organizationId: 'org-a' }) },
+      revenueEntry: {
+        findFirst: jest.fn().mockResolvedValueOnce(square).mockResolvedValueOnce(null),
+        create: jest.fn().mockResolvedValue(created),
+      },
+    };
+    const access = { requireMember: jest.fn().mockResolvedValue({}) } as any;
+    await expect(new FinanceService(prisma, access, audit).revenue('user-a', {
+      restaurantLocationId: 'loc-a', amount: 25, date: '2026-10-01', manualType: 'CASH', additionalToPos: true,
+    })).resolves.toBe(created);
+    expect(prisma.revenueEntry.create).toHaveBeenCalledWith({ data: expect.objectContaining({ additionalToPos: true }) });
+  });
+  it('maps a concurrent manual revenue uniqueness collision to a conflict', async () => {
+    const collision = new Prisma.PrismaClientKnownRequestError('duplicate', { code: 'P2002', clientVersion: '6.19.3' });
+    const prisma: any = {
+      restaurantLocation: { findUnique: jest.fn().mockResolvedValue({ id: 'loc-a', organizationId: 'org-a' }) },
+      revenueEntry: { findFirst: jest.fn().mockResolvedValue(null), create: jest.fn().mockRejectedValue(collision) },
+    };
+    const access = { requireMember: jest.fn().mockResolvedValue({}) } as any;
+    await expect(new FinanceService(prisma, access, audit).revenue('user-a', {
+      restaurantLocationId: 'loc-a', amount: 100, date: '2026-10-01', manualType: 'CARD',
+    })).rejects.toBeInstanceOf(ConflictException);
+  });
+  it('stores the selected restaurant business date without timezone shifting', async () => {
+    const created = {
+      id: 'revenue-date', amount: new Prisma.Decimal(10), date: new Date('2026-10-01T00:00:00.000Z'),
+      source: 'MANUAL', manualType: 'OTHER', additionalToPos: false, restaurantLocationId: 'loc-a',
+    };
+    const prisma: any = {
+      restaurantLocation: { findUnique: jest.fn().mockResolvedValue({ id: 'loc-a', organizationId: 'org-a', timezone: 'America/Los_Angeles' }) },
+      revenueEntry: { findFirst: jest.fn().mockResolvedValue(null), create: jest.fn().mockResolvedValue(created) },
+    };
+    const access = { requireMember: jest.fn().mockResolvedValue({}) } as any;
+    await new FinanceService(prisma, access, audit).revenue('user-a', {
+      restaurantLocationId: 'loc-a', amount: 10, date: '2026-10-01T23:30:00-07:00', manualType: 'OTHER',
+    });
+    expect(prisma.revenueEntry.create.mock.calls[0][0].data.date).toEqual(new Date('2026-10-01T00:00:00.000Z'));
+  });
+  it('does not allow manual mutations of Square revenue', async () => {
+    const square = { id: 'square', organizationId: 'org-a', source: 'POS_IMPORT' };
+    const prisma: any = { revenueEntry: { findUnique: jest.fn().mockResolvedValue(square), update: jest.fn(), delete: jest.fn() } };
+    const access = { requireMember: jest.fn().mockResolvedValue({}) } as any;
+    const service = new FinanceService(prisma, access, audit);
+    await expect(service.updateRevenue('user-a', 'square', { amount: 10 })).rejects.toThrow('Square revenue is managed by POS sync');
+    await expect(service.deleteRevenue('user-a', 'square')).rejects.toThrow('Square revenue is managed by POS sync');
+    expect(prisma.revenueEntry.update).not.toHaveBeenCalled();
+    expect(prisma.revenueEntry.delete).not.toHaveBeenCalled();
+  });
+  it('requires a revenue-management role for manual writes', async () => {
+    const prisma: any = {
+      restaurantLocation: { findUnique: jest.fn().mockResolvedValue({ id: 'loc-a', organizationId: 'org-a' }) },
+      revenueEntry: { create: jest.fn() },
+    };
+    const access = {
+      requireMember: jest.fn()
+        .mockResolvedValueOnce({})
+        .mockRejectedValueOnce(new ForbiddenException()),
+    } as any;
+    await expect(new FinanceService(prisma, access, audit).revenue('viewer', {
+      restaurantLocationId: 'loc-a', amount: 100, date: '2026-10-01', manualType: 'OTHER',
+    })).rejects.toBeInstanceOf(ForbiddenException);
+    expect(prisma.revenueEntry.create).not.toHaveBeenCalled();
+    expect(access.requireMember.mock.calls[1][2]).toEqual(expect.arrayContaining(['OWNER', 'ADMIN', 'MANAGER']));
   });
   it('returns filtered totals, sorting, and pagination metadata', async () => {
     const items = [{ id: 'expense-1', amount: new Prisma.Decimal(250) }];
@@ -91,6 +232,51 @@ describe('FinanceService tenant enforcement', () => {
     const access = { requireMember: jest.fn().mockRejectedValue(new ForbiddenException()) } as any;
     await expect(new FinanceService(prisma, access, audit).expenses('user-a', { restaurantLocationId: 'loc-b' })).rejects.toBeInstanceOf(ForbiddenException);
     expect(prisma.expense.findMany).not.toHaveBeenCalled();
+  });
+  it('rejects generic edits of a bank-linked expense', async () => {
+    const expense = { id: 'expense-a', organizationId: 'org-a', restaurantLocationId: 'loc-a', amount: new Prisma.Decimal(25) };
+    const prisma: any = {
+      expense: { findUnique: jest.fn().mockResolvedValue(expense), update: jest.fn() },
+      bankTransaction: { findFirst: jest.fn().mockResolvedValue({ id: 'bank-a' }) },
+    };
+    prisma.$transaction = jest.fn((callback: any) => callback(prisma));
+    const access = { requireMember: jest.fn().mockResolvedValue({}) } as any;
+
+    await expect(new FinanceService(prisma, access, audit).updateExpense('user-a', 'expense-a', { amount: 30 }))
+      .rejects.toThrow('linked to a bank transaction');
+    expect(prisma.expense.update).not.toHaveBeenCalled();
+  });
+  it('rejects generic deletion of a bank-linked expense while preserving it', async () => {
+    const expense = { id: 'expense-a', organizationId: 'org-a', restaurantLocationId: 'loc-a', amount: new Prisma.Decimal(25) };
+    const prisma: any = {
+      expense: { findUnique: jest.fn().mockResolvedValue(expense), delete: jest.fn() },
+      bankTransaction: { findFirst: jest.fn().mockResolvedValue({ id: 'bank-a' }) },
+    };
+    prisma.$transaction = jest.fn((callback: any) => callback(prisma));
+    const access = { requireMember: jest.fn().mockResolvedValue({}) } as any;
+
+    await expect(new FinanceService(prisma, access, audit).deleteExpense('user-a', 'expense-a'))
+      .rejects.toThrow('through Bank Transactions');
+    expect(prisma.expense.delete).not.toHaveBeenCalled();
+  });
+  it('allows generic edits and deletion when an expense has no bank link', async () => {
+    const expense = { id: 'expense-a', organizationId: 'org-a', restaurantLocationId: 'loc-a', amount: new Prisma.Decimal(25) };
+    const prisma: any = {
+      expense: {
+        findUnique: jest.fn().mockResolvedValue(expense),
+        update: jest.fn().mockResolvedValue({ ...expense, amount: new Prisma.Decimal(30) }),
+        delete: jest.fn().mockResolvedValue(expense),
+      },
+      bankTransaction: { findFirst: jest.fn().mockResolvedValue(null) },
+    };
+    prisma.$transaction = jest.fn((callback: any) => callback(prisma));
+    const access = { requireMember: jest.fn().mockResolvedValue({}) } as any;
+    const service = new FinanceService(prisma, access, audit);
+
+    await expect(service.updateExpense('user-a', 'expense-a', { amount: 30 })).resolves.toEqual(expect.objectContaining({ amount: new Prisma.Decimal(30) }));
+    await expect(service.deleteExpense('user-a', 'expense-a')).resolves.toBeUndefined();
+    expect(prisma.expense.update).toHaveBeenCalledTimes(1);
+    expect(prisma.expense.delete).toHaveBeenCalledTimes(1);
   });
   it('returns authoritative revenue summary, trend, sorting, and pagination', async () => {
     const dayOne = new Date('2026-10-01T12:00:00.000Z');

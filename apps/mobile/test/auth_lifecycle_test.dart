@@ -25,6 +25,13 @@ void main() {
     (tester) async {
       final dio = stubDio((options) {
         expect(options.path, '/auth/register');
+        expect(
+          options.data,
+          containsPair(
+            'invitationToken',
+            'invitation-code-12345678901234567890',
+          ),
+        );
         return {
           'verificationRequired': true,
           'email': 'owner@example.com',
@@ -41,6 +48,10 @@ void main() {
         find.widgetWithText(TextField, 'Password'),
         'secure-password',
       );
+      await tester.enterText(
+        find.widgetWithText(TextField, 'Invitation code'),
+        'invitation-code-12345678901234567890',
+      );
       await tester.tap(find.text('Create account'));
       await tester.pumpAndSettle();
 
@@ -49,6 +60,22 @@ void main() {
       expect(find.text('Verify now (development)'), findsOneWidget);
     },
   );
+
+  testWidgets('invitation registration displays a specific server rejection', (
+    tester,
+  ) async {
+    final dio = Dio()
+      ..httpClientAdapter = _AuthAdapter(
+        (options) => _jsonResponse(401, {'message': 'Invitation has expired'}),
+      );
+    await tester.pumpWidget(
+      app(dio, home: const AuthScreen(initialCreatingAccount: true)),
+    );
+    await tester.tap(find.widgetWithText(FilledButton, 'Create account'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Invitation has expired'), findsOneWidget);
+  });
 
   testWidgets('duplicate registration gives an actionable safe error', (
     tester,

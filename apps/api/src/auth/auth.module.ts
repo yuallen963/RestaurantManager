@@ -7,5 +7,7 @@ import { AuditService } from '../audit.service';
 import { AuthEmailService } from './auth-email.service';
 import { AuthRateLimiter } from './auth-rate-limiter.service';
 import { AuthSecurityService } from './auth-security.service';
-@Module({ imports: [JwtModule.register({})], controllers: [AuthController], providers: [AuditService, AuthEmailService, AuthRateLimiter, AuthSecurityService, AuthService, JwtAuthGuard], exports: [JwtModule, JwtAuthGuard] })
+import { InvitationController } from './invitation.controller';
+import { InvitationService } from './invitation.service';
+@Module({ imports: [JwtModule.register({})], controllers: [AuthController, InvitationController], providers: [AuditService, AuthEmailService, AuthRateLimiter, AuthSecurityService, AuthService, InvitationService, JwtAuthGuard], exports: [JwtModule, JwtAuthGuard] })
 export class AuthModule {}

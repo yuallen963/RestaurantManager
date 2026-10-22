@@ -1,5 +1,5 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { ExpenseSource, Prisma, RevenueSource } from '@prisma/client';
+import { ExpenseSource, ManualRevenueType, OrganizationRole, Prisma, RevenueSource } from '@prisma/client';
 import { AuditService } from '../audit.service';
 import { OrganizationAccessService } from '../organizations/organization-access.service';
 import { PrismaService } from '../prisma.service';
@@ -7,37 +7,64 @@ import { PrismaService } from '../prisma.service';
 const decimal = (value: string | number) => {
   const result = new Prisma.Decimal(value);
   if (!result.isFinite() || result.lte(0)) throw new BadRequestException('Amount must be positive');
+  if (result.decimalPlaces() > 2) throw new BadRequestException('Amount cannot have more than two decimal places');
   return result;
+};
+
+const financialManagementRoles = [OrganizationRole.OWNER, OrganizationRole.ADMIN, OrganizationRole.MANAGER];
+const revenueDay = (value: string | Date) => {
+  const raw = value instanceof Date ? value.toISOString() : value;
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(raw);
+  if (!match) throw new BadRequestException('Sales date is invalid');
+  const date = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));
+  if (!Number.isFinite(date.valueOf())) throw new BadRequestException('Sales date is invalid');
+  if (date.toISOString().slice(0, 10) !== `${match[1]}-${match[2]}-${match[3]}`) throw new BadRequestException('Sales date is invalid');
+  const start = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+  const tomorrow = new Date();
+  tomorrow.setUTCHours(24, 0, 0, 0);
+  if (start >= tomorrow) throw new BadRequestException('Sales date cannot be in the future');
+  return { date, start, end: new Date(start.getTime() + 86400000) };
 };
 
 @Injectable()
 export class FinanceService {
   constructor(private readonly prisma: PrismaService, private readonly access: OrganizationAccessService, private readonly audit: AuditService) {}
 
-  async location(userId: string, id: string) {
+  async location(userId: string, id: string, roles?: OrganizationRole[]) {
     const location = await this.prisma.restaurantLocation.findUnique({ where: { id } });
     if (!location) throw new NotFoundException('Location not found');
-    await this.access.requireMember(userId, location.organizationId);
+    await this.access.requireMember(userId, location.organizationId, roles);
     return location;
   }
 
-  async owned(userId: string, table: 'revenueEntry' | 'expense' | 'vendor', id: string) {
+  async owned(userId: string, table: 'revenueEntry' | 'expense' | 'vendor', id: string, roles?: OrganizationRole[]) {
     const row = await (this.prisma[table] as any).findUnique({ where: { id } });
     if (!row) throw new NotFoundException('Record not found');
-    await this.access.requireMember(userId, row.organizationId);
+    await this.access.requireMember(userId, row.organizationId, roles);
     return row;
   }
 
   async revenue(userId: string, data: any) {
     const location = await this.location(userId, data.restaurantLocationId);
+    await this.access.requireMember(userId, location.organizationId, financialManagementRoles);
     const amount = decimal(data.amount);
-    const date = new Date(data.date);
-    const dayStart = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
-    const dayEnd = new Date(dayStart.getTime() + 86400000);
-    const square = await this.prisma.revenueEntry.findFirst({ where: { organizationId: location.organizationId, restaurantLocationId: location.id, source: RevenueSource.POS_IMPORT, date: { gte: dayStart, lt: dayEnd } } });
-    if (square) throw new ConflictException('Square revenue already exists for this date. Resolve the revenue source before adding a manual total.');
-    const row = await this.prisma.revenueEntry.create({ data: { organizationId: location.organizationId, restaurantLocationId: location.id, date, amount, notes: data.notes, source: RevenueSource.MANUAL, createdByUserId: userId } });
-    await this.audit.log({ userId, organizationId: location.organizationId, action: 'revenue.created', entityType: 'RevenueEntry', entityId: row.id });
+    const { date, start, end } = revenueDay(data.date);
+    const manualType = data.manualType ?? ManualRevenueType.OTHER;
+    const additionalToPos = data.additionalToPos === true;
+    const square = await this.prisma.revenueEntry.findFirst({ where: { organizationId: location.organizationId, restaurantLocationId: location.id, source: RevenueSource.POS_IMPORT, date: { gte: start, lt: end } } });
+    if (square && !additionalToPos) throw new ConflictException('Square revenue already exists for this date. Only continue if these are additional sales not included in Square.');
+    if (!square && additionalToPos) throw new BadRequestException('Additional-to-Square revenue requires an existing Square total for this date.');
+    const duplicate = await this.prisma.revenueEntry.findFirst({ where: { organizationId: location.organizationId, restaurantLocationId: location.id, source: RevenueSource.MANUAL, additionalToPos, date: { gte: start, lt: end }, OR: [{ manualType }, { manualType: null }] } });
+    if (duplicate) throw new ConflictException('A manual revenue entry with this sales type already exists for this date. Edit the existing entry instead.');
+    const notes = data.notes?.trim() || null;
+    let row;
+    try {
+      row = await this.prisma.revenueEntry.create({ data: { organizationId: location.organizationId, restaurantLocationId: location.id, date, amount, manualType, additionalToPos, notes, source: RevenueSource.MANUAL, createdByUserId: userId } });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') throw new ConflictException('A manual revenue entry with this sales type already exists for this date. Edit the existing entry instead.');
+      throw error;
+    }
+    await this.audit.log({ userId, organizationId: location.organizationId, action: 'revenue.created', entityType: 'RevenueEntry', entityId: row.id, metadata: { restaurantLocationId: location.id, date: row.date, amount: row.amount.toString(), source: row.source, manualType: row.manualType, additionalToPos: row.additionalToPos } });
     return row;
   }
 
@@ -46,9 +73,8 @@ export class FinanceService {
     const page = Math.max(Number(query.page ?? 1), 1);
     const take = Math.min(Number(query.limit ?? 50), 100);
     const skip = (page - 1) * take;
-    const startDate = query.startDate ? new Date(query.startDate) : undefined;
-    const endDate = query.endDate ? new Date(query.endDate) : undefined;
-    if (endDate) endDate.setHours(23, 59, 59, 999);
+    const startDate = query.startDate ? revenueDay(query.startDate).start : undefined;
+    const endDate = query.endDate ? new Date(revenueDay(query.endDate).end.getTime() - 1) : undefined;
     const where: Prisma.RevenueEntryWhereInput = { organizationId: location.organizationId, restaurantLocationId: location.id, source: query.source || undefined, date: { gte: startDate, lte: endDate } };
     const orderBy: Prisma.RevenueEntryOrderByWithRelationInput[] = query.sort === 'oldest'
       ? [{ date: 'asc' }, { id: 'asc' }]
@@ -60,7 +86,7 @@ export class FinanceService {
     let previousWhere: Prisma.RevenueEntryWhereInput | undefined;
     let dayCount = 0;
     if (startDate && endDate) {
-      dayCount = Math.floor((new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate()).getTime() - new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate()).getTime()) / 86400000) + 1;
+      dayCount = Math.round((endDate.getTime() + 1 - startDate.getTime()) / 86400000);
       const previousEnd = new Date(startDate);
       previousEnd.setDate(previousEnd.getDate() - 1);
       previousEnd.setHours(23, 59, 59, 999);
@@ -92,15 +118,64 @@ export class FinanceService {
   }
 
   async revenueDetail(userId: string, id: string) { return this.owned(userId, 'revenueEntry', id); }
-  async updateRevenue(userId: string, id: string, data: any) { const record = await this.owned(userId, 'revenueEntry', id); if (record.source === RevenueSource.POS_IMPORT) throw new BadRequestException('Square revenue is managed by POS sync'); if (data.date) { const date = new Date(data.date); const start = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate())); const square = await this.prisma.revenueEntry.findFirst({ where: { organizationId: record.organizationId, restaurantLocationId: record.restaurantLocationId, source: RevenueSource.POS_IMPORT, date: { gte: start, lt: new Date(start.getTime() + 86400000) } } }); if (square) throw new ConflictException('Square revenue already exists for this date. Resolve the revenue source before moving a manual total.'); } const row = await this.prisma.revenueEntry.update({ where: { id }, data: { date: data.date ? new Date(data.date) : undefined, amount: data.amount ? decimal(data.amount) : undefined, notes: data.notes } }); await this.audit.log({ userId, organizationId: record.organizationId, action: 'revenue.updated', entityType: 'RevenueEntry', entityId: id }); return row; }
-  async deleteRevenue(userId: string, id: string) { const record = await this.owned(userId, 'revenueEntry', id); if (record.source === RevenueSource.POS_IMPORT) throw new BadRequestException('Square revenue is managed by POS sync'); await this.prisma.revenueEntry.delete({ where: { id } }); await this.audit.log({ userId, organizationId: record.organizationId, action: 'revenue.deleted', entityType: 'RevenueEntry', entityId: id }); }
+  async updateRevenue(userId: string, id: string, data: any) {
+    const record = await this.owned(userId, 'revenueEntry', id);
+    await this.access.requireMember(userId, record.organizationId, financialManagementRoles);
+    if (record.source === RevenueSource.POS_IMPORT) throw new BadRequestException('Square revenue is managed by POS sync');
+    const target = revenueDay(data.date ?? record.date);
+    const manualType = data.manualType ?? record.manualType ?? ManualRevenueType.OTHER;
+    const additionalToPos = data.additionalToPos ?? record.additionalToPos ?? false;
+    const square = await this.prisma.revenueEntry.findFirst({ where: { organizationId: record.organizationId, restaurantLocationId: record.restaurantLocationId, source: RevenueSource.POS_IMPORT, date: { gte: target.start, lt: target.end } } });
+    if (square && !additionalToPos) throw new ConflictException('Square revenue already exists for this date. Only continue if these are additional sales not included in Square.');
+    if (!square && additionalToPos) throw new BadRequestException('Additional-to-Square revenue requires an existing Square total for this date.');
+    const duplicate = await this.prisma.revenueEntry.findFirst({ where: { id: { not: id }, organizationId: record.organizationId, restaurantLocationId: record.restaurantLocationId, source: RevenueSource.MANUAL, additionalToPos, date: { gte: target.start, lt: target.end }, OR: [{ manualType }, { manualType: null }] } });
+    if (duplicate) throw new ConflictException('A manual revenue entry with this sales type already exists for this date. Edit the existing entry instead.');
+    let row;
+    try {
+      row = await this.prisma.revenueEntry.update({ where: { id }, data: { date: data.date ? target.date : undefined, amount: data.amount === undefined ? undefined : decimal(data.amount), manualType: data.manualType, additionalToPos: data.additionalToPos, notes: data.notes === undefined ? undefined : data.notes?.trim() || null } });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') throw new ConflictException('A manual revenue entry with this sales type already exists for this date. Edit the existing entry instead.');
+      throw error;
+    }
+    await this.audit.log({ userId, organizationId: record.organizationId, action: 'revenue.updated', entityType: 'RevenueEntry', entityId: id, metadata: { before: { date: record.date, amount: record.amount.toString(), manualType: record.manualType, additionalToPos: record.additionalToPos, notes: record.notes }, after: { date: row.date, amount: row.amount.toString(), manualType: row.manualType, additionalToPos: row.additionalToPos, notes: row.notes } } });
+    return row;
+  }
+  async deleteRevenue(userId: string, id: string) {
+    const record = await this.owned(userId, 'revenueEntry', id);
+    await this.access.requireMember(userId, record.organizationId, financialManagementRoles);
+    if (record.source === RevenueSource.POS_IMPORT) throw new BadRequestException('Square revenue is managed by POS sync');
+    await this.prisma.revenueEntry.delete({ where: { id } });
+    await this.audit.log({ userId, organizationId: record.organizationId, action: 'revenue.deleted', entityType: 'RevenueEntry', entityId: id, metadata: { restaurantLocationId: record.restaurantLocationId, date: record.date, amount: record.amount.toString(), source: record.source, manualType: record.manualType, additionalToPos: record.additionalToPos, notes: record.notes } });
+  }
   async categories(userId: string, organizationId: string) { await this.access.requireMember(userId, organizationId); return this.prisma.expenseCategory.findMany({ where: { OR: [{ organizationId: null }, { organizationId }] }, orderBy: { name: 'asc' } }); }
   async category(organizationId: string, id: string) { const category = await this.prisma.expenseCategory.findFirst({ where: { id, OR: [{ organizationId: null }, { organizationId }] } }); if (!category) throw new ForbiddenException('Category is not available'); return category; }
-  async expense(userId: string, data: any) { const location = await this.location(userId, data.restaurantLocationId); await this.category(location.organizationId, data.expenseCategoryId); if (data.vendorId) { const vendor = await this.owned(userId, 'vendor', data.vendorId); if (vendor.organizationId !== location.organizationId) throw new ForbiddenException('Vendor is not available'); } const row = await this.prisma.expense.create({ data: { organizationId: location.organizationId, restaurantLocationId: location.id, expenseCategoryId: data.expenseCategoryId, vendorId: data.vendorId, date: new Date(data.date), amount: decimal(data.amount), description: data.description, notes: data.notes, source: ExpenseSource.MANUAL, createdByUserId: userId } }); await this.audit.log({ userId, organizationId: location.organizationId, action: 'expense.created', entityType: 'Expense', entityId: row.id }); return row; }
+  async expense(userId: string, data: any) { const location = await this.location(userId, data.restaurantLocationId, financialManagementRoles); await this.category(location.organizationId, data.expenseCategoryId); if (data.vendorId) { const vendor = await this.owned(userId, 'vendor', data.vendorId); if (vendor.organizationId !== location.organizationId) throw new ForbiddenException('Vendor is not available'); } const row = await this.prisma.expense.create({ data: { organizationId: location.organizationId, restaurantLocationId: location.id, expenseCategoryId: data.expenseCategoryId, vendorId: data.vendorId, date: new Date(data.date), amount: decimal(data.amount), description: data.description, notes: data.notes, source: ExpenseSource.MANUAL, createdByUserId: userId } }); await this.audit.log({ userId, organizationId: location.organizationId, action: 'expense.created', entityType: 'Expense', entityId: row.id }); return row; }
   async expenses(userId: string, query: any) { const location = await this.location(userId, query.restaurantLocationId); const page = Math.max(Number(query.page ?? 1), 1), take = Math.min(Number(query.limit ?? 50), 100), skip = (page - 1) * take; const endDate = query.endDate ? new Date(query.endDate) : undefined; if (endDate) endDate.setHours(23, 59, 59, 999); const search = query.search?.trim(); const matchingVendors = search ? await this.prisma.vendor.findMany({ where: { organizationId: location.organizationId, name: { contains: search, mode: 'insensitive' } }, select: { id: true } }) : []; const where: Prisma.ExpenseWhereInput = { organizationId: location.organizationId, restaurantLocationId: location.id, expenseCategoryId: query.categoryId || undefined, vendorId: query.vendorId || undefined, date: { gte: query.startDate ? new Date(query.startDate) : undefined, lte: endDate }, OR: search ? [{ description: { contains: search, mode: 'insensitive' } }, { vendorId: { in: matchingVendors.map((vendor) => vendor.id) } }] : undefined }; const orderBy: Prisma.ExpenseOrderByWithRelationInput[] = query.sort === 'oldest' ? [{ date: 'asc' }, { id: 'asc' }] : query.sort === 'highestAmount' ? [{ amount: 'desc' }, { date: 'desc' }, { id: 'asc' }] : query.sort === 'lowestAmount' ? [{ amount: 'asc' }, { date: 'desc' }, { id: 'asc' }] : [{ date: 'desc' }, { id: 'asc' }]; const [items, totalItems, total] = await Promise.all([this.prisma.expense.findMany({ where, orderBy, take, skip }), this.prisma.expense.count({ where }), this.prisma.expense.aggregate({ where, _sum: { amount: true } })]); return { items, pagination: { page, limit: take, totalItems, totalPages: Math.ceil(totalItems / take), hasMore: skip + items.length < totalItems }, summary: { totalAmount: Number((total._sum.amount ?? new Prisma.Decimal(0)).toFixed(2)) } }; }
   async expenseDetail(userId: string, id: string) { return this.owned(userId, 'expense', id); }
-  async updateExpense(userId: string, id: string, data: any) { const expense = await this.owned(userId, 'expense', id); if (data.expenseCategoryId) await this.category(expense.organizationId, data.expenseCategoryId); if (data.vendorId) { const vendor = await this.owned(userId, 'vendor', data.vendorId); if (vendor.organizationId !== expense.organizationId) throw new ForbiddenException('Vendor is not available'); } const row = await this.prisma.expense.update({ where: { id }, data: { ...data, date: data.date ? new Date(data.date) : undefined, amount: data.amount ? decimal(data.amount) : undefined } }); await this.audit.log({ userId, organizationId: expense.organizationId, action: 'expense.updated', entityType: 'Expense', entityId: id }); return row; }
-  async deleteExpense(userId: string, id: string) { const expense = await this.owned(userId, 'expense', id); await this.prisma.expense.delete({ where: { id } }); await this.audit.log({ userId, organizationId: expense.organizationId, action: 'expense.deleted', entityType: 'Expense', entityId: id }); }
+  async updateExpense(userId: string, id: string, data: any) {
+    const expense = await this.owned(userId, 'expense', id, financialManagementRoles);
+    if (data.expenseCategoryId) await this.category(expense.organizationId, data.expenseCategoryId);
+    if (data.vendorId) {
+      const vendor = await this.owned(userId, 'vendor', data.vendorId);
+      if (vendor.organizationId !== expense.organizationId) throw new ForbiddenException('Vendor is not available');
+    }
+    const row = await this.prisma.$transaction(async (tx) => {
+      const bankLink = await tx.bankTransaction.findFirst({ where: { expenseId: id }, select: { id: true } });
+      if (bankLink) throw new ConflictException('This expense is linked to a bank transaction. Update or remove it from Bank Transactions.');
+      return tx.expense.update({ where: { id }, data: { ...data, date: data.date ? new Date(data.date) : undefined, amount: data.amount ? decimal(data.amount) : undefined } });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    await this.audit.log({ userId, organizationId: expense.organizationId, action: 'expense.updated', entityType: 'Expense', entityId: id });
+    return row;
+  }
+  async deleteExpense(userId: string, id: string) {
+    const expense = await this.owned(userId, 'expense', id, financialManagementRoles);
+    await this.prisma.$transaction(async (tx) => {
+      const bankLink = await tx.bankTransaction.findFirst({ where: { expenseId: id }, select: { id: true } });
+      if (bankLink) throw new ConflictException('This expense is linked to a bank transaction. Remove it from Expenses through Bank Transactions.');
+      await tx.expense.delete({ where: { id } });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    await this.audit.log({ userId, organizationId: expense.organizationId, action: 'expense.deleted', entityType: 'Expense', entityId: id });
+  }
   async vendorSummaries(userId: string, query: any) {
     const location = await this.location(userId, query.restaurantLocationId);
     const start = new Date(query.startDate);
@@ -160,9 +235,9 @@ export class FinanceService {
     return { vendor, summary: { currentSpend, previousSpend, percentageChange: previousSpend === 0 ? null : Number((((currentSpend - previousSpend) / Math.abs(previousSpend)) * 100).toFixed(1)), transactionCount, averageTransaction: transactionCount === 0 ? 0 : Number((currentSpend / transactionCount).toFixed(2)), lastPurchaseDate: current._max.date }, trend: [...trendMap.values()].sort((a, b) => a.date.getTime() - b.date.getTime()), recentExpenses: recentExpenses.map((expense) => ({ id: expense.id, date: expense.date, description: expense.description, categoryName: categoryNames.get(expense.expenseCategoryId) ?? 'Unknown category', amount: Number(expense.amount.toFixed(2)) })) };
   }
 
-  async vendor(userId: string, data: any) { await this.access.requireMember(userId, data.organizationId); const normalizedName = data.name.trim().toLowerCase().replace(/\s+/g, ' '); const row = await this.prisma.vendor.create({ data: { organizationId: data.organizationId, name: data.name.trim(), normalizedName, email: data.email, phone: data.phone, notes: data.notes } }); await this.audit.log({ userId, organizationId: data.organizationId, action: 'vendor.created', entityType: 'Vendor', entityId: row.id }); return row; }
+  async vendor(userId: string, data: any) { await this.access.requireMember(userId, data.organizationId, financialManagementRoles); const normalizedName = data.name.trim().toLowerCase().replace(/\s+/g, ' '); const row = await this.prisma.vendor.create({ data: { organizationId: data.organizationId, name: data.name.trim(), normalizedName, email: data.email, phone: data.phone, notes: data.notes } }); await this.audit.log({ userId, organizationId: data.organizationId, action: 'vendor.created', entityType: 'Vendor', entityId: row.id }); return row; }
   async vendors(userId: string, organizationId: string) { await this.access.requireMember(userId, organizationId); return this.prisma.vendor.findMany({ where: { organizationId }, orderBy: { name: 'asc' } }); }
   async vendorDetail(userId: string, id: string) { return this.owned(userId, 'vendor', id); }
-  async updateVendor(userId: string, id: string, data: any) { const vendor = await this.owned(userId, 'vendor', id); const name = data.name?.trim(); const row = await this.prisma.vendor.update({ where: { id }, data: { ...data, name, normalizedName: name?.toLowerCase().replace(/\s+/g, ' ') } }); await this.audit.log({ userId, organizationId: vendor.organizationId, action: 'vendor.updated', entityType: 'Vendor', entityId: id }); return row; }
-  async deleteVendor(userId: string, id: string) { const vendor = await this.owned(userId, 'vendor', id); await this.prisma.vendor.delete({ where: { id } }); await this.audit.log({ userId, organizationId: vendor.organizationId, action: 'vendor.deleted', entityType: 'Vendor', entityId: id }); }
+  async updateVendor(userId: string, id: string, data: any) { const vendor = await this.owned(userId, 'vendor', id, financialManagementRoles); const name = data.name?.trim(); const row = await this.prisma.vendor.update({ where: { id }, data: { ...data, name, normalizedName: name?.toLowerCase().replace(/\s+/g, ' ') } }); await this.audit.log({ userId, organizationId: vendor.organizationId, action: 'vendor.updated', entityType: 'Vendor', entityId: id }); return row; }
+  async deleteVendor(userId: string, id: string) { const vendor = await this.owned(userId, 'vendor', id, financialManagementRoles); await this.prisma.vendor.delete({ where: { id } }); await this.audit.log({ userId, organizationId: vendor.organizationId, action: 'vendor.deleted', entityType: 'Vendor', entityId: id }); }
 }

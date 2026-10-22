@@ -24,6 +24,9 @@ import 'features/auth/auth_session_store_native.dart'
 import 'features/auth/api_client_config_native.dart'
     if (dart.library.html) 'features/auth/api_client_config_web.dart'
     as api_client_config;
+import 'features/auth/shared_test_config_native.dart'
+    if (dart.library.html) 'features/auth/shared_test_config_web.dart'
+    as shared_test_config;
 import 'features/banking/plaid_link/plaid_link.dart';
 import 'features/responsive.dart';
 
@@ -158,9 +161,7 @@ final demoModeProvider = Provider<bool>(
 const sharedTestUserModeRequested = bool.fromEnvironment(
   'SHARED_TEST_USER_MODE',
 );
-const sharedTestClientToken = String.fromEnvironment(
-  'SHARED_TEST_CLIENT_TOKEN',
-);
+String get sharedTestClientToken => shared_test_config.sharedTestClientToken;
 bool sharedTestModeAllowed({required bool requested, required bool isWeb}) =>
     requested && !isWeb;
 final sharedTestUserModeProvider = Provider<bool>(
@@ -214,6 +215,14 @@ class _ProfitAppState extends ConsumerState<ProfitApp> {
         builder: (_, _) => AuthBootstrap(onReady: links.ready),
       ),
       GoRoute(path: '/login', builder: (_, _) => const AuthScreen()),
+      GoRoute(
+        path: '/register',
+        builder: (_, state) => AuthScreen(
+          initialCreatingAccount: true,
+          invitationToken: state.uri.queryParameters['invite'],
+          initialEmail: state.uri.queryParameters['email'],
+        ),
+      ),
       GoRoute(
         path: '/forgot-password',
         builder: (_, _) => const ForgotPasswordScreen(),
@@ -545,7 +554,15 @@ class _AuthBootstrapState extends ConsumerState<AuthBootstrap> {
 }
 
 class AuthScreen extends ConsumerStatefulWidget {
-  const AuthScreen({super.key});
+  const AuthScreen({
+    super.key,
+    this.initialCreatingAccount = false,
+    this.invitationToken,
+    this.initialEmail,
+  });
+  final bool initialCreatingAccount;
+  final String? invitationToken;
+  final String? initialEmail;
   @override
   ConsumerState<AuthScreen> createState() => _AuthScreenState();
 }
@@ -553,9 +570,27 @@ class AuthScreen extends ConsumerStatefulWidget {
 class _AuthScreenState extends ConsumerState<AuthScreen> {
   final email = TextEditingController();
   final password = TextEditingController();
+  final invitation = TextEditingController();
   bool busy = false;
-  bool creatingAccount = false;
+  late bool creatingAccount;
   String? error;
+
+  @override
+  void initState() {
+    super.initState();
+    creatingAccount = widget.initialCreatingAccount;
+    email.text = widget.initialEmail ?? '';
+    invitation.text = widget.invitationToken ?? '';
+  }
+
+  @override
+  void dispose() {
+    email.dispose();
+    password.dispose();
+    invitation.dispose();
+    super.dispose();
+  }
+
   Future<void> login() async {
     setState(() => busy = true);
     try {
@@ -567,6 +602,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
             data: {
               'email': email.text,
               'password': password.text,
+              if (creatingAccount) 'invitationToken': invitation.text.trim(),
               'deviceId': deviceId,
               'deviceName': authDeviceName,
             },
@@ -646,11 +682,16 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
             ),
           );
       } else {
+        final responseMessage = exception.response?.data is Map
+            ? (exception.response?.data as Map)['message']
+            : null;
         setState(
-          () => error = creatingAccount && exception.response?.statusCode == 409
-              ? 'An account already exists. Log in or reset your password.'
-              : creatingAccount
-              ? 'Unable to create account. Use a valid email and a password of at least 12 characters.'
+          () => error = creatingAccount
+              ? responseMessage is String && responseMessage.isNotEmpty
+                    ? responseMessage
+                    : exception.response?.statusCode == 409
+                    ? 'An account already exists. Log in or reset your password.'
+                    : 'Unable to create account. Use the email and invitation link provided by FundWell.'
               : 'Unable to sign in.',
         );
       }
@@ -662,61 +703,83 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
   @override
   Widget build(BuildContext context) => Scaffold(
     body: Center(
-      child: Padding(
+      child: SingleChildScrollView(
         padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              'Profit Lens',
-              style: Theme.of(context).textTheme.displaySmall,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 440),
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  'Profit Lens',
+                  style: Theme.of(context).textTheme.displaySmall,
+                ),
+                TextField(
+                  controller: email,
+                  decoration: const InputDecoration(labelText: 'Email'),
+                ),
+                TextField(
+                  controller: password,
+                  obscureText: true,
+                  decoration: const InputDecoration(labelText: 'Password'),
+                ),
+                if (creatingAccount)
+                  TextField(
+                    controller: invitation,
+                    autocorrect: false,
+                    decoration: const InputDecoration(
+                      labelText: 'Invitation code',
+                    ),
+                  ),
+                if (creatingAccount)
+                  const Padding(
+                    padding: EdgeInsets.only(top: 8),
+                    child: Text(
+                      'FundWell is invitation-only. Use the email address from your invitation.',
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                if (error != null) Text(error!),
+                FilledButton(
+                  onPressed: busy ? null : login,
+                  child: Text(creatingAccount ? 'Create account' : 'Log in'),
+                ),
+                TextButton(
+                  onPressed: busy
+                      ? null
+                      : () => setState(() {
+                          creatingAccount = !creatingAccount;
+                          error = null;
+                        }),
+                  child: Text(
+                    creatingAccount
+                        ? 'Already have an account? Log in'
+                        : 'New to ProfitLens? Create account',
+                  ),
+                ),
+                if (!creatingAccount)
+                  TextButton(
+                    onPressed: busy
+                        ? null
+                        : () {
+                            if (kIsWeb) {
+                              context.go('/forgot-password');
+                            } else {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => const ForgotPasswordScreen(),
+                                ),
+                              );
+                            }
+                          },
+                    child: const Text('Forgot password?'),
+                  ),
+              ],
             ),
-            TextField(
-              controller: email,
-              decoration: const InputDecoration(labelText: 'Email'),
-            ),
-            TextField(
-              controller: password,
-              obscureText: true,
-              decoration: const InputDecoration(labelText: 'Password'),
-            ),
-            if (error != null) Text(error!),
-            FilledButton(
-              onPressed: busy ? null : login,
-              child: Text(creatingAccount ? 'Create account' : 'Log in'),
-            ),
-            TextButton(
-              onPressed: busy
-                  ? null
-                  : () => setState(() {
-                      creatingAccount = !creatingAccount;
-                      error = null;
-                    }),
-              child: Text(
-                creatingAccount
-                    ? 'Already have an account? Log in'
-                    : 'New to ProfitLens? Create account',
-              ),
-            ),
-            if (!creatingAccount)
-              TextButton(
-                onPressed: busy
-                    ? null
-                    : () {
-                        if (kIsWeb) {
-                          context.go('/forgot-password');
-                        } else {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => const ForgotPasswordScreen(),
-                            ),
-                          );
-                        }
-                      },
-                child: const Text('Forgot password?'),
-              ),
-          ],
+          ),
         ),
       ),
     ),

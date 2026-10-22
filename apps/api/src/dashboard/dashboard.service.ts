@@ -32,6 +32,13 @@ const percent = (part: Prisma.Decimal, total: Prisma.Decimal) =>
   total.isZero()
     ? 0
     : Number(part.dividedBy(total).times(100).toFixed(1));
+const businessDayBoundary = (value: string, end = false) => {
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(value);
+  if (!match) throw new BadRequestException('Invalid date range');
+  const start = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));
+  if (start.toISOString().slice(0, 10) !== `${match[1]}-${match[2]}-${match[3]}`) throw new BadRequestException('Invalid date range');
+  return end ? new Date(start.getTime() + 86400000 - 1) : start;
+};
 
 type NamedAmount = { name: string; amount: number };
 
@@ -53,10 +60,10 @@ export class DashboardService {
     await this.access.requireMember(userId, location.organizationId);
 
     const startDate = query.startDate
-      ? new Date(query.startDate)
+      ? businessDayBoundary(query.startDate)
       : new Date(new Date().getFullYear(), new Date().getMonth(), 1);
-    const endDate = query.endDate ? new Date(query.endDate) : new Date();
-    endDate.setHours(23, 59, 59, 999);
+    const endDate = query.endDate ? businessDayBoundary(query.endDate, true) : new Date();
+    if (!query.endDate) endDate.setHours(23, 59, 59, 999);
     if (
       Number.isNaN(startDate.valueOf()) ||
       Number.isNaN(endDate.valueOf()) ||

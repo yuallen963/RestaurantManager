@@ -9,6 +9,19 @@ double _number(dynamic value) =>
 
 enum RevenueSort { newest, oldest, highestRevenue, lowestRevenue }
 
+enum ManualRevenueType { cash, card, online, other }
+
+extension ManualRevenueTypeLabel on ManualRevenueType {
+  String get label => switch (this) {
+    ManualRevenueType.cash => 'Cash Sales',
+    ManualRevenueType.card => 'Card Sales',
+    ManualRevenueType.online => 'Online Sales',
+    ManualRevenueType.other => 'Other Sales',
+  };
+
+  String get apiValue => name.toUpperCase();
+}
+
 extension RevenueSortLabel on RevenueSort {
   String get label => switch (this) {
     RevenueSort.newest => 'Newest',
@@ -24,20 +37,82 @@ class RevenueRecord {
     required this.date,
     required this.amount,
     required this.source,
+    required this.restaurantLocationId,
+    this.manualType,
+    this.additionalToPos = false,
     this.notes,
   });
   final String id;
   final DateTime date;
   final double amount;
   final String source;
+  final String restaurantLocationId;
+  final ManualRevenueType? manualType;
+  final bool additionalToPos;
   final String? notes;
   factory RevenueRecord.fromJson(Map<String, dynamic> json) => RevenueRecord(
     id: json['id'] as String,
     date: DateTime.parse(json['date'] as String),
     amount: _number(json['amount']),
     source: json['source'] as String? ?? 'UNKNOWN',
+    restaurantLocationId: json['restaurantLocationId'] as String? ?? '',
+    manualType: switch (json['manualType'] as String?) {
+      'CASH' => ManualRevenueType.cash,
+      'CARD' => ManualRevenueType.card,
+      'ONLINE' => ManualRevenueType.online,
+      'OTHER' => ManualRevenueType.other,
+      _ => null,
+    },
+    additionalToPos: json['additionalToPos'] == true,
     notes: json['notes'] as String?,
   );
+}
+
+class RevenueMutation {
+  const RevenueMutation({
+    required this.restaurantLocationId,
+    required this.date,
+    required this.amount,
+    required this.manualType,
+    this.notes,
+    this.additionalToPos = false,
+  });
+  final String restaurantLocationId;
+  final DateTime date;
+  final double amount;
+  final ManualRevenueType manualType;
+  final String? notes;
+  final bool additionalToPos;
+
+  Map<String, dynamic> toCreateJson() => {
+    'restaurantLocationId': restaurantLocationId,
+    ...toUpdateJson(),
+  };
+
+  Map<String, dynamic> toUpdateJson() => {
+    'date': DateTime.utc(date.year, date.month, date.day).toIso8601String(),
+    'amount': amount,
+    'manualType': manualType.apiValue,
+    'notes': notes?.trim().isEmpty == true ? null : notes?.trim(),
+    'additionalToPos': additionalToPos,
+  };
+
+  RevenueMutation copyWith({bool? additionalToPos}) => RevenueMutation(
+    restaurantLocationId: restaurantLocationId,
+    date: date,
+    amount: amount,
+    manualType: manualType,
+    notes: notes,
+    additionalToPos: additionalToPos ?? this.additionalToPos,
+  );
+}
+
+class RevenueConflictException implements Exception {
+  const RevenueConflictException(this.message, {required this.canAddToSquare});
+  final String message;
+  final bool canAddToSquare;
+  @override
+  String toString() => message;
 }
 
 class DailyRevenue {
@@ -191,6 +266,48 @@ class RevenueRepository {
 
   Future<RevenueRecord> detail(String id) async => RevenueRecord.fromJson(
     Map<String, dynamic>.from((await dio.get('/revenue/$id')).data as Map),
+  );
+
+  Future<RevenueRecord> create(RevenueMutation mutation) async {
+    try {
+      return RevenueRecord.fromJson(
+        Map<String, dynamic>.from(
+          (await dio.post('/revenue', data: mutation.toCreateJson())).data
+              as Map,
+        ),
+      );
+    } on DioException catch (error) {
+      throw _revenueMutationError(error);
+    }
+  }
+
+  Future<RevenueRecord> update(String id, RevenueMutation mutation) async {
+    try {
+      return RevenueRecord.fromJson(
+        Map<String, dynamic>.from(
+          (await dio.patch('/revenue/$id', data: mutation.toUpdateJson())).data
+              as Map,
+        ),
+      );
+    } on DioException catch (error) {
+      throw _revenueMutationError(error);
+    }
+  }
+
+  Future<void> delete(String id) async {
+    await dio.delete('/revenue/$id');
+  }
+}
+
+Object _revenueMutationError(DioException error) {
+  if (error.response?.statusCode != 409) return error;
+  final data = error.response?.data;
+  final message = data is Map && data['message'] is String
+      ? data['message'] as String
+      : 'Potential duplicate revenue detected.';
+  return RevenueConflictException(
+    message,
+    canAddToSquare: message.toLowerCase().contains('additional sales'),
   );
 }
 

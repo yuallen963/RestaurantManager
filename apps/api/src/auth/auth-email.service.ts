@@ -31,6 +31,18 @@ export class AuthEmailService {
     await this.sendLink(email, 'Reset your FundWell password', 'reset-password', token, 'Reset password', 'This link expires in 30 minutes. If you did not request a reset, secure your account from FundWell.');
   }
 
+  async sendBetaInvitation(email: string, token: string) {
+    this.assertConfigured();
+    if (this.developmentMode) return;
+    const base = this.config.get<string>('AUTH_PUBLIC_BASE_URL')!.replace(/\/$/, '');
+    const link = `${base}/register?invite=${encodeURIComponent(token)}&email=${encodeURIComponent(email)}`;
+    await this.deliver(
+      email,
+      'You are invited to FundWell',
+      `<p>You have been invited to create a private FundWell account.</p><p><a style="background:#5b3fb5;color:white;padding:12px 18px;border-radius:8px;text-decoration:none" href="${link}">Accept invitation</a></p><p>This invitation is bound to this email address, expires automatically, and can be used once.</p>`,
+    );
+  }
+
   async sendLoginCode(email: string, code: string) {
     await this.sendMessage(email, 'Your FundWell sign-in code', `<p style="font-size:16px">Enter this code to finish signing in:</p><p style="font-size:30px;font-weight:700;letter-spacing:6px">${code}</p><p>This code expires in 5 minutes and can be used once. FundWell will never ask you to share it.</p>`);
   }

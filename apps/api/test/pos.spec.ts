@@ -174,6 +174,7 @@ describe('Square POS integration', () => {
     const service = new PosService(prisma, { requireMember: jest.fn() } as any, { log: jest.fn() } as any, { decryptPos: jest.fn().mockReturnValue('token') } as any, square as any);
     const result = await service.sync('user-a', 'connection', true);
     expect(result.conflicts).toBe(1);
+    expect(prisma.revenueEntry.findFirst).toHaveBeenCalledWith({ where: expect.objectContaining({ additionalToPos: false }) });
     expect(prisma.posDailySales.upsert).toHaveBeenCalledWith(expect.objectContaining({ create: expect.objectContaining({ conflictStatus: 'PENDING' }) }));
     expect(prisma.revenueEntry.create).not.toHaveBeenCalled();
   });

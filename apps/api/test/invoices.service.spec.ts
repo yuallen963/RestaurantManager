@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
 import { InvoicesService } from '../src/invoices/invoices.service';
 
 const location = { id: 'loc-a', organizationId: 'org-a' };
@@ -23,6 +23,7 @@ function setup() {
       findMany: jest.fn().mockResolvedValue([]),
       update: jest.fn().mockResolvedValue({}),
     },
+    bankTransaction: { findFirst: jest.fn().mockResolvedValue(null) },
   };
   prisma.$transaction = jest.fn((callback: any) => callback(prisma));
   const access: any = { requireMember: jest.fn().mockResolvedValue({ role: 'OWNER' }) };
@@ -223,5 +224,14 @@ describe('InvoicesService', () => {
     expect(prisma.invoice.delete).toHaveBeenCalledWith({ where: { id: 'invoice-a' } });
     expect(storage.remove).toHaveBeenCalledWith('org/file.pdf');
     expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({ action: 'invoice.deleted' }));
+  });
+
+  it('preserves an invoice with an active bank payment link until the link is removed', async () => {
+    const { service, prisma, storage } = setup();
+    prisma.bankTransaction.findFirst.mockResolvedValue({ id: 'bank-payment' });
+
+    await expect(service.delete('user-a', 'invoice-a')).rejects.toBeInstanceOf(ConflictException);
+    expect(prisma.invoice.delete).not.toHaveBeenCalled();
+    expect(storage.remove).not.toHaveBeenCalled();
   });
 });

@@ -1,6 +1,6 @@
 import { ConflictException, ForbiddenException, Injectable, NotFoundException, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import { OrganizationRole, SecurityEmailType } from '@prisma/client';
+import { BetaInvitationType, OrganizationRole, SecurityEmailType } from '@prisma/client';
 import * as argon2 from 'argon2';
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'crypto';
 import { AuditService } from '../audit.service';
@@ -21,9 +21,68 @@ export class AuthService {
   async register(dto: RegisterDto) {
     this.email.assertConfigured();
     const email = normalizeEmail(dto.email);
-    if (await this.prisma.user.findUnique({ where: { email } })) throw new ConflictException('Email is already registered. Log in or reset your password.');
-    const user = await this.prisma.user.create({ data: { email, passwordHash: await argon2.hash(dto.password), firstName: dto.firstName?.trim() || null, lastName: dto.lastName?.trim() || null } });
-    const raw = await this.createVerificationToken(user.id);
+    const now = new Date();
+    const passwordHash = await argon2.hash(dto.password);
+    const raw = randomBytes(32).toString('base64url');
+    const invitationHash = tokenHash(dto.invitationToken);
+    const user = await this.prisma.$transaction(async (tx) => {
+      const invitation = await tx.betaInvitation.findUnique({ where: { tokenHash: invitationHash } });
+      if (!invitation) throw new UnauthorizedException('Invitation is invalid');
+      if (normalizeEmail(invitation.email) !== email) throw new ForbiddenException('This invitation was issued to a different email address');
+      if (invitation.revokedAt) throw new ForbiddenException('Invitation has been revoked');
+      if (invitation.redeemedAt) throw new ConflictException('Invitation has already been used');
+      if (invitation.expiresAt <= now) throw new UnauthorizedException('Invitation has expired');
+      if (await tx.user.findUnique({ where: { email } })) throw new ConflictException('Email is already registered. Log in or reset your password.');
+
+      const created = await tx.user.create({
+        data: {
+          email,
+          passwordHash,
+          firstName: dto.firstName?.trim() || null,
+          lastName: dto.lastName?.trim() || null,
+        },
+      });
+      const claimed = await tx.betaInvitation.updateMany({
+        where: { id: invitation.id, redeemedAt: null, revokedAt: null, expiresAt: { gt: now } },
+        data: { redeemedAt: now, redeemedByUserId: created.id },
+      });
+      if (claimed.count !== 1) throw new ConflictException('Invitation has already been used');
+
+      if (invitation.type === BetaInvitationType.NEW_ORGANIZATION) {
+        if (!invitation.organizationName) throw new ConflictException('Invitation is not configured for a restaurant');
+        const organization = await tx.organization.create({
+          data: {
+            name: invitation.organizationName,
+            memberships: { create: { userId: created.id, role: OrganizationRole.OWNER } },
+          },
+        });
+        await tx.onboardingState.create({ data: { userId: created.id, organizationId: organization.id } });
+      } else {
+        if (!invitation.organizationId || !invitation.role) throw new ConflictException('Invitation is not configured for an organization');
+        const organization = await tx.organization.findFirst({
+          where: { id: invitation.organizationId, archivedAt: null },
+          select: { id: true, locations: { select: { id: true }, orderBy: { createdAt: 'asc' }, take: 1 } },
+        });
+        if (!organization) throw new ConflictException('Invitation organization is no longer available');
+        await tx.organizationMember.create({
+          data: { userId: created.id, organizationId: organization.id, role: invitation.role },
+        });
+        const location = organization.locations[0];
+        await tx.onboardingState.create({
+          data: {
+            userId: created.id,
+            organizationId: organization.id,
+            restaurantLocationId: location?.id,
+            currentStep: location ? 6 : 1,
+            onboardingCompletedAt: location ? now : null,
+          },
+        });
+      }
+      await tx.emailVerificationToken.create({
+        data: { userId: created.id, tokenHash: tokenHash(raw), expiresAt: new Date(now.getTime() + 24 * 60 * 60_000) },
+      });
+      return created;
+    });
     await this.audit.log({ userId: user.id, action: 'auth.account_registered', entityType: 'User', entityId: user.id });
     await this.email.sendVerification(user.email, raw);
     return { verificationRequired: true, email: user.email, ...(this.email.developmentMode ? { developmentVerificationToken: raw } : {}) };

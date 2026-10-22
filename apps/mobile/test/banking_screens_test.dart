@@ -622,11 +622,54 @@ void main() {
 
     expect(find.text('Remove from Expenses'), findsOneWidget);
     expect(
-      find.textContaining('original bank transaction remains'),
+      find.textContaining('preserves an expense that was entered separately'),
       findsOneWidget,
     );
     expect(find.text('Reverse Reconciliation'), findsNothing);
   });
+
+  testWidgets(
+    'invoice payment links can be removed with owner-friendly language',
+    (tester) async {
+      final repository = FakeBankingRepository();
+      final matchedInvoice = BankTransactionData(
+        id: 'matched-invoice-copy',
+        merchant: 'Food Supplier',
+        description: 'INVOICE PAYMENT',
+        amount: 120,
+        postedDate: DateTime(2026, 10, 8),
+        status: 'MATCHED_INVOICE',
+        categorizationSource: 'INVOICE_MATCH',
+        matchConfidence: 'EXACT',
+        pending: false,
+        restaurantLocationId: downtown.id,
+        invoiceNumber: '10492',
+      );
+      await tester.pumpWidget(transactionsApp(repository, [matchedInvoice]));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Food Supplier'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Remove Invoice Payment Link'), findsOneWidget);
+      expect(find.text('Add to Expenses'), findsNothing);
+      expect(find.text('Confirm Match'), findsNothing);
+      expect(find.text('Reject'), findsNothing);
+      await tester.ensureVisible(find.text('Remove Invoice Payment Link'));
+      await tester.tap(find.text('Remove Invoice Payment Link'));
+      await tester.pumpAndSettle();
+      expect(find.text('Remove invoice payment link?'), findsOneWidget);
+      expect(repository.reversedTransaction, isNull);
+      await tester.tap(find.text('Remove Payment Link'));
+      await tester.pumpAndSettle();
+      expect(repository.reversedTransaction, 'matched-invoice-copy');
+      expect(
+        find.text(
+          'Invoice payment link removed. Transaction returned to Needs Review.',
+        ),
+        findsOneWidget,
+      );
+    },
+  );
 
   testWidgets('ignored transactions can return to Needs Review', (
     tester,

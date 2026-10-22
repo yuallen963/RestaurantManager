@@ -26,11 +26,17 @@ RevenueRecord record(
   String id, {
   double amount = 4218,
   String? notes = 'Daily sales',
+  String source = 'POS_IMPORT',
+  ManualRevenueType? manualType,
+  bool additionalToPos = false,
 }) => RevenueRecord(
   id: id,
   date: DateTime.utc(2026, 10, 7, 12),
   amount: amount,
-  source: 'POS_IMPORT',
+  source: source,
+  restaurantLocationId: downtown.id,
+  manualType: manualType,
+  additionalToPos: additionalToPos,
   notes: notes,
 );
 RevenuePage page(
@@ -67,11 +73,19 @@ class Request {
 }
 
 class FakeRevenueRepository extends RevenueRepository {
-  FakeRevenueRepository(this.onList, {RevenueRecord? detail})
-    : detailRecord = detail ?? record('one'),
-      super(Dio());
+  FakeRevenueRepository(
+    this.onList, {
+    RevenueRecord? detail,
+    this.onCreate,
+    this.onUpdate,
+    this.onDelete,
+  }) : detailRecord = detail ?? record('one'),
+       super(Dio());
   final Future<RevenuePage> Function(Request) onList;
   final RevenueRecord detailRecord;
+  final Future<RevenueRecord> Function(RevenueMutation)? onCreate;
+  final Future<RevenueRecord> Function(String, RevenueMutation)? onUpdate;
+  final Future<void> Function(String)? onDelete;
   final requests = <Request>[];
   @override
   Future<RevenuePage> list({
@@ -88,6 +102,16 @@ class FakeRevenueRepository extends RevenueRepository {
 
   @override
   Future<RevenueRecord> detail(String id) async => detailRecord;
+
+  @override
+  Future<RevenueRecord> create(RevenueMutation mutation) => onCreate!(mutation);
+
+  @override
+  Future<RevenueRecord> update(String id, RevenueMutation mutation) =>
+      onUpdate!(id, mutation);
+
+  @override
+  Future<void> delete(String id) => onDelete!(id);
 }
 
 void main() {
@@ -266,5 +290,178 @@ void main() {
     expect(find.text('Square'), findsOneWidget);
     expect(find.text('Notes'), findsOneWidget);
     expect(find.text('Dinner service'), findsWidgets);
+    expect(find.byKey(const Key('edit-revenue')), findsNothing);
+    expect(find.byKey(const Key('delete-revenue')), findsNothing);
+  });
+
+  testWidgets('creates manual revenue with owner-friendly sales fields', (
+    tester,
+  ) async {
+    RevenueMutation? submitted;
+    final manual = record(
+      'manual',
+      amount: 125.25,
+      source: 'MANUAL',
+      manualType: ManualRevenueType.cash,
+      notes: 'Lunch sales',
+    );
+    final repository = FakeRevenueRepository(
+      (_) async => page([], totalItems: 0),
+      onCreate: (mutation) async {
+        submitted = mutation;
+        return manual;
+      },
+    );
+    await pumpApp(tester, repository);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('add-revenue')));
+    await tester.pumpAndSettle();
+    expect(
+      find.text('Restaurant sales excluding sales tax and tips.'),
+      findsOneWidget,
+    );
+    await tester.tap(find.byKey(const Key('revenue-source')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Cash Sales').last);
+    await tester.enterText(find.byKey(const Key('revenue-amount')), '125.25');
+    await tester.enterText(
+      find.byKey(const Key('revenue-notes')),
+      'Lunch sales',
+    );
+    await tester.tap(find.byKey(const Key('save-revenue')));
+    await tester.pumpAndSettle();
+    expect(submitted?.restaurantLocationId, downtown.id);
+    expect(submitted?.manualType, ManualRevenueType.cash);
+    expect(submitted?.amount, 125.25);
+    expect(submitted?.notes, 'Lunch sales');
+    expect(find.text('Revenue recorded'), findsOneWidget);
+  });
+
+  testWidgets('rejects invalid manual revenue amounts', (tester) async {
+    var createCalls = 0;
+    final repository = FakeRevenueRepository(
+      (_) async => page([], totalItems: 0),
+      onCreate: (mutation) async {
+        createCalls++;
+        return record('manual');
+      },
+    );
+    await pumpApp(tester, repository);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('add-revenue')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('revenue-amount')), '0');
+    await tester.tap(find.byKey(const Key('save-revenue')));
+    await tester.pump();
+    expect(find.text('Enter a positive sales amount'), findsOneWidget);
+    expect(createCalls, 0);
+  });
+
+  testWidgets('manual revenue can be edited and removed after confirmation', (
+    tester,
+  ) async {
+    final manual = record(
+      'manual',
+      source: 'MANUAL',
+      manualType: ManualRevenueType.online,
+    );
+    String? deletedId;
+    final repository = FakeRevenueRepository(
+      (_) async => page([manual]),
+      detail: manual,
+      onUpdate: (_, mutation) async => manual,
+      onDelete: (id) async => deletedId = id,
+    );
+    await pumpApp(tester, repository);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('revenue-manual')));
+    await tester.pumpAndSettle();
+    expect(find.text('Online Sales'), findsOneWidget);
+    expect(find.byKey(const Key('edit-revenue')), findsOneWidget);
+    expect(find.byKey(const Key('delete-revenue')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('delete-revenue')));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('audit record'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('confirm-delete-revenue')));
+    await tester.pumpAndSettle();
+    expect(deletedId, 'manual');
+    expect(find.text('Revenue entry removed'), findsOneWidget);
+  });
+
+  testWidgets('edits a manual revenue entry through the detail sheet', (
+    tester,
+  ) async {
+    final manual = record(
+      'manual',
+      amount: 80,
+      source: 'MANUAL',
+      manualType: ManualRevenueType.card,
+    );
+    RevenueMutation? updated;
+    final repository = FakeRevenueRepository(
+      (_) async => page([manual]),
+      detail: manual,
+      onUpdate: (id, mutation) async {
+        expect(id, 'manual');
+        updated = mutation;
+        return record(
+          id,
+          amount: mutation.amount,
+          source: 'MANUAL',
+          manualType: mutation.manualType,
+          notes: mutation.notes,
+        );
+      },
+    );
+    await pumpApp(tester, repository);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('revenue-manual')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('edit-revenue')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('revenue-amount')), '90.50');
+    await tester.tap(find.byKey(const Key('save-revenue')));
+    await tester.pumpAndSettle();
+    expect(updated?.amount, 90.5);
+    expect(updated?.manualType, ManualRevenueType.card);
+    expect(find.text('Revenue updated'), findsOneWidget);
+  });
+
+  testWidgets('Square overlap requires explicit additional-sales confirmation', (
+    tester,
+  ) async {
+    final attempts = <RevenueMutation>[];
+    final manual = record(
+      'manual',
+      source: 'MANUAL',
+      manualType: ManualRevenueType.other,
+    );
+    final repository = FakeRevenueRepository(
+      (_) async => page([], totalItems: 0),
+      onCreate: (mutation) async {
+        attempts.add(mutation);
+        if (!mutation.additionalToPos) {
+          throw const RevenueConflictException(
+            'Square revenue already exists for this date. Only continue if these are additional sales not included in Square.',
+            canAddToSquare: true,
+          );
+        }
+        return manual;
+      },
+    );
+    await pumpApp(tester, repository);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('add-revenue')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('revenue-amount')), '50');
+    await tester.tap(find.byKey(const Key('save-revenue')));
+    await tester.pumpAndSettle();
+    expect(find.text('Square sales already recorded'), findsOneWidget);
+    await tester.tap(
+      find.byKey(const Key('confirm-square-additional-revenue')),
+    );
+    await tester.pumpAndSettle();
+    expect(attempts, hasLength(2));
+    expect(attempts.last.additionalToPos, isTrue);
   });
 }

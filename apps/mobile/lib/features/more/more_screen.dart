@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../main.dart'
     show
@@ -69,6 +71,11 @@ class _MoreScreenState extends ConsumerState<MoreScreen> {
     ref.invalidate(productGroupsProvider);
     ref.invalidate(bankConnectionsProvider);
     ref.invalidate(bankTransactionsProvider);
+    ref.invalidate(bankTransactionsAwaitingReviewProvider);
+    ref.invalidate(allBankTransactionsProvider);
+    ref.invalidate(unverifiedBankDepositsProvider);
+    ref.invalidate(merchantRulesProvider);
+    ref.invalidate(bankSyncStatusProvider);
     ref.invalidate(notificationListProvider);
     ref.invalidate(notificationPreferenceProvider);
   }
@@ -105,6 +112,10 @@ class _MoreScreenState extends ConsumerState<MoreScreen> {
         value: AccountSessionMode.private.name,
       );
       if (!mounted) return;
+      if (kIsWeb) {
+        context.go('/');
+        return;
+      }
       await Navigator.of(context).push(
         MaterialPageRoute(
           builder: (_) => LoginChallengeScreen(
@@ -120,16 +131,29 @@ class _MoreScreenState extends ConsumerState<MoreScreen> {
         ref.read(accountSessionModeProvider) != AccountSessionMode.private) {
       return;
     }
-    Navigator.of(context).pushAndRemoveUntil(
-      MaterialPageRoute(builder: (_) => const AuthBootstrap()),
-      (_) => false,
-    );
+    if (kIsWeb) {
+      context.go('/');
+    } else {
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const AuthBootstrap()),
+        (_) => false,
+      );
+    }
   }
 
   Future<void> _returnToBeta() async {
     if (_switchingAccount) return;
     setState(() => _switchingAccount = true);
     try {
+      if (kIsWeb) {
+        await ref.read(privateAccountRepositoryProvider).signOut();
+        ref.read(accountSessionModeProvider.notifier).state =
+            AccountSessionMode.standard;
+        _clearAccountState();
+        if (!mounted) return;
+        context.go('/login');
+        return;
+      }
       await ref.read(privateAccountRepositoryProvider).returnToBeta();
       ref.read(accountSessionModeProvider.notifier).state =
           AccountSessionMode.standard;
@@ -192,10 +216,14 @@ class _MoreScreenState extends ConsumerState<MoreScreen> {
     ref.invalidate(moreAccountProvider);
     ref.read(activeLocationControllerProvider.notifier).clear();
     if (!mounted) return;
-    Navigator.of(context).pushAndRemoveUntil(
-      MaterialPageRoute(builder: (_) => const AuthScreen()),
-      (_) => false,
-    );
+    if (kIsWeb) {
+      context.go('/login');
+    } else {
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const AuthScreen()),
+        (_) => false,
+      );
+    }
   }
 
   @override
@@ -433,10 +461,14 @@ class _MoreScreenState extends ConsumerState<MoreScreen> {
                 ? Icons.lock_open_outlined
                 : Icons.lock_outline,
             label: sessionMode == AccountSessionMode.private
-                ? 'Return to Beta Account'
+                ? kIsWeb
+                      ? 'Sign Out of Private Account'
+                      : 'Return to Beta Account'
                 : 'Private Account',
             value: sessionMode == AccountSessionMode.private
-                ? 'Leave the private account and restore beta access'
+                ? kIsWeb
+                      ? 'End this private browser session securely'
+                      : 'Leave the private account and restore beta access'
                 : 'Password-protected private access',
             trailing: _switchingAccount
                 ? const SizedBox.square(

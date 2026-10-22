@@ -122,16 +122,19 @@ describe('auth service', () => {
   });
 
   it('registers a normalized account and stores a hash of the verification token', async () => {
-    const prisma: any = { user: { findUnique: jest.fn().mockResolvedValue(null), create: jest.fn(({ data }) => Promise.resolve({ id: 'user-a', ...data })) }, emailVerificationToken: { create: jest.fn() } };
+    const invitation = { id: 'invite-a', email: 'owner@example.com', type: 'NEW_ORGANIZATION', organizationName: 'Restaurant', organizationId: null, role: 'OWNER', expiresAt: new Date(Date.now() + 60_000), revokedAt: null, redeemedAt: null };
+    const tx: any = { betaInvitation: { findUnique: jest.fn().mockResolvedValue(invitation), updateMany: jest.fn().mockResolvedValue({ count: 1 }) }, user: { findUnique: jest.fn().mockResolvedValue(null), create: jest.fn(({ data }) => Promise.resolve({ id: 'user-a', ...data })) }, organization: { create: jest.fn().mockResolvedValue({ id: 'org-a' }) }, onboardingState: { create: jest.fn() }, emailVerificationToken: { create: jest.fn() } };
+    const prisma: any = { $transaction: jest.fn((callback) => callback(tx)) };
     const email = mail(); const service = new AuthService(prisma, {} as any, email as any, audit as any);
-    await expect(service.register({ email: ' Owner@Example.COM ', password })).resolves.toEqual({ verificationRequired: true, email: 'owner@example.com' });
-    expect(prisma.user.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ email: 'owner@example.com' }) }));
-    expect(prisma.emailVerificationToken.create.mock.calls[0][0].data.tokenHash).not.toBe(email.sendVerification.mock.calls[0][1]);
+    await expect(service.register({ email: ' Owner@Example.COM ', password, invitationToken: 'x'.repeat(32) })).resolves.toEqual({ verificationRequired: true, email: 'owner@example.com' });
+    expect(tx.user.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ email: 'owner@example.com' }) }));
+    expect(tx.emailVerificationToken.create.mock.calls[0][0].data.tokenHash).not.toBe(email.sendVerification.mock.calls[0][1]);
   });
 
   it('rejects duplicate normalized registration', async () => {
-    const service = new AuthService({ user: { findUnique: jest.fn().mockResolvedValue({ id: 'existing' }) } } as any, {} as any, mail() as any, audit as any);
-    await expect(service.register({ email: 'OWNER@example.com', password })).rejects.toBeInstanceOf(ConflictException);
+    const tx: any = { betaInvitation: { findUnique: jest.fn().mockResolvedValue({ id: 'invite-a', email: 'owner@example.com', expiresAt: new Date(Date.now() + 60_000), revokedAt: null, redeemedAt: null }) }, user: { findUnique: jest.fn().mockResolvedValue({ id: 'existing' }) } };
+    const service = new AuthService({ $transaction: jest.fn((callback) => callback(tx)) } as any, {} as any, mail() as any, audit as any);
+    await expect(service.register({ email: 'OWNER@example.com', password, invitationToken: 'x'.repeat(32) })).rejects.toBeInstanceOf(ConflictException);
   });
 
   it('verifies a token exactly once', async () => {

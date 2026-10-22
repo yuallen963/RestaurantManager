@@ -1,5 +1,5 @@
 import { ConflictException, ForbiddenException, UnauthorizedException } from '@nestjs/common';
-import { BankCategorizationSource, BankConnectionStatus, BankReconciliationStatus, ExpenseSource, InvoiceMatchConfidence, MerchantRuleDecision, MerchantRuleMatchType, Prisma } from '@prisma/client';
+import { BankCategorizationSource, BankConnectionStatus, BankReconciliationStatus, ExpenseSource, InvoiceMatchConfidence, MerchantRuleDecision, MerchantRuleMatchType, OrganizationRole, Prisma } from '@prisma/client';
 import { BankLinkClientPlatform, BankReviewDecision } from '../src/bank/dto';
 import { BankService, normalizeMerchant } from '../src/bank/bank.service';
 import { BankTokenEncryptionService } from '../src/bank/encryption.service';
@@ -29,6 +29,37 @@ function setup(overrides: { rules?: any[]; vendors?: any[]; invoices?: any[] } =
 }
 
 describe('bank transaction foundation', () => {
+  it('requires owner or admin access for bank connection administration', async () => {
+    const { service, access, provider } = setup();
+    provider.createLinkToken.mockResolvedValue('link-token');
+    await service.linkToken('user-a', 'org-a');
+    expect(access.requireMember).toHaveBeenCalledWith('user-a', 'org-a', [
+      OrganizationRole.OWNER,
+      OrganizationRole.ADMIN,
+    ]);
+  });
+
+  it('rejects a viewer before creating a bank connection token', async () => {
+    const { service, access, provider } = setup();
+    access.requireMember.mockRejectedValue(new ForbiddenException());
+    await expect(service.linkToken('viewer', 'org-a')).rejects.toBeInstanceOf(ForbiddenException);
+    expect(provider.createLinkToken).not.toHaveBeenCalled();
+  });
+
+  it('requires a financial manager role for transaction review', async () => {
+    const { service, access, prisma } = setup();
+    prisma.bankTransaction.findUnique.mockResolvedValue({
+      id: 'transaction-a', organizationId: 'org-a', pending: false,
+      expenseId: 'expense-a', invoiceId: null,
+      reconciliationStatus: BankReconciliationStatus.MATCHED_EXPENSE,
+    });
+    await expect(service.review('user-a', 'transaction-a', { createMerchantRule: true } as any)).rejects.toBeInstanceOf(ConflictException);
+    expect(access.requireMember).toHaveBeenCalledWith('user-a', 'org-a', [
+      OrganizationRole.OWNER,
+      OrganizationRole.ADMIN,
+      OrganizationRole.MANAGER,
+    ]);
+  });
   it('normalizes common merchant variants conservatively', () => {
     expect(normalizeMerchant('SYSCO FOOD SERVICES #1842')).toBe('Sysco');
     expect(normalizeMerchant('SYSCO DETROIT')).toBe('Sysco');
@@ -109,11 +140,166 @@ describe('bank transaction foundation', () => {
 
   it('handles pending-to-posted transitions and removed transactions', async () => {
     const { service, prisma, provider } = setup();
-    prisma.bankTransaction.findFirst.mockResolvedValue({ id: 'stable-id', providerTransactionId: 'pending', pending: true, suggestedInvoiceId: null, matchConfidence: InvoiceMatchConfidence.NO_MATCH });
+    const pending = { id: 'stable-id', organizationId: 'org-a', restaurantLocationId: 'location-a', providerTransactionId: 'pending', pending: true, suggestedInvoiceId: null, matchConfidence: InvoiceMatchConfidence.NO_MATCH, pendingReviewDecision: null };
+    prisma.bankTransaction.findUnique.mockResolvedValueOnce(null).mockResolvedValueOnce(pending);
+    prisma.bankTransaction.findFirst.mockResolvedValueOnce(pending).mockResolvedValueOnce(null);
+    prisma.bankTransaction.update.mockImplementation(({ data }: any) => Promise.resolve({ ...pending, ...data }));
     provider.sync.mockResolvedValue({ added: [{ ...providerTransaction, id: 'posted', pendingTransactionId: 'pending' }], modified: [], removed: ['removed'], cursor: 'cursor-2' });
     await service.sync('user-a', 'connection-a');
     expect(prisma.bankTransaction.update).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'stable-id' }, data: expect.objectContaining({ providerTransactionId: 'posted', pending: false }) }));
-    expect(prisma.bankTransaction.updateMany).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ providerTransactionId: 'removed' }) }));
+    expect(prisma.bankTransaction.update).toHaveBeenCalledTimes(1);
+  });
+
+  it('completes a saved pending expense decision exactly once when it posts', async () => {
+    const { service, prisma, provider, audit } = setup();
+    let stored: any = {
+      id: 'stable-id', organizationId: 'org-a', restaurantLocationId: 'location-a',
+      bankAccountId: 'account-a', providerTransactionId: 'pending', pending: true,
+      suggestedInvoiceId: null, invoiceId: null, expenseId: null,
+      matchConfidence: InvoiceMatchConfidence.NO_MATCH,
+      pendingReviewDecision: MerchantRuleDecision.EXPENSE,
+      reconciliationStatus: BankReconciliationStatus.NEEDS_REVIEW,
+      categoryId: 'food', vendorId: 'vendor-a', amount: new Prisma.Decimal(20),
+      postedDate: new Date('2026-10-07'), description: 'MARKET',
+    };
+    prisma.bankTransaction.findUnique.mockImplementation(({ where }: any) =>
+      where.bankAccountId_providerTransactionId
+        ? Promise.resolve(where.bankAccountId_providerTransactionId.providerTransactionId === stored.providerTransactionId ? stored : null)
+        : Promise.resolve(stored),
+    );
+    prisma.bankTransaction.findFirst.mockImplementation(({ where }: any) =>
+      Promise.resolve(where.providerTransactionId === stored.providerTransactionId && stored.pending ? stored : null),
+    );
+    prisma.bankTransaction.update.mockImplementation(({ data }: any) => {
+      stored = { ...stored, ...data };
+      return Promise.resolve(stored);
+    });
+    prisma.expense.create.mockResolvedValue({ id: 'posted-expense' });
+    provider.sync.mockResolvedValue({ added: [{ ...providerTransaction, id: 'posted', pendingTransactionId: 'pending', amount: 20 }], modified: [], removed: [], cursor: 'cursor-2' });
+
+    await service.sync('user-a', 'connection-a');
+    await service.sync('user-a', 'connection-a');
+
+    expect(prisma.expense.create).toHaveBeenCalledTimes(1);
+    expect(stored).toEqual(expect.objectContaining({
+      providerTransactionId: 'posted', pending: false, expenseId: 'posted-expense',
+      pendingReviewDecision: null, reconciliationStatus: BankReconciliationStatus.MATCHED_EXPENSE,
+    }));
+    expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({ action: 'bank.pending_expense_completed' }));
+  });
+
+  it('completes a pending expense decision when the provider keeps the same transaction id', async () => {
+    const { service, prisma, provider, audit } = setup();
+    let stored: any = {
+      id: 'stable-id', organizationId: 'org-a', restaurantLocationId: 'location-a',
+      bankAccountId: 'account-a', providerTransactionId: 'same-id', pending: true,
+      suggestedInvoiceId: null, invoiceId: null, expenseId: null,
+      matchConfidence: InvoiceMatchConfidence.NO_MATCH,
+      pendingReviewDecision: MerchantRuleDecision.EXPENSE,
+      reconciliationStatus: BankReconciliationStatus.NEEDS_REVIEW,
+      categoryId: 'food', vendorId: 'vendor-a', amount: new Prisma.Decimal(20),
+      postedDate: new Date('2026-10-07'), description: 'MARKET', removedAt: null,
+    };
+    prisma.bankTransaction.findUnique.mockImplementation(() => Promise.resolve(stored));
+    prisma.bankTransaction.findFirst.mockResolvedValue(null);
+    prisma.bankTransaction.update.mockImplementation(({ data }: any) => {
+      stored = { ...stored, ...data };
+      return Promise.resolve(stored);
+    });
+    prisma.expense.create.mockResolvedValue({ id: 'posted-expense' });
+    provider.sync.mockResolvedValue({
+      added: [], modified: [{ ...providerTransaction, id: 'same-id', amount: 20 }],
+      removed: [], cursor: 'cursor-2',
+    });
+
+    await service.sync('user-a', 'connection-a');
+    await service.sync('user-a', 'connection-a');
+
+    expect(prisma.expense.create).toHaveBeenCalledTimes(1);
+    expect(stored).toEqual(expect.objectContaining({
+      pending: false, expenseId: 'posted-expense', pendingReviewDecision: null,
+      reconciliationStatus: BankReconciliationStatus.MATCHED_EXPENSE,
+    }));
+    expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'bank.pending_expense_completed',
+      metadata: { decision: MerchantRuleDecision.EXPENSE },
+    }));
+  });
+
+  it('returns an unsafe pending decision visibly to review and clears the latent instruction', async () => {
+    const { service, prisma, provider, audit } = setup();
+    let stored: any = {
+      id: 'stable-id', organizationId: 'org-a', restaurantLocationId: 'location-a',
+      bankAccountId: 'account-a', providerTransactionId: 'same-id', pending: true,
+      suggestedInvoiceId: 'invoice-a', invoiceId: null, expenseId: null,
+      matchConfidence: InvoiceMatchConfidence.EXACT,
+      pendingReviewDecision: MerchantRuleDecision.EXPENSE,
+      reconciliationStatus: BankReconciliationStatus.NEEDS_REVIEW,
+      categoryId: 'food', vendorId: 'vendor-a', amount: new Prisma.Decimal(20),
+      postedDate: new Date('2026-10-07'), description: 'MARKET', removedAt: null,
+    };
+    prisma.bankTransaction.findUnique.mockImplementation(() => Promise.resolve(stored));
+    prisma.bankTransaction.findFirst.mockResolvedValue(null);
+    prisma.bankTransaction.update.mockImplementation(({ data }: any) => {
+      stored = { ...stored, ...data };
+      return Promise.resolve(stored);
+    });
+    provider.sync.mockResolvedValue({
+      added: [], modified: [{ ...providerTransaction, id: 'same-id', amount: 20 }],
+      removed: [], cursor: 'cursor-2',
+    });
+
+    await service.sync('user-a', 'connection-a');
+
+    expect(prisma.expense.create).not.toHaveBeenCalled();
+    expect(stored).toEqual(expect.objectContaining({
+      reconciliationStatus: BankReconciliationStatus.NEEDS_REVIEW,
+      pendingReviewDecision: null,
+    }));
+    expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'bank.pending_decision_returned_to_review',
+    }));
+  });
+
+  it('deletes only a uniquely linked bank-created expense when Plaid removes its transaction', async () => {
+    const { service, prisma, provider, audit } = setup();
+    const removed = { id: 'removed-row', organizationId: 'org-a', restaurantLocationId: 'location-a', expenseId: 'bank-expense', invoiceId: null };
+    prisma.bankTransaction.findFirst.mockResolvedValue(removed);
+    prisma.bankTransaction.count.mockResolvedValue(1);
+    prisma.bankTransaction.update.mockImplementation(({ data }: any) => Promise.resolve({ ...removed, ...data }));
+    prisma.expense.findUnique.mockResolvedValue({
+      id: 'bank-expense', organizationId: 'org-a', restaurantLocationId: 'location-a',
+      source: ExpenseSource.BANK_IMPORT, amount: new Prisma.Decimal('29.44'),
+      date: new Date('2026-10-08T00:00:00.000Z'),
+    });
+    provider.sync.mockResolvedValue({ added: [], modified: [], removed: ['removed-provider-id'], cursor: 'cursor-2' });
+
+    await service.sync('user-a', 'connection-a');
+
+    expect(prisma.bankTransaction.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ expenseId: null, reconciliationStatus: BankReconciliationStatus.IGNORED }) }));
+    expect(prisma.expense.delete).toHaveBeenCalledWith({ where: { id: 'bank-expense' } });
+    expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'bank.transaction_removed',
+      metadata: expect.objectContaining({
+        deletedExpenseId: 'bank-expense',
+        deletedExpenseSnapshot: expect.objectContaining({ amount: '29.44', source: ExpenseSource.BANK_IMPORT }),
+      }),
+    }));
+  });
+
+  it('preserves an existing manual expense while unlinking a removed Plaid transaction', async () => {
+    const { service, prisma, provider } = setup();
+    const removed = { id: 'removed-row', organizationId: 'org-a', restaurantLocationId: 'location-a', expenseId: 'manual-expense', invoiceId: null };
+    prisma.bankTransaction.findFirst.mockResolvedValue(removed);
+    prisma.bankTransaction.count.mockResolvedValue(1);
+    prisma.bankTransaction.update.mockImplementation(({ data }: any) => Promise.resolve({ ...removed, ...data }));
+    prisma.expense.findUnique.mockResolvedValue({ id: 'manual-expense', organizationId: 'org-a', restaurantLocationId: 'location-a', source: ExpenseSource.MANUAL });
+    provider.sync.mockResolvedValue({ added: [], modified: [], removed: ['removed-provider-id'], cursor: 'cursor-2' });
+
+    await service.sync('user-a', 'connection-a');
+
+    expect(prisma.expense.delete).not.toHaveBeenCalled();
+    expect(prisma.bankTransaction.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ expenseId: null }) }));
   });
 
   it('uses a small tolerance only for likely invoice matches and rejects mismatches', async () => {
@@ -165,9 +351,7 @@ describe('bank transaction foundation', () => {
   it('requires OWNER or ADMIN to reassign a bank account location', async () => {
     const { service, prisma, access } = setup();
     prisma.bankAccount.findUnique.mockResolvedValue({ id: 'account-a', organizationId: 'org-a' });
-    access.requireMember
-      .mockResolvedValueOnce({ role: 'MANAGER' })
-      .mockRejectedValueOnce(new ForbiddenException());
+    access.requireMember.mockRejectedValueOnce(new ForbiddenException());
     await expect(service.assignAccount('manager', 'account-a', { restaurantLocationId: 'location-a' })).rejects.toBeInstanceOf(ForbiddenException);
     expect(prisma.bankAccount.update).not.toHaveBeenCalled();
   });
@@ -237,6 +421,51 @@ describe('bank transaction foundation', () => {
     await service.review('user-a', 'bank-row', { vendorId: 'sysco', categoryId: 'food', restaurantLocationId: 'location-a' });
     expect(prisma.expense.create).not.toHaveBeenCalled();
     expect(prisma.bankTransaction.update).toHaveBeenLastCalledWith(expect.objectContaining({ data: expect.objectContaining({ expenseId: 'existing-expense' }) }));
+  });
+
+  it('treats a repeated identical expense confirmation as an idempotent success', async () => {
+    const { service, prisma, audit } = setup();
+    const matched = {
+      id: 'bank-row', organizationId: 'org-a', restaurantLocationId: 'location-a',
+      vendorId: 'vendor-a', categoryId: 'food', expenseId: 'expense-a', invoiceId: null,
+      reconciliationStatus: BankReconciliationStatus.MATCHED_EXPENSE,
+      pending: false, amount: new Prisma.Decimal(20),
+    };
+    prisma.bankTransaction.findUnique.mockResolvedValue(matched);
+    prisma.vendor.findFirst.mockResolvedValue({ id: 'vendor-a' });
+    prisma.expenseCategory.findFirst.mockResolvedValue({ id: 'food' });
+
+    await expect(service.review('user-a', 'bank-row', {
+      decision: BankReviewDecision.EXPENSE,
+      restaurantLocationId: 'location-a', vendorId: 'vendor-a', categoryId: 'food',
+    })).resolves.toBe(matched);
+    expect(prisma.expense.create).not.toHaveBeenCalled();
+    expect(prisma.bankTransaction.update).not.toHaveBeenCalled();
+    expect(audit.log).not.toHaveBeenCalledWith(expect.objectContaining({ action: 'bank.transaction_categorized' }));
+  });
+
+  it('maps the database expense-link uniqueness guarantee to a safe conflict', async () => {
+    const { service, prisma } = setup();
+    const transaction = {
+      id: 'bank-row', organizationId: 'org-a', restaurantLocationId: 'location-a',
+      vendorId: 'vendor-a', categoryId: 'food', suggestedInvoiceId: null,
+      expenseId: null, invoiceId: null, postedDate: new Date('2026-10-08'),
+      amount: new Prisma.Decimal(20), pending: false,
+      reconciliationStatus: BankReconciliationStatus.NEEDS_REVIEW,
+    };
+    prisma.bankTransaction.findUnique.mockResolvedValue(transaction);
+    prisma.vendor.findFirst.mockResolvedValue({ id: 'vendor-a' });
+    prisma.expenseCategory.findFirst.mockResolvedValue({ id: 'food' });
+    prisma.expense.findMany.mockResolvedValue([{ id: 'existing-expense' }]);
+    prisma.bankTransaction.update.mockRejectedValue(
+      new Prisma.PrismaClientKnownRequestError('duplicate', {
+        code: 'P2002', clientVersion: '6.19.3',
+      }),
+    );
+
+    await expect(service.review('user-a', 'bank-row', {
+      restaurantLocationId: 'location-a', vendorId: 'vendor-a', categoryId: 'food',
+    })).rejects.toThrow('already linked to another bank transaction');
   });
 
   it('keeps pending reviews out of Expenses until the transaction posts', async () => {
@@ -431,6 +660,31 @@ describe('bank transaction foundation', () => {
     expect(mutationOrder).toEqual(['unlink', 'delete']);
   });
 
+  it('reverses a match to an existing expense without deleting that expense', async () => {
+    const { service, prisma, audit } = setup();
+    const matched = {
+      id: 'bank-row', organizationId: 'org-a', expenseId: 'manual-expense',
+      invoiceId: null, reconciliationStatus: BankReconciliationStatus.MATCHED_EXPENSE,
+    };
+    prisma.bankTransaction.findUnique.mockResolvedValue(matched);
+    prisma.expense.findUnique.mockResolvedValue({
+      id: 'manual-expense', source: ExpenseSource.MANUAL,
+    });
+    prisma.bankTransaction.count.mockResolvedValue(1);
+    prisma.bankTransaction.update.mockImplementation(({ data }: any) =>
+      Promise.resolve({ ...matched, ...data }));
+
+    await expect(service.reverseReconciliation('user-a', 'bank-row'))
+      .resolves.toEqual(expect.objectContaining({
+        expenseId: null,
+        reconciliationStatus: BankReconciliationStatus.NEEDS_REVIEW,
+      }));
+    expect(prisma.expense.delete).not.toHaveBeenCalled();
+    expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({
+      metadata: { deletedBankExpense: false },
+    }));
+  });
+
   it('returns an ignored personal transfer to review without creating financial records', async () => {
     const { service, prisma, audit } = setup();
     prisma.bankTransaction.findUnique.mockResolvedValue({ id: 'bank-row', organizationId: 'org-a', expenseId: null, invoiceId: null, reconciliationStatus: BankReconciliationStatus.IGNORED });
@@ -438,6 +692,76 @@ describe('bank transaction foundation', () => {
     await expect(service.reverseReconciliation('user-a', 'bank-row')).resolves.toEqual(expect.objectContaining({ reconciliationStatus: BankReconciliationStatus.NEEDS_REVIEW }));
     expect(prisma.expense.delete).not.toHaveBeenCalled();
     expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({ action: 'bank.transaction_ignore_reversed' }));
+  });
+
+  it('confirms an invoice match idempotently within the transaction tenant and location', async () => {
+    const { service, prisma, audit } = setup();
+    let current: any = {
+      id: 'bank-row', organizationId: 'org-a', restaurantLocationId: 'location-a',
+      pending: false, expenseId: null, invoiceId: null, suggestedInvoiceId: 'invoice-a',
+      matchConfidence: InvoiceMatchConfidence.EXACT,
+      reconciliationStatus: BankReconciliationStatus.NEEDS_REVIEW,
+    };
+    prisma.bankTransaction.findUnique.mockImplementation(() => Promise.resolve(current));
+    prisma.bankTransaction.findFirst.mockResolvedValue(null);
+    prisma.invoice.findFirst.mockResolvedValue({ id: 'invoice-a', organizationId: 'org-a', restaurantLocationId: 'location-a', vendorId: 'vendor-a' });
+    prisma.bankTransaction.update.mockImplementation(({ data }: any) => {
+      current = { ...current, ...data };
+      return Promise.resolve(current);
+    });
+
+    await service.confirmMatch('user-a', 'bank-row', { invoiceId: 'invoice-a' });
+    await service.confirmMatch('user-a', 'bank-row', { invoiceId: 'invoice-a' });
+
+    expect(prisma.bankTransaction.update).toHaveBeenCalledTimes(1);
+    expect(prisma.invoice.findFirst).toHaveBeenCalledWith({ where: expect.objectContaining({
+      id: 'invoice-a', organizationId: 'org-a', restaurantLocationId: 'location-a',
+    }) });
+    expect(audit.log).toHaveBeenCalledTimes(1);
+  });
+
+  it('maps the database invoice uniqueness guarantee to a safe conflict', async () => {
+    const { service, prisma } = setup();
+    const current = {
+      id: 'bank-row', organizationId: 'org-a', restaurantLocationId: 'location-a',
+      pending: false, expenseId: null, invoiceId: null, suggestedInvoiceId: 'invoice-a',
+      matchConfidence: InvoiceMatchConfidence.EXACT,
+      reconciliationStatus: BankReconciliationStatus.NEEDS_REVIEW,
+    };
+    prisma.bankTransaction.findUnique.mockResolvedValue(current);
+    prisma.bankTransaction.findFirst.mockResolvedValue(null);
+    prisma.invoice.findFirst.mockResolvedValue({ id: 'invoice-a', vendorId: 'vendor-a' });
+    prisma.bankTransaction.update.mockRejectedValue(new Prisma.PrismaClientKnownRequestError('duplicate', { code: 'P2002', clientVersion: '6.19.3' }));
+
+    await expect(service.confirmMatch('user-a', 'bank-row', { invoiceId: 'invoice-a' }))
+      .rejects.toThrow('Invoice is already linked to another bank transaction');
+  });
+
+  it('reverses an invoice payment link without deleting the invoice', async () => {
+    const { service, prisma, audit } = setup();
+    const matched = { id: 'bank-row', organizationId: 'org-a', invoiceId: 'invoice-a', expenseId: null, reconciliationStatus: BankReconciliationStatus.MATCHED_INVOICE };
+    prisma.bankTransaction.findUnique.mockResolvedValue(matched);
+    prisma.bankTransaction.update.mockImplementation(({ data }: any) => Promise.resolve({ ...matched, ...data }));
+
+    await expect(service.reverseReconciliation('user-a', 'bank-row')).resolves.toEqual(expect.objectContaining({
+      invoiceId: null, suggestedInvoiceId: null,
+      reconciliationStatus: BankReconciliationStatus.NEEDS_REVIEW,
+      matchConfidence: InvoiceMatchConfidence.NO_MATCH,
+    }));
+    expect(prisma.invoice.update).toBeUndefined();
+    expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({ action: 'bank.invoice_match_reversed' }));
+  });
+
+  it('does not reject an invoice suggestion after the payment link is confirmed', async () => {
+    const { service, prisma } = setup();
+    prisma.bankTransaction.findUnique.mockResolvedValue({
+      id: 'bank-row', organizationId: 'org-a', invoiceId: 'invoice-a',
+      reconciliationStatus: BankReconciliationStatus.MATCHED_INVOICE,
+    });
+
+    await expect(service.rejectMatch('user-a', 'bank-row'))
+      .rejects.toThrow('Remove the invoice payment link before rejecting an invoice suggestion');
+    expect(prisma.bankTransaction.update).not.toHaveBeenCalled();
   });
 
   it('creates an update-mode link token and preserves the existing connection on reauth', async () => {
