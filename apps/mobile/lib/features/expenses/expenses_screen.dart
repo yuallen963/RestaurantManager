@@ -10,6 +10,7 @@ import '../price_intelligence/price_changes_screen.dart';
 import '../banking/bank_screens.dart';
 import '../banking/foundation.dart';
 import 'foundation.dart';
+import '../responsive.dart';
 
 class ExpensesScreen extends ConsumerStatefulWidget {
   const ExpensesScreen({super.key});
@@ -90,74 +91,76 @@ class _ExpensesScreenState extends ConsumerState<ExpensesScreen> {
     final lookupData = lookups.requireValue;
     final expenseData = expenses.requireValue;
     final filters = ref.watch(expenseFiltersProvider);
-    return ListView.builder(
-      key: const Key('expenses-list'),
-      controller: scrollController,
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
-      itemCount: expenseData.items.length + 2,
-      itemBuilder: (context, index) {
-        if (index == 0) {
-          return _ExpenseHeader(
-            location: location,
-            lookups: lookupData,
-            filters: filters,
-            totalAmount: expenseData.totalAmount,
-            totalItems: expenseData.pagination.totalItems,
-            searchController: searchController,
-            onSearchChanged: _onSearchChanged,
-          );
-        }
-        if (index == expenseData.items.length + 1) {
-          if (expenseData.items.isEmpty) {
-            return Padding(
-              padding: const EdgeInsets.only(top: 36),
-              child: _ExpenseEmptyState(filtered: filters.isFiltered),
+    return ResponsiveContent(
+      child: ListView.builder(
+        key: const Key('expenses-list'),
+        controller: scrollController,
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
+        itemCount: expenseData.items.length + 2,
+        itemBuilder: (context, index) {
+          if (index == 0) {
+            return _ExpenseHeader(
+              location: location,
+              lookups: lookupData,
+              filters: filters,
+              totalAmount: expenseData.totalAmount,
+              totalItems: expenseData.pagination.totalItems,
+              searchController: searchController,
+              onSearchChanged: _onSearchChanged,
             );
           }
-          if (expenseData.isLoadingMore) {
-            return const Padding(
-              padding: EdgeInsets.all(20),
-              child: Center(child: CircularProgressIndicator()),
-            );
-          }
-          if (expenseData.loadMoreFailed) {
-            return Padding(
-              padding: const EdgeInsets.all(12),
-              child: Center(
-                child: OutlinedButton.icon(
-                  onPressed: () =>
-                      ref.read(expenseListProvider.notifier).loadMore(),
-                  icon: const Icon(Icons.refresh),
-                  label: const Text('Retry loading more'),
-                ),
-              ),
-            );
-          }
-          return expenseData.pagination.hasMore
-              ? Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: Center(
-                    child: TextButton(
-                      onPressed: () =>
-                          ref.read(expenseListProvider.notifier).loadMore(),
-                      child: const Text('Load more'),
-                    ),
+          if (index == expenseData.items.length + 1) {
+            if (expenseData.items.isEmpty) {
+              return Padding(
+                padding: const EdgeInsets.only(top: 36),
+                child: _ExpenseEmptyState(filtered: filters.isFiltered),
+              );
+            }
+            if (expenseData.isLoadingMore) {
+              return const Padding(
+                padding: EdgeInsets.all(20),
+                child: Center(child: CircularProgressIndicator()),
+              );
+            }
+            if (expenseData.loadMoreFailed) {
+              return Padding(
+                padding: const EdgeInsets.all(12),
+                child: Center(
+                  child: OutlinedButton.icon(
+                    onPressed: () =>
+                        ref.read(expenseListProvider.notifier).loadMore(),
+                    icon: const Icon(Icons.refresh),
+                    label: const Text('Retry loading more'),
                   ),
-                )
-              : const SizedBox(height: 12);
-        }
-        final expense = expenseData.items[index - 1];
-        return ExpenseListItem(
-          expense: expense,
-          lookups: lookupData,
-          onTap: () => showModalBottomSheet<void>(
-            context: context,
-            isScrollControlled: true,
-            showDragHandle: true,
-            builder: (_) => ExpenseDetailSheet(expenseId: expense.id),
-          ),
-        );
-      },
+                ),
+              );
+            }
+            return expenseData.pagination.hasMore
+                ? Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Center(
+                      child: TextButton(
+                        onPressed: () =>
+                            ref.read(expenseListProvider.notifier).loadMore(),
+                        child: const Text('Load more'),
+                      ),
+                    ),
+                  )
+                : const SizedBox(height: 12);
+          }
+          final expense = expenseData.items[index - 1];
+          return ExpenseListItem(
+            expense: expense,
+            lookups: lookupData,
+            onTap: () => showModalBottomSheet<void>(
+              context: context,
+              isScrollControlled: true,
+              showDragHandle: true,
+              builder: (_) => ExpenseDetailSheet(expenseId: expense.id),
+            ),
+          );
+        },
+      ),
     );
   }
 }

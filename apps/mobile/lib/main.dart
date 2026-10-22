@@ -14,6 +14,7 @@ import 'features/notifications/push_service.dart';
 import 'features/notifications/notification_router.dart';
 import 'features/onboarding/foundation.dart';
 import 'features/onboarding/onboarding_screen.dart';
+import 'features/dashboard/foundation.dart';
 import 'features/auth/auth_screens.dart';
 import 'features/auth/auth_links.dart';
 import 'features/auth/auth_session_store_interface.dart';
@@ -24,6 +25,7 @@ import 'features/auth/api_client_config_native.dart'
     if (dart.library.html) 'features/auth/api_client_config_web.dart'
     as api_client_config;
 import 'features/banking/plaid_link/plaid_link.dart';
+import 'features/responsive.dart';
 
 final AuthSessionStore storage = auth_store.createAuthSessionStore();
 const apiBaseUrl = String.fromEnvironment(
@@ -263,7 +265,7 @@ class _ProfitAppState extends ConsumerState<ProfitApp> {
     });
     if (kIsWeb) {
       return MaterialApp.router(
-        title: 'Profit Lens',
+        title: 'FundWell',
         theme: ThemeData(useMaterial3: true),
         routerConfig: webRouter,
       );
@@ -768,36 +770,69 @@ class _HomeState extends ConsumerState<Home> {
       VendorsScreen(),
       MoreScreen(),
     ];
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Profit Lens'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.notifications_outlined),
-            tooltip: 'Notifications',
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (_) => const NotificationCenterScreen(),
-              ),
-            ),
-          ),
-        ],
+    const destinations = [
+      FundWellDestination(
+        icon: Icons.home_outlined,
+        selectedIcon: Icons.home,
+        label: 'Home',
       ),
+      FundWellDestination(
+        icon: Icons.receipt_long_outlined,
+        selectedIcon: Icons.receipt_long,
+        label: 'Expenses',
+      ),
+      FundWellDestination(
+        icon: Icons.attach_money_outlined,
+        selectedIcon: Icons.attach_money,
+        label: 'Revenue',
+      ),
+      FundWellDestination(
+        icon: Icons.storefront_outlined,
+        selectedIcon: Icons.storefront,
+        label: 'Vendors',
+      ),
+      FundWellDestination(
+        icon: Icons.settings_outlined,
+        selectedIcon: Icons.settings,
+        label: 'More',
+      ),
+    ];
+    final location = ref.watch(activeLocationProvider);
+    final locations = ref.watch(availableLocationsProvider);
+    return AdaptiveNavigationShell(
+      selectedIndex: index,
+      onDestinationSelected: (value) => setState(() => index = value),
+      destinations: destinations,
       body: pages[index],
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: index,
-        onDestinationSelected: (value) => setState(() => index = value),
-        destinations: [
-          NavigationDestination(icon: Icon(Icons.home), label: 'Home'),
-          NavigationDestination(icon: Icon(Icons.receipt), label: 'Expenses'),
-          NavigationDestination(
-            icon: Icon(Icons.attach_money),
-            label: 'Revenue',
-          ),
-          NavigationDestination(icon: Icon(Icons.storefront), label: 'Vendors'),
-          NavigationDestination(icon: Icon(Icons.more_horiz), label: 'More'),
-        ],
+      applicationName: kIsWeb ? 'FundWell' : 'Profit Lens',
+      desktopHeader: location == null
+          ? null
+          : DropdownButtonFormField<String>(
+              key: const Key('desktop-location-selector'),
+              initialValue: location.id,
+              isExpanded: true,
+              decoration: const InputDecoration(
+                labelText: 'Restaurant',
+                border: OutlineInputBorder(),
+                isDense: true,
+              ),
+              items: [
+                for (final item in locations.isEmpty ? [location] : locations)
+                  DropdownMenuItem(value: item.id, child: Text(item.name)),
+              ],
+              onChanged: (id) {
+                if (id == null || id == location.id) return;
+                final selected = locations.where((item) => item.id == id);
+                if (selected.isNotEmpty) {
+                  ref
+                      .read(activeLocationControllerProvider.notifier)
+                      .select(selected.first);
+                }
+              },
+            ),
+      onNotifications: () => Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const NotificationCenterScreen()),
       ),
     );
   }

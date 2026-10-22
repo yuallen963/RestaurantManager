@@ -1,12 +1,12 @@
 {
-    "name": "restaurant_profit_mobile",
-    "short_name": "restaurant_profit_mobile",
+    "name": "FundWell Restaurant Financial Manager",
+    "short_name": "FundWell",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#0175C2",
-    "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
-    "orientation": "portrait-primary",
+    "background_color": "#FFFBFE",
+    "theme_color": "#6750A4",
+    "description": "Restaurant financial insights, banking review, expenses, revenue, invoices, and vendor intelligence.",
+    "orientation": "any",
     "prefer_related_applications": false,
     "icons": [
         {

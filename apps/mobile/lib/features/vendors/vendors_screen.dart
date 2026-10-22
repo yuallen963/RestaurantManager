@@ -11,6 +11,7 @@ import '../revenue/foundation.dart' show DailyRevenue;
 import '../revenue/revenue_screen.dart' show RevenueChart;
 import '../price_intelligence/price_changes_screen.dart';
 import 'foundation.dart';
+import '../responsive.dart';
 
 class VendorsScreen extends ConsumerStatefulWidget {
   const VendorsScreen({super.key});
@@ -78,65 +79,67 @@ class _VendorsScreenState extends ConsumerState<VendorsScreen> {
   }
 
   Widget content(RestaurantLocation location, VendorListState data) =>
-      ListView.builder(
-        key: const Key('vendor-list'),
-        controller: scrollController,
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
-        itemCount: data.items.length + 2,
-        itemBuilder: (context, index) {
-          if (index == 0)
-            return VendorHeader(
-              location: location,
-              searchController: searchController,
-              onSearch: search,
-              count: data.pagination.totalItems,
+      ResponsiveContent(
+        child: ListView.builder(
+          key: const Key('vendor-list'),
+          controller: scrollController,
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
+          itemCount: data.items.length + 2,
+          itemBuilder: (context, index) {
+            if (index == 0)
+              return VendorHeader(
+                location: location,
+                searchController: searchController,
+                onSearch: search,
+                count: data.pagination.totalItems,
+              );
+            if (index == data.items.length + 1) {
+              if (data.items.isEmpty)
+                return Padding(
+                  padding: const EdgeInsets.only(top: 36),
+                  child: _VendorEmptyState(
+                    filtered: ref
+                        .watch(vendorFiltersProvider)
+                        .search
+                        .trim()
+                        .isNotEmpty,
+                  ),
+                );
+              if (data.isLoadingMore)
+                return const Padding(
+                  padding: EdgeInsets.all(20),
+                  child: Center(child: CircularProgressIndicator()),
+                );
+              if (data.loadMoreFailed)
+                return Center(
+                  child: TextButton(
+                    onPressed: () =>
+                        ref.read(vendorListProvider.notifier).loadMore(),
+                    child: const Text('Retry loading more'),
+                  ),
+                );
+              return data.pagination.hasMore
+                  ? Center(
+                      child: TextButton(
+                        onPressed: () =>
+                            ref.read(vendorListProvider.notifier).loadMore(),
+                        child: const Text('Load more'),
+                      ),
+                    )
+                  : const SizedBox(height: 12);
+            }
+            final vendor = data.items[index - 1];
+            return VendorRow(
+              vendor: vendor,
+              onTap: () => showModalBottomSheet<void>(
+                context: context,
+                isScrollControlled: true,
+                showDragHandle: true,
+                builder: (_) => VendorDetailSheet(id: vendor.id),
+              ),
             );
-          if (index == data.items.length + 1) {
-            if (data.items.isEmpty)
-              return Padding(
-                padding: const EdgeInsets.only(top: 36),
-                child: _VendorEmptyState(
-                  filtered: ref
-                      .watch(vendorFiltersProvider)
-                      .search
-                      .trim()
-                      .isNotEmpty,
-                ),
-              );
-            if (data.isLoadingMore)
-              return const Padding(
-                padding: EdgeInsets.all(20),
-                child: Center(child: CircularProgressIndicator()),
-              );
-            if (data.loadMoreFailed)
-              return Center(
-                child: TextButton(
-                  onPressed: () =>
-                      ref.read(vendorListProvider.notifier).loadMore(),
-                  child: const Text('Retry loading more'),
-                ),
-              );
-            return data.pagination.hasMore
-                ? Center(
-                    child: TextButton(
-                      onPressed: () =>
-                          ref.read(vendorListProvider.notifier).loadMore(),
-                      child: const Text('Load more'),
-                    ),
-                  )
-                : const SizedBox(height: 12);
-          }
-          final vendor = data.items[index - 1];
-          return VendorRow(
-            vendor: vendor,
-            onTap: () => showModalBottomSheet<void>(
-              context: context,
-              isScrollControlled: true,
-              showDragHandle: true,
-              builder: (_) => VendorDetailSheet(id: vendor.id),
-            ),
-          );
-        },
+          },
+        ),
       );
 }
 

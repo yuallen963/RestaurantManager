@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../dashboard/foundation.dart';
 import '../dashboard/home_screen.dart';
+import '../responsive.dart';
 import '../expenses/expenses_screen.dart';
 import '../expenses/foundation.dart';
 import '../price_intelligence/price_changes_screen.dart';
@@ -162,42 +163,44 @@ class _AttentionContent extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final locations = ref.watch(availableLocationsProvider);
-    return ListView(
-      key: const Key('needs-attention-list'),
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
-      children: [
-        LocationSelector(
-          active: location,
-          locations: locations.isEmpty ? [location] : locations,
-          onSelected: (selected) => ref
-              .read(activeLocationControllerProvider.notifier)
-              .select(selected),
-        ),
-        const SizedBox(height: 12),
-        const Align(
-          alignment: Alignment.centerRight,
-          child: DateRangeSelector(),
-        ),
-        const SizedBox(height: 16),
-        Text(
-          '${data.summary.total} meaningful ${data.summary.total == 1 ? 'issue' : 'issues'}',
-          style: Theme.of(context).textTheme.titleMedium,
-        ),
-        if (data.summary.estimatedMonthlyImpact > 0)
-          Text(
-            'Known item-price impact: +${attentionCurrency(data.summary.estimatedMonthlyImpact)}/month',
+    return ResponsiveContent(
+      child: ListView(
+        key: const Key('needs-attention-list'),
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
+        children: [
+          LocationSelector(
+            active: location,
+            locations: locations.isEmpty ? [location] : locations,
+            onSelected: (selected) => ref
+                .read(activeLocationControllerProvider.notifier)
+                .select(selected),
           ),
-        const SizedBox(height: 12),
-        if (data.items.isEmpty)
-          const Padding(
-            padding: EdgeInsets.only(top: 42),
-            child: EmptyState(
-              message: 'No major cost issues detected for this period.',
+          const SizedBox(height: 12),
+          const Align(
+            alignment: Alignment.centerRight,
+            child: DateRangeSelector(),
+          ),
+          const SizedBox(height: 16),
+          Text(
+            '${data.summary.total} meaningful ${data.summary.total == 1 ? 'issue' : 'issues'}',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+          if (data.summary.estimatedMonthlyImpact > 0)
+            Text(
+              'Known item-price impact: +${attentionCurrency(data.summary.estimatedMonthlyImpact)}/month',
             ),
-          )
-        else
-          for (final item in data.items) _AttentionCard(item: item),
-      ],
+          const SizedBox(height: 12),
+          if (data.items.isEmpty)
+            const Padding(
+              padding: EdgeInsets.only(top: 42),
+              child: EmptyState(
+                message: 'No major cost issues detected for this period.',
+              ),
+            )
+          else
+            for (final item in data.items) _AttentionCard(item: item),
+        ],
+      ),
     );
   }
 }

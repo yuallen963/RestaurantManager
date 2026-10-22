@@ -12,6 +12,7 @@ import '../needs_attention/foundation.dart';
 import '../price_intelligence/foundation.dart';
 import 'foundation.dart';
 import 'invoice_upload.dart';
+import '../responsive.dart';
 
 class InvoiceListScreen extends ConsumerWidget {
   const InvoiceListScreen({super.key});
@@ -73,30 +74,32 @@ class InvoiceListScreen extends ConsumerWidget {
           }
           return RefreshIndicator(
             onRefresh: () async => ref.refresh(invoiceListProvider.future),
-            child: ListView.builder(
-              padding: const EdgeInsets.all(16),
-              itemCount: items.length,
-              itemBuilder: (_, index) {
-                final invoice = items[index];
-                return Card(
-                  child: ListTile(
-                    title: Text(invoice.vendorName ?? invoice.fileName),
-                    subtitle: Text(
-                      '${invoice.ingestionSource == 'EMAIL_FORWARD' ? 'Email' : 'Manual Upload'} • ${_date(invoice.invoiceDate ?? invoice.createdAt)}\n'
-                      '${invoice.total == null ? 'Total not entered' : formatCurrency(invoice.total!)}',
-                    ),
-                    isThreeLine: true,
-                    trailing: Chip(label: Text(_status(invoice.status))),
-                    onTap: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) =>
-                            InvoiceDetailScreen(invoiceId: invoice.id),
+            child: ResponsiveContent(
+              child: ListView.builder(
+                padding: const EdgeInsets.all(16),
+                itemCount: items.length,
+                itemBuilder: (_, index) {
+                  final invoice = items[index];
+                  return Card(
+                    child: ListTile(
+                      title: Text(invoice.vendorName ?? invoice.fileName),
+                      subtitle: Text(
+                        '${invoice.ingestionSource == 'EMAIL_FORWARD' ? 'Email' : 'Manual Upload'} • ${_date(invoice.invoiceDate ?? invoice.createdAt)}\n'
+                        '${invoice.total == null ? 'Total not entered' : formatCurrency(invoice.total!)}',
+                      ),
+                      isThreeLine: true,
+                      trailing: Chip(label: Text(_status(invoice.status))),
+                      onTap: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) =>
+                              InvoiceDetailScreen(invoiceId: invoice.id),
+                        ),
                       ),
                     ),
-                  ),
-                );
-              },
+                  );
+                },
+              ),
             ),
           );
         },
@@ -795,7 +798,7 @@ class InvoiceReviewScreen extends ConsumerWidget {
                                 if (item.packSize != null)
                                   'Pack: ${item.packSize}',
                                 if (item.totalPackageQuantity != null)
-                                  'Package total: ${item.totalPackageQuantity} ${item.measurementUnit ?? ''}',
+                                  'Package total: ${item.totalPackageQuantity!.toStringAsFixed(1)} ${item.measurementUnit ?? ''}',
                                 'Unit price: ${item.unitPrice == null ? 'Missing' : formatCurrency(item.unitPrice!)}',
                                 'Extended: ${item.extendedPrice == null ? 'Missing' : formatCurrency(item.extendedPrice!)}',
                                 'Confidence: ${item.lowConfidence
