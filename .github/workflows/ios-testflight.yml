@@ -92,7 +92,9 @@ jobs:
         run: bundle install --jobs 4 --retry 3
       - name: Verify internal-only TestFlight configuration
         working-directory: apps/mobile
-        run: ruby scripts/verify_testflight_internal_lane.rb
+        run: |
+          ruby scripts/verify_testflight_internal_lane.rb
+          ruby scripts/verify_shared_test_token_release.rb
       - name: Verify CocoaPods from Bundler
         working-directory: apps/mobile
         run: |
@@ -108,4 +110,5 @@ jobs:
           APP_STORE_CONNECT_API_KEY_P8: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8_BASE64 }}
           IOS_MARKETING_VERSION: ${{ inputs.marketing_version || '1.0.0' }}
           TESTFLIGHT_CHANGELOG: ${{ inputs.changelog || 'Automated internal TestFlight build.' }}
+          SHARED_TEST_CLIENT_TOKEN: ${{ secrets.SHARED_TEST_CLIENT_TOKEN }}
         run: bundle exec fastlane ios testflight_internal

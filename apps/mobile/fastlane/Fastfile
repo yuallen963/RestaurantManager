@@ -2,6 +2,8 @@ require "plist"
 require "tempfile"
 require "open3"
 require "rbconfig"
+require "json"
+require "shellwords"
 
 default_platform(:ios)
 
@@ -32,6 +34,10 @@ platform :ios do
 
     profile_name = ENV.fetch("IOS_PROVISIONING_PROFILE_NAME")
     profile_uuid = ENV.fetch("IOS_PROVISIONING_PROFILE_UUID")
+    shared_test_client_token = ENV.fetch("SHARED_TEST_CLIENT_TOKEN")
+    if shared_test_client_token.bytesize < 32 || shared_test_client_token.match?(/\s/)
+      UI.user_error!("SHARED_TEST_CLIENT_TOKEN must be a non-whitespace secret of at least 32 bytes")
+    end
     update_code_signing_settings(
       use_automatic_signing: false,
       path: File.join(mobile_root, "ios/Runner.xcodeproj"),
@@ -57,17 +63,26 @@ platform :ios do
       }))
       export_options.flush
 
-      Dir.chdir(mobile_root) do
-        sh("flutter pub get")
-        analysis_paths = %w[lib test]
-        analysis_paths << "integration_test" if Dir.exist?("integration_test")
-        sh("flutter analyze #{analysis_paths.join(' ')}")
-        sh("flutter test")
-        sh("flutter build ipa --release " \
-           "--build-name=#{version} --build-number=#{build_number} " \
-           "--export-options-plist=#{export_options.path} " \
-           "--dart-define=API_BASE_URL=https://restaurantmanager-production-6231.up.railway.app/api/v1 " \
-           "--dart-define=SHARED_TEST_USER_MODE=true")
+      Tempfile.create(["FundWellNativeBuildConfig", ".json"]) do |build_config|
+        build_config.chmod(0o600)
+        build_config.write(JSON.generate({
+          "API_BASE_URL" => "https://restaurantmanager-production-6231.up.railway.app/api/v1",
+          "SHARED_TEST_USER_MODE" => true,
+          "SHARED_TEST_CLIENT_TOKEN" => shared_test_client_token,
+        }))
+        build_config.flush
+
+        Dir.chdir(mobile_root) do
+          sh("flutter pub get")
+          analysis_paths = %w[lib test]
+          analysis_paths << "integration_test" if Dir.exist?("integration_test")
+          sh("flutter analyze #{analysis_paths.join(' ')}")
+          sh("flutter test")
+          sh("flutter build ipa --release " \
+             "--build-name=#{version} --build-number=#{build_number} " \
+             "--export-options-plist=#{Shellwords.escape(export_options.path)} " \
+             "--dart-define-from-file=#{Shellwords.escape(build_config.path)}")
+        end
       end
     end
 
