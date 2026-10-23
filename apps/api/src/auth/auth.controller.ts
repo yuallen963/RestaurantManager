@@ -55,6 +55,7 @@ export class AuthController {
   }
 
   @Post('register') register(@Req() req: any, @Body() dto: RegisterDto) { this.limit(req, 'register', dto.email, 5); return this.auth.register(dto); }
+  @HttpCode(200) @Post('invitation-preview') invitationPreview(@Req() req: any, @Body() dto: TokenDto) { this.limit(req, 'invitation-preview', '', 20); return this.auth.invitationPreview(dto.token); }
   @HttpCode(200) @Post('verify-email') verify(@Req() req: any, @Body() dto: TokenDto) { this.limit(req, 'verify'); return this.auth.verifyEmail(dto.token); }
   @HttpCode(200) @Post('resend-verification') resend(@Req() req: any, @Body() dto: EmailDto) { this.limit(req, 'resend', dto.email, 3); return this.auth.resendVerification(dto.email); }
   @HttpCode(200) @Post('login') login(@Req() req: any, @Res({ passthrough: true }) res: any, @Body() dto: LoginDto) { this.limit(req, 'login', dto.email); return this.webSession(req, res, this.auth.login(dto.email, dto.password, dto)); }

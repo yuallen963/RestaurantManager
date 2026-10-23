@@ -27,6 +27,9 @@ import 'features/auth/api_client_config_native.dart'
 import 'features/auth/shared_test_config_native.dart'
     if (dart.library.html) 'features/auth/shared_test_config_web.dart'
     as shared_test_config;
+import 'features/auth/web_url_strategy_stub.dart'
+    if (dart.library.html) 'features/auth/web_url_strategy_web.dart'
+    as web_url_strategy;
 import 'features/banking/plaid_link/plaid_link.dart';
 import 'features/responsive.dart';
 
@@ -56,6 +59,7 @@ Dio createApiClient({Dio? refreshClient, VoidCallback? onSessionExpired}) {
 
 const _publicAuthPaths = {
   '/auth/register',
+  '/auth/invitation-preview',
   '/auth/verify-email',
   '/auth/resend-verification',
   '/auth/login',
@@ -151,6 +155,7 @@ final api = Provider(
 );
 void main() {
   if (kDebugMode) debugPrint('[DEV] API base URL: $apiBaseUrl');
+  web_url_strategy.configureWebUrlStrategy();
   runApp(const ProviderScope(child: ProfitApp()));
 }
 
@@ -236,10 +241,8 @@ class _ProfitAppState extends ConsumerState<ProfitApp> {
       ),
       GoRoute(
         path: '/register',
-        builder: (_, state) => AuthScreen(
-          initialCreatingAccount: true,
+        builder: (_, state) => InvitationRegistrationScreen(
           invitationToken: state.uri.queryParameters['invite'],
-          initialEmail: state.uri.queryParameters['email'],
         ),
       ),
       GoRoute(

@@ -21,6 +21,209 @@ import '../../main.dart'
 import '../onboarding/foundation.dart';
 import '../onboarding/onboarding_screen.dart';
 
+class InvitationRegistrationScreen extends ConsumerStatefulWidget {
+  const InvitationRegistrationScreen({super.key, this.invitationToken});
+
+  final String? invitationToken;
+
+  @override
+  ConsumerState<InvitationRegistrationScreen> createState() =>
+      _InvitationRegistrationScreenState();
+}
+
+class _InvitationRegistrationScreenState
+    extends ConsumerState<InvitationRegistrationScreen> {
+  final password = TextEditingController();
+  final confirmation = TextEditingController();
+  bool loading = true;
+  bool submitting = false;
+  String? email;
+  String? organizationName;
+  String? role;
+  String? error;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadInvitation();
+  }
+
+  @override
+  void dispose() {
+    password.dispose();
+    confirmation.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadInvitation() async {
+    final token = widget.invitationToken?.trim();
+    if (token == null || token.isEmpty) {
+      setState(() {
+        loading = false;
+        error = 'This invitation link is incomplete or invalid.';
+      });
+      return;
+    }
+    try {
+      final response = await ref
+          .read(api)
+          .post('/auth/invitation-preview', data: {'token': token});
+      final data = Map<String, dynamic>.from(response.data as Map);
+      if (!mounted) return;
+      setState(() {
+        email = data['email'] as String?;
+        organizationName = data['organizationName'] as String?;
+        role = data['role'] as String?;
+        loading = false;
+        if (email == null || organizationName == null) {
+          error = 'This invitation is not configured correctly.';
+        }
+      });
+    } on DioException {
+      if (!mounted) return;
+      setState(() {
+        loading = false;
+        error = 'This invitation is invalid, expired, or already used.';
+      });
+    }
+  }
+
+  Future<void> _register() async {
+    final token = widget.invitationToken?.trim();
+    if (token == null || email == null) return;
+    if (password.text.length < 12) {
+      setState(() => error = 'Use a password with at least 12 characters.');
+      return;
+    }
+    if (password.text != confirmation.text) {
+      setState(() => error = 'The passwords do not match.');
+      return;
+    }
+    setState(() {
+      submitting = true;
+      error = null;
+    });
+    try {
+      final response = await ref
+          .read(api)
+          .post(
+            '/auth/register',
+            data: {
+              'email': email,
+              'password': password.text,
+              'invitationToken': token,
+            },
+          );
+      final data = Map<String, dynamic>.from(response.data as Map);
+      if (!mounted) return;
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(
+          builder: (_) => CheckEmailScreen(
+            email: data['email'] as String,
+            developmentToken: data['developmentVerificationToken'] as String?,
+          ),
+        ),
+      );
+    } on DioException catch (exception) {
+      if (!mounted) return;
+      final message = exception.response?.data is Map
+          ? (exception.response?.data as Map)['message']
+          : null;
+      setState(() {
+        error = message is String && message.isNotEmpty
+            ? message
+            : 'Unable to create the account. Request a new invitation if this link has expired.';
+      });
+    } finally {
+      if (mounted) setState(() => submitting = false);
+    }
+  }
+
+  String get _roleLabel => role == 'ADMIN' ? 'Administrator' : 'Member';
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(title: const Text('Accept invitation')),
+    body: Center(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(24),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 440),
+          child: loading
+              ? const Center(child: CircularProgressIndicator())
+              : error != null && email == null
+              ? Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.link_off_outlined, size: 56),
+                    const SizedBox(height: 16),
+                    Text(error!, textAlign: TextAlign.center),
+                    TextButton(
+                      onPressed: () => context.go('/login'),
+                      child: const Text('Return to login'),
+                    ),
+                  ],
+                )
+              : Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(
+                      'Join $organizationName',
+                      key: const Key('invitation-organization'),
+                      style: Theme.of(context).textTheme.headlineSmall,
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      email!,
+                      key: const Key('invitation-email'),
+                      textAlign: TextAlign.center,
+                    ),
+                    Text(
+                      _roleLabel,
+                      key: const Key('invitation-role'),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 20),
+                    TextField(
+                      key: const Key('invitation-password'),
+                      controller: password,
+                      obscureText: true,
+                      decoration: const InputDecoration(
+                        labelText: 'Create password',
+                      ),
+                    ),
+                    TextField(
+                      key: const Key('invitation-password-confirmation'),
+                      controller: confirmation,
+                      obscureText: true,
+                      decoration: const InputDecoration(
+                        labelText: 'Confirm password',
+                      ),
+                    ),
+                    if (error != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 12),
+                        child: Text(error!, textAlign: TextAlign.center),
+                      ),
+                    const SizedBox(height: 20),
+                    FilledButton(
+                      key: const Key('accept-invitation'),
+                      onPressed: submitting ? null : _register,
+                      child: Text(
+                        submitting ? 'Creating account…' : 'Create account',
+                      ),
+                    ),
+                  ],
+                ),
+        ),
+      ),
+    ),
+  );
+}
+
 class LoginChallengeScreen extends ConsumerStatefulWidget {
   const LoginChallengeScreen({
     super.key,

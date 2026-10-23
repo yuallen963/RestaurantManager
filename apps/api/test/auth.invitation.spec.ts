@@ -35,17 +35,56 @@ const setup = (record: any, claimCount = 1) => {
     onboardingState: { create: jest.fn() },
     emailVerificationToken: { create: jest.fn() },
   };
-  const prisma: any = { $transaction: jest.fn((callback) => callback(tx)) };
+  const prisma: any = {
+    betaInvitation: { findUnique: jest.fn() },
+    $transaction: jest.fn((callback) => callback(tx)),
+  };
   const email: any = {
     developmentMode: false,
     assertConfigured: jest.fn(),
     sendVerification: jest.fn(),
   };
   const audit: any = { log: jest.fn() };
-  return { service: new AuthService(prisma, {} as any, email, audit), tx, email };
+  return { service: new AuthService(prisma, {} as any, email, audit), prisma, tx, email };
 };
 
 describe('invitation-only registration', () => {
+  it('previews an active invitation without exposing its token', async () => {
+    const { service, prisma } = setup(invitation());
+    prisma.betaInvitation.findUnique.mockResolvedValue(invitation({
+      type: BetaInvitationType.JOIN_ORGANIZATION,
+      organizationId: 'invited-organization',
+      organizationName: null,
+      role: OrganizationRole.ADMIN,
+      organization: { name: 'Private Account', archivedAt: null },
+    }));
+
+    await expect(service.invitationPreview(rawToken)).resolves.toEqual({
+      email: 'owner@example.com',
+      organizationName: 'Private Account',
+      role: OrganizationRole.ADMIN,
+      expiresAt: expect.any(Date),
+    });
+    expect(prisma.betaInvitation.findUnique).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { tokenHash: expect.stringMatching(/^[a-f0-9]{64}$/) },
+      }),
+    );
+  });
+
+  it.each([
+    null,
+    invitation({ expiresAt: new Date(0) }),
+    invitation({ revokedAt: new Date() }),
+    invitation({ redeemedAt: new Date() }),
+  ])('rejects an unavailable invitation preview', async (record) => {
+    const { service, prisma } = setup(invitation());
+    prisma.betaInvitation.findUnique.mockResolvedValue(record);
+    await expect(service.invitationPreview(rawToken)).rejects.toBeInstanceOf(
+      UnauthorizedException,
+    );
+  });
+
   it('rejects registration without a matching invitation', async () => {
     const { service } = setup(null);
     await expect(service.register({ email: 'owner@example.com', password, invitationToken: rawToken }))
@@ -86,6 +125,20 @@ describe('invitation-only registration', () => {
     const { service } = setup(invitation(), 0);
     await expect(service.register({ email: 'owner@example.com', password, invitationToken: rawToken }))
       .rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it('does not create another user or membership for an existing email', async () => {
+    const { service, tx } = setup(invitation());
+    tx.user.findUnique.mockResolvedValue({ id: 'existing-user' });
+    await expect(
+      service.register({
+        email: 'owner@example.com',
+        password,
+        invitationToken: rawToken,
+      }),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(tx.user.create).not.toHaveBeenCalled();
+    expect(tx.organizationMember.create).not.toHaveBeenCalled();
   });
 
   it('joins only the organization stored on the invitation', async () => {

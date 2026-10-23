@@ -18,6 +18,41 @@ const genericVerificationMessage = 'If this account needs verification, a new em
 export class AuthService {
   constructor(private readonly prisma: PrismaService, private readonly jwt: JwtService, private readonly email: AuthEmailService, private readonly audit: AuditService, private readonly security?: AuthSecurityService) {}
 
+  async invitationPreview(rawToken: string) {
+    const invitation = await this.prisma.betaInvitation.findUnique({
+      where: { tokenHash: tokenHash(rawToken) },
+      select: {
+        email: true,
+        type: true,
+        organizationName: true,
+        organization: { select: { name: true, archivedAt: true } },
+        role: true,
+        expiresAt: true,
+        revokedAt: true,
+        redeemedAt: true,
+      },
+    });
+    const unavailable =
+      !invitation ||
+      invitation.revokedAt != null ||
+      invitation.redeemedAt != null ||
+      invitation.expiresAt <= new Date() ||
+      (invitation.type === BetaInvitationType.JOIN_ORGANIZATION &&
+        (!invitation.organization || invitation.organization.archivedAt != null));
+    if (unavailable) {
+      throw new UnauthorizedException('Invitation is invalid or unavailable');
+    }
+    return {
+      email: invitation.email,
+      organizationName:
+        invitation.type === BetaInvitationType.JOIN_ORGANIZATION
+          ? invitation.organization!.name
+          : invitation.organizationName,
+      role: invitation.role,
+      expiresAt: invitation.expiresAt,
+    };
+  }
+
   async register(dto: RegisterDto) {
     this.email.assertConfigured();
     const email = normalizeEmail(dto.email);
