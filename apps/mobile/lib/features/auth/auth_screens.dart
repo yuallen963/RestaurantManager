@@ -14,6 +14,8 @@ import '../../main.dart'
         pendingAuthChallengeKey,
         pendingAuthChallengeMethodKey,
         pendingAuthChallengeModeKey,
+        pendingAuthReturnPathKey,
+        safeWebReturnPath,
         sessionModeStorageKey,
         storage;
 import '../onboarding/foundation.dart';
@@ -25,10 +27,12 @@ class LoginChallengeScreen extends ConsumerStatefulWidget {
     required this.challengeId,
     required this.method,
     this.accountMode = AccountSessionMode.standard,
+    this.returnTo,
   });
   final String challengeId;
   final String method;
   final AccountSessionMode accountMode;
+  final String? returnTo;
   @override
   ConsumerState<LoginChallengeScreen> createState() =>
       _LoginChallengeScreenState();
@@ -61,6 +65,7 @@ class _LoginChallengeScreenState extends ConsumerState<LoginChallengeScreen> {
       await storage.delete(key: pendingAuthChallengeKey);
       await storage.delete(key: pendingAuthChallengeMethodKey);
       await storage.delete(key: pendingAuthChallengeModeKey);
+      await storage.delete(key: pendingAuthReturnPathKey);
       await storage.write(
         key: sessionModeStorageKey,
         value: widget.accountMode.name,
@@ -71,7 +76,7 @@ class _LoginChallengeScreenState extends ConsumerState<LoginChallengeScreen> {
       final onboarding = await ref.read(onboardingRepositoryProvider).get();
       if (mounted) {
         if (kIsWeb) {
-          context.go('/');
+          context.go(safeWebReturnPath(widget.returnTo) ?? '/');
         } else {
           Navigator.pushAndRemoveUntil(
             context,
@@ -161,6 +166,7 @@ class _LoginChallengeScreenState extends ConsumerState<LoginChallengeScreen> {
                   await storage.delete(key: pendingAuthChallengeKey);
                   await storage.delete(key: pendingAuthChallengeMethodKey);
                   await storage.delete(key: pendingAuthChallengeModeKey);
+                  await storage.delete(key: pendingAuthReturnPathKey);
                   if (!context.mounted) return;
                   if (kIsWeb) {
                     context.go(

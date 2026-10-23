@@ -15,6 +15,16 @@ void main() {
     expect(sharedTestModeAllowed(requested: true, isWeb: false), isTrue);
   });
 
+  test('OAuth login return paths remain local to the PWA', () {
+    expect(
+      safeWebReturnPath('/plaid/oauth?oauth_state_id=state-a'),
+      '/plaid/oauth?oauth_state_id=state-a',
+    );
+    expect(safeWebReturnPath('https://evil.example/steal'), isNull);
+    expect(safeWebReturnPath('//evil.example/steal'), isNull);
+    expect(safeWebReturnPath('javascript:alert(1)'), isNull);
+  });
+
   test(
     'browser access and refresh tokens are not persisted in web storage',
     () async {

@@ -164,6 +164,19 @@ const sharedTestUserModeRequested = bool.fromEnvironment(
 String get sharedTestClientToken => shared_test_config.sharedTestClientToken;
 bool sharedTestModeAllowed({required bool requested, required bool isWeb}) =>
     requested && !isWeb;
+
+String? safeWebReturnPath(String? candidate) {
+  if (candidate == null || candidate.isEmpty) return null;
+  final uri = Uri.tryParse(candidate);
+  if (uri == null ||
+      uri.hasScheme ||
+      uri.hasAuthority ||
+      !uri.path.startsWith('/')) {
+    return null;
+  }
+  return uri.toString();
+}
+
 final sharedTestUserModeProvider = Provider<bool>(
   (_) => sharedTestModeAllowed(
     requested: sharedTestUserModeRequested,
@@ -177,6 +190,7 @@ const sessionModeStorageKey = 'accountSessionMode';
 const pendingAuthChallengeKey = 'pendingAuthChallenge';
 const pendingAuthChallengeMethodKey = 'pendingAuthChallengeMethod';
 const pendingAuthChallengeModeKey = 'pendingAuthChallengeMode';
+const pendingAuthReturnPathKey = 'pendingAuthReturnPath';
 const authDeviceIdKey = 'authDeviceId';
 
 Future<String> authDeviceId() async {
@@ -214,7 +228,12 @@ class _ProfitAppState extends ConsumerState<ProfitApp> {
         path: '/',
         builder: (_, _) => AuthBootstrap(onReady: links.ready),
       ),
-      GoRoute(path: '/login', builder: (_, _) => const AuthScreen()),
+      GoRoute(
+        path: '/login',
+        builder: (_, state) => AuthScreen(
+          returnTo: safeWebReturnPath(state.uri.queryParameters['returnTo']),
+        ),
+      ),
       GoRoute(
         path: '/register',
         builder: (_, state) => AuthScreen(
@@ -238,6 +257,11 @@ class _ProfitAppState extends ConsumerState<ProfitApp> {
         builder: (_, state) => ResetPasswordScreen(
           initialToken: state.uri.queryParameters['token'],
         ),
+      ),
+      GoRoute(
+        path: '/plaid/oauth',
+        builder: (_, _) =>
+            AuthBootstrap(onReady: links.ready, openBankAccountsOnReady: true),
       ),
     ],
   );
@@ -289,8 +313,13 @@ class _ProfitAppState extends ConsumerState<ProfitApp> {
 }
 
 class AuthBootstrap extends ConsumerStatefulWidget {
-  const AuthBootstrap({super.key, this.onReady});
+  const AuthBootstrap({
+    super.key,
+    this.onReady,
+    this.openBankAccountsOnReady = false,
+  });
   final VoidCallback? onReady;
+  final bool openBankAccountsOnReady;
   @override
   ConsumerState<AuthBootstrap> createState() => _AuthBootstrapState();
 }
@@ -325,6 +354,9 @@ class _AuthBootstrapState extends ConsumerState<AuthBootstrap> {
                 AccountSessionMode.private.name
             ? AccountSessionMode.private
             : AccountSessionMode.standard;
+        final returnTo = safeWebReturnPath(
+          await storage.read(key: pendingAuthReturnPathKey),
+        );
         if (mounted) {
           Navigator.of(context).pushReplacement(
             MaterialPageRoute(
@@ -332,6 +364,7 @@ class _AuthBootstrapState extends ConsumerState<AuthBootstrap> {
                 challengeId: pendingChallenge,
                 method: method,
                 accountMode: pendingMode,
+                returnTo: returnTo,
               ),
             ),
           );
@@ -472,7 +505,16 @@ class _AuthBootstrapState extends ConsumerState<AuthBootstrap> {
 
   void _showLogin() {
     if (kIsWeb) {
-      context.go('/login');
+      final returnTo = safeWebReturnPath(
+        Uri.base.path == '/plaid/oauth'
+            ? Uri.base.toString().replaceFirst(Uri.base.origin, '')
+            : null,
+      );
+      context.go(
+        returnTo == null
+            ? '/login'
+            : '/login?returnTo=${Uri.encodeQueryComponent(returnTo)}',
+      );
     } else {
       Navigator.of(
         context,
@@ -493,6 +535,13 @@ class _AuthBootstrapState extends ConsumerState<AuthBootstrap> {
           builder: (_) => completed ? const Home() : const Onboarding(),
         ),
       );
+      if (completed && widget.openBankAccountsOnReady) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          navigator.push(
+            MaterialPageRoute(builder: (_) => const BankAccountsScreen()),
+          );
+        });
+      }
       widget.onReady?.call();
       return;
     }
@@ -559,10 +608,12 @@ class AuthScreen extends ConsumerStatefulWidget {
     this.initialCreatingAccount = false,
     this.invitationToken,
     this.initialEmail,
+    this.returnTo,
   });
   final bool initialCreatingAccount;
   final String? invitationToken;
   final String? initialEmail;
+  final String? returnTo;
   @override
   ConsumerState<AuthScreen> createState() => _AuthScreenState();
 }
@@ -631,6 +682,12 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
           key: pendingAuthChallengeModeKey,
           value: AccountSessionMode.standard.name,
         );
+        final returnTo = safeWebReturnPath(widget.returnTo);
+        if (returnTo == null) {
+          await storage.delete(key: pendingAuthReturnPathKey);
+        } else {
+          await storage.write(key: pendingAuthReturnPathKey, value: returnTo);
+        }
         if (mounted) {
           if (kIsWeb) {
             context.go('/');
@@ -661,7 +718,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
       final onboarding = await ref.read(onboardingRepositoryProvider).get();
       if (mounted) {
         if (kIsWeb) {
-          context.go('/');
+          context.go(safeWebReturnPath(widget.returnTo) ?? '/');
         } else {
           Navigator.pushReplacement(
             context,
