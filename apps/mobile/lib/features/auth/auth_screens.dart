@@ -40,6 +40,7 @@ class _InvitationRegistrationScreenState
   String? email;
   String? organizationName;
   String? role;
+  String? invitationType;
   String? error;
 
   @override
@@ -74,6 +75,7 @@ class _InvitationRegistrationScreenState
         email = data['email'] as String?;
         organizationName = data['organizationName'] as String?;
         role = data['role'] as String?;
+        invitationType = data['type'] as String?;
         loading = false;
         if (email == null || organizationName == null) {
           error = 'This invitation is not configured correctly.';
@@ -140,7 +142,13 @@ class _InvitationRegistrationScreenState
     }
   }
 
-  String get _roleLabel => role == 'ADMIN' ? 'Administrator' : 'Member';
+  bool get _createsOrganization => invitationType == 'NEW_ORGANIZATION';
+
+  String get _roleLabel => switch (role) {
+    'OWNER' => 'Restaurant owner',
+    'ADMIN' => 'Administrator',
+    _ => 'Member',
+  };
 
   @override
   Widget build(BuildContext context) => Scaffold(
@@ -170,7 +178,9 @@ class _InvitationRegistrationScreenState
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     Text(
-                      'Join $organizationName',
+                      _createsOrganization
+                          ? 'Set up $organizationName'
+                          : 'Join $organizationName',
                       key: const Key('invitation-organization'),
                       style: Theme.of(context).textTheme.headlineSmall,
                       textAlign: TextAlign.center,

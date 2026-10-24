@@ -61,6 +61,7 @@ describe('invitation-only registration', () => {
 
     await expect(service.invitationPreview(rawToken)).resolves.toEqual({
       email: 'owner@example.com',
+      type: BetaInvitationType.JOIN_ORGANIZATION,
       organizationName: 'Private Account',
       role: OrganizationRole.ADMIN,
       expiresAt: expect.any(Date),
@@ -70,6 +71,21 @@ describe('invitation-only registration', () => {
         where: { tokenHash: expect.stringMatching(/^[a-f0-9]{64}$/) },
       }),
     );
+  });
+
+  it('identifies a new-organization invitation for owner onboarding', async () => {
+    const { service, prisma } = setup(invitation());
+    prisma.betaInvitation.findUnique.mockResolvedValue(invitation({
+      organization: null,
+    }));
+
+    await expect(service.invitationPreview(rawToken)).resolves.toEqual({
+      email: 'owner@example.com',
+      type: BetaInvitationType.NEW_ORGANIZATION,
+      organizationName: 'Owner Restaurant',
+      role: OrganizationRole.OWNER,
+      expiresAt: expect.any(Date),
+    });
   });
 
   it.each([

@@ -9,6 +9,11 @@ const includeSetup = {
   restaurantLocation: { select: { id: true, name: true, timezone: true } },
 } satisfies Prisma.OnboardingStateInclude;
 
+const setupManagers: OrganizationRole[] = [
+  OrganizationRole.OWNER,
+  OrganizationRole.ADMIN,
+];
+
 @Injectable()
 export class OnboardingService {
   constructor(private readonly prisma: PrismaService) {}
@@ -45,6 +50,9 @@ export class OnboardingService {
       if (organizationId) {
         const member = await tx.organizationMember.findUnique({ where: { userId_organizationId: { userId, organizationId } } });
         if (!member) throw new ForbiddenException('Onboarding organization is not accessible');
+        if (!setupManagers.includes(member.role)) {
+          throw new ForbiddenException('Only organization owners and administrators can set up a restaurant');
+        }
         await tx.organization.update({ where: { id: organizationId }, data: { name: dto.organizationName } });
       } else {
         const organization = await tx.organization.create({

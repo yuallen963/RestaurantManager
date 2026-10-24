@@ -34,12 +34,28 @@ describe('OnboardingService', () => {
     const resumed = { ...pending, organizationId: 'org-1', restaurantLocationId: 'loc-1', currentStep: 3 };
     const tx: any = {
       onboardingState: { upsert: jest.fn().mockResolvedValue(resumed), update: jest.fn().mockResolvedValue(resumed), findUniqueOrThrow: jest.fn().mockResolvedValue(resumed) },
-      organizationMember: { findUnique: jest.fn().mockResolvedValue({ id: 'member-1' }) },
+      organizationMember: { findUnique: jest.fn().mockResolvedValue({ id: 'member-1', role: 'OWNER' }) },
       organization: { create: jest.fn(), update: jest.fn().mockResolvedValue({ id: 'org-1' }) },
       restaurantLocation: { create: jest.fn(), findFirst: jest.fn().mockResolvedValue({ id: 'loc-1' }), update: jest.fn().mockResolvedValue({ id: 'loc-1' }) },
     };
     await new OnboardingService({ $transaction: (callback: (client: any) => unknown) => callback(tx) } as any).setup('user-1', { organizationName: 'A Group', locationName: 'A Grill', timezone: 'America/Detroit' });
     expect(tx.organization.create).not.toHaveBeenCalled();
+    expect(tx.restaurantLocation.create).not.toHaveBeenCalled();
+  });
+
+  it('prevents a viewer from changing organization or location setup', async () => {
+    const resumed = { ...pending, organizationId: 'org-1' };
+    const tx: any = {
+      onboardingState: { upsert: jest.fn().mockResolvedValue(resumed) },
+      organizationMember: { findUnique: jest.fn().mockResolvedValue({ id: 'member-1', role: 'VIEWER' }) },
+      organization: { update: jest.fn() },
+      restaurantLocation: { create: jest.fn() },
+    };
+    await expect(
+      new OnboardingService({ $transaction: (callback: (client: any) => unknown) => callback(tx) } as any)
+        .setup('user-1', { organizationName: 'Renamed Group', locationName: 'New Location', timezone: 'America/Detroit' }),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(tx.organization.update).not.toHaveBeenCalled();
     expect(tx.restaurantLocation.create).not.toHaveBeenCalled();
   });
 

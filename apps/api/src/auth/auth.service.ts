@@ -44,6 +44,7 @@ export class AuthService {
     }
     return {
       email: invitation.email,
+      type: invitation.type,
       organizationName:
         invitation.type === BetaInvitationType.JOIN_ORGANIZATION
           ? invitation.organization!.name

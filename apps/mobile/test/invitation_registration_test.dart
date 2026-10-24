@@ -23,6 +23,7 @@ void main() {
                   statusCode: 200,
                   data: {
                     'email': 'owner@example.com',
+                    'type': 'JOIN_ORGANIZATION',
                     'organizationName': 'Private Account',
                     'role': 'ADMIN',
                     'expiresAt': '2030-01-01T00:00:00.000Z',
@@ -93,6 +94,47 @@ void main() {
       '/auth/invitation-preview',
       '/auth/register',
     ]);
+  });
+
+  testWidgets('new restaurant invitation explains owner setup accurately', (
+    tester,
+  ) async {
+    final dio = Dio()
+      ..interceptors.add(
+        InterceptorsWrapper(
+          onRequest: (options, handler) {
+            handler.resolve(
+              Response(
+                requestOptions: options,
+                statusCode: 200,
+                data: {
+                  'email': 'new-owner@example.com',
+                  'type': 'NEW_ORGANIZATION',
+                  'organizationName': 'New Restaurant Group',
+                  'role': 'OWNER',
+                  'expiresAt': '2030-01-01T00:00:00.000Z',
+                },
+              ),
+            );
+          },
+        ),
+      );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [api.overrideWithValue(dio)],
+        child: const MaterialApp(
+          home: InvitationRegistrationScreen(
+            invitationToken: 'synthetic-new-organization-token',
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Set up New Restaurant Group'), findsOneWidget);
+    expect(find.text('Restaurant owner'), findsOneWidget);
+    expect(find.text('Join New Restaurant Group'), findsNothing);
   });
 
   testWidgets('missing invitation token fails without an API request', (
