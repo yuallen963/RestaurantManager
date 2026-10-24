@@ -215,8 +215,11 @@ String get authDeviceName => '${defaultTargetPlatform.name} FundWell app';
 final accountSessionModeProvider = StateProvider<AccountSessionMode>(
   (_) => AccountSessionMode.standard,
 );
-const _demoEmail = 'demo@profitlens.local';
-const _demoPassword = 'DemoProfit2026!';
+// Development-only credentials are supplied out-of-band when explicitly
+// running a local native build. Keeping them compile-time configurable avoids
+// embedding a shared account or password in release/web bundles.
+const _demoEmail = String.fromEnvironment('DEV_DEMO_EMAIL');
+const _demoPassword = String.fromEnvironment('DEV_DEMO_PASSWORD');
 
 class ProfitApp extends ConsumerStatefulWidget {
   const ProfitApp({super.key});
@@ -308,7 +311,7 @@ class _ProfitAppState extends ConsumerState<ProfitApp> {
     }
     return MaterialApp(
       navigatorKey: navigatorKey,
-      title: 'Profit Lens',
+      title: 'FundWell',
       theme: ThemeData(useMaterial3: true),
       home: AuthBootstrap(onReady: links.ready),
     );
@@ -773,7 +776,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
-                  'Profit Lens',
+                  'FundWell',
                   style: Theme.of(context).textTheme.displaySmall,
                 ),
                 TextField(
@@ -816,7 +819,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                   child: Text(
                     creatingAccount
                         ? 'Already have an account? Log in'
-                        : 'New to ProfitLens? Create account',
+                        : 'New to FundWell? Create account',
                   ),
                 ),
                 if (!creatingAccount)
@@ -927,7 +930,7 @@ class _HomeState extends ConsumerState<Home> {
       onDestinationSelected: (value) => setState(() => index = value),
       destinations: destinations,
       body: pages[index],
-      applicationName: kIsWeb ? 'FundWell' : 'Profit Lens',
+      applicationName: 'FundWell',
       desktopHeader: location == null
           ? null
           : DropdownButtonFormField<String>(

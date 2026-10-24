@@ -22,7 +22,7 @@ const lakeside = RestaurantLocation(
 );
 final connection = BankConnectionData(
   id: 'connection',
-  institutionName: 'Profit Lens Sandbox Bank',
+  institutionName: 'FundWell Sandbox Bank',
   status: 'CONNECTED',
   lastSyncAt: DateTime(2026, 10, 8),
   accounts: const [
@@ -372,7 +372,7 @@ void main() {
       expect(find.text('Loading bank accounts...'), findsOneWidget);
       pending.complete([connection]);
       await tester.pumpAndSettle();
-      expect(find.text('Profit Lens Sandbox Bank'), findsOneWidget);
+      expect(find.text('FundWell Sandbox Bank'), findsOneWidget);
       expect(find.textContaining('•••• 4242'), findsOneWidget);
       expect(find.textContaining('Downtown Grill'), findsOneWidget);
       await tester.tap(find.text('Sync now'));

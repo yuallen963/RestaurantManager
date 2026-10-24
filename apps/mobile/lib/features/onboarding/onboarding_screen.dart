@@ -127,7 +127,7 @@ class _OnboardingState extends ConsumerState<Onboarding> {
                 onPressed: busy ? null : () => setState(() => step--),
               )
             : null,
-        title: const Text('Set up ProfitLens'),
+        title: const Text('Set up FundWell'),
       ),
       body: SafeArea(
         child: Column(
@@ -166,7 +166,7 @@ class _OnboardingState extends ConsumerState<Onboarding> {
   Widget _welcome() => Column(
     crossAxisAlignment: CrossAxisAlignment.stretch,
     children: [
-      Text('ProfitLens', style: Theme.of(context).textTheme.displaySmall),
+      Text('FundWell', style: Theme.of(context).textTheme.displaySmall),
       const SizedBox(height: 32),
       Text(
         'Find the costs quietly eating your restaurant’s margin.',
@@ -247,7 +247,7 @@ class _OnboardingState extends ConsumerState<Onboarding> {
     crossAxisAlignment: CrossAxisAlignment.stretch,
     children: [
       Text(
-        'How would you like ProfitLens to learn about your restaurant?',
+        'How would you like FundWell to learn about your restaurant?',
         style: Theme.of(context).textTheme.headlineSmall,
       ),
       const SizedBox(height: 16),
@@ -294,7 +294,7 @@ class _OnboardingState extends ConsumerState<Onboarding> {
       ),
       const SizedBox(height: 12),
       const Text(
-        '3–5 recent invoices gives ProfitLens enough history to start spotting price changes.',
+        '3–5 recent invoices gives FundWell enough history to start spotting price changes.',
       ),
       const SizedBox(height: 20),
       Consumer(

@@ -20,7 +20,7 @@ void main() {
   testWidgets('unauthenticated state renders the login form', (tester) async {
     await tester.pumpWidget(appWith(successfulDio()));
 
-    expect(find.text('Profit Lens'), findsOneWidget);
+    expect(find.text('FundWell'), findsOneWidget);
     expect(find.widgetWithText(TextField, 'Email'), findsOneWidget);
     expect(find.widgetWithText(FilledButton, 'Log in'), findsOneWidget);
   });

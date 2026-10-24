@@ -39,7 +39,7 @@ void main() {
         };
       });
       await tester.pumpWidget(app(dio));
-      await tester.tap(find.text('New to ProfitLens? Create account'));
+      await tester.tap(find.text('New to FundWell? Create account'));
       await tester.enterText(
         find.widgetWithText(TextField, 'Email'),
         ' Owner@Example.com ',
@@ -81,7 +81,7 @@ void main() {
     tester,
   ) async {
     await tester.pumpWidget(app(errorDio(409)));
-    await tester.tap(find.text('New to ProfitLens? Create account'));
+    await tester.tap(find.text('New to FundWell? Create account'));
     await tester.pump();
     await tester.tap(find.widgetWithText(FilledButton, 'Create account'));
     await tester.pumpAndSettle();

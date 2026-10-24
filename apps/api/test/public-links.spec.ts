@@ -29,7 +29,7 @@ describe('Plaid public links', () => {
 
   it('serves a safe browser fallback without echoing request data', () => {
     const page = controller.plaidOAuthFallback();
-    expect(page).toContain('Open ProfitLens');
+    expect(page).toContain('Open FundWell');
     expect(page).not.toContain('token');
     expect(page).not.toContain('query');
   });

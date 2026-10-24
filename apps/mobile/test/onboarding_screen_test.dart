@@ -46,7 +46,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(
       find.text(
-        'How would you like ProfitLens to learn about your restaurant?',
+        'How would you like FundWell to learn about your restaurant?',
       ),
       findsOneWidget,
     );
