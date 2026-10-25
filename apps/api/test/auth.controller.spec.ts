@@ -37,6 +37,7 @@ describe('AuthController browser sessions', () => {
       }),
       logout: jest.fn().mockResolvedValue(undefined),
       sharedTestSession: jest.fn(),
+      publicDemoSession: jest.fn().mockResolvedValue({ accessToken: 'demo-access', tokenType: 'Bearer', accountMode: 'demo' }),
     };
     const limiter: any = { check: jest.fn() };
     const security: any = {};
@@ -91,6 +92,16 @@ describe('AuthController browser sessions', () => {
   it('never exposes the shared beta session endpoint to web clients', () => {
     const { controller } = setup();
     expect(() => controller.sharedTestSession(webRequest())).toThrow(NotFoundException);
+  });
+
+  it('exposes public demo access only to the approved web origin', async () => {
+    const { controller, auth } = setup();
+    await expect(controller.publicDemoSession(webRequest())).resolves.toEqual({
+      accessToken: 'demo-access', tokenType: 'Bearer', accountMode: 'demo',
+    });
+    expect(auth.publicDemoSession).toHaveBeenCalledTimes(1);
+    expect(() => controller.publicDemoSession({ ip: 'native', headers: {} })).toThrow(NotFoundException);
+    expect(() => controller.publicDemoSession(webRequest({ origin: 'https://attacker.example' }))).toThrow(ForbiddenException);
   });
 
   it('forwards the internal client token for native shared beta sessions', () => {

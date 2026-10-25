@@ -151,6 +151,10 @@ export class AuthService {
 
   async login(rawEmail: string, password: string, device: { deviceId?: string; deviceName?: string } = {}) {
     const email = normalizeEmail(rawEmail);
+    const publicDemoEmail = normalizeEmail(process.env.PUBLIC_DEMO_USER_EMAIL ?? 'demo@profitlens.local');
+    if (process.env.PUBLIC_DEMO_MODE === 'true' && email === publicDemoEmail) {
+      throw new UnauthorizedException('Use the public demo instead of signing in to this account');
+    }
     const user = await this.prisma.user.findUnique({ where: { email } });
     if (!user || user.deletedAt || user.disabledAt) throw new UnauthorizedException('Invalid email or password');
     if (!(await argon2.verify(user.passwordHash, password))) {
@@ -192,6 +196,35 @@ export class AuthService {
     });
     if (!user) throw new NotFoundException();
     return this.issueTokens(user.id, user.email);
+  }
+
+  async publicDemoSession() {
+    if (process.env.PUBLIC_DEMO_MODE !== 'true') throw new NotFoundException();
+    const email = normalizeEmail(process.env.PUBLIC_DEMO_USER_EMAIL ?? 'demo@profitlens.local');
+    const organizationId = process.env.PUBLIC_DEMO_ORGANIZATION_ID?.trim();
+    if (!organizationId) throw new NotFoundException();
+    const user = await this.prisma.user.findFirst({
+      where: {
+        email,
+        emailVerifiedAt: { not: null },
+        disabledAt: null,
+        deletedAt: null,
+        memberships: { some: { organizationId, organization: { archivedAt: null } } },
+      },
+      select: {
+        id: true,
+        email: true,
+        memberships: { select: { organizationId: true } },
+      },
+    });
+    if (!user || user.memberships.length !== 1 || user.memberships[0].organizationId !== organizationId) {
+      throw new NotFoundException();
+    }
+    const accessToken = await this.jwt.signAsync(
+      { sub: user.id, email: user.email, publicDemo: true },
+      { secret: process.env.JWT_ACCESS_SECRET, expiresIn: 900 },
+    );
+    return { accessToken, tokenType: 'Bearer', accountMode: 'demo' as const };
   }
 
   async privateSession(accessCode: string, device: { deviceId?: string; deviceName?: string } = {}) {
@@ -323,10 +356,10 @@ export class AuthService {
     return { deleted: true };
   }
 
-  async profile(userId: string) {
+  async profile(userId: string, publicDemo = false) {
     const user = await this.prisma.user.findFirstOrThrow({ where: { id: userId, disabledAt: null, deletedAt: null }, select: { id: true, email: true, firstName: true, lastName: true, emailVerifiedAt: true, createdAt: true } });
     const privateEmail = process.env.PRIVATE_BETA_USER_EMAIL?.trim().toLowerCase();
-    return { ...user, accountMode: privateEmail && user.email === privateEmail ? 'private' : 'standard' };
+    return { ...user, accountMode: publicDemo ? 'demo' : privateEmail && user.email === privateEmail ? 'private' : 'standard' };
   }
 
   private async createVerificationToken(userId: string) {

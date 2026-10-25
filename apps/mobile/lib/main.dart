@@ -66,6 +66,7 @@ const _publicAuthPaths = {
   '/auth/login-challenge',
   '/auth/login-challenge/resend',
   '/auth/shared-test-session',
+  '/auth/public-demo-session',
   '/auth/private-session',
   '/auth/forgot-password',
   '/auth/reset-password',
@@ -161,7 +162,9 @@ void main() {
 
 const devAutoLoginRequested = bool.fromEnvironment('ENABLE_DEV_AUTO_LOGIN');
 final demoModeProvider = Provider<bool>(
-  (_) => !kReleaseMode && devAutoLoginRequested,
+  (ref) =>
+      (!kReleaseMode && devAutoLoginRequested) ||
+      ref.watch(accountSessionModeProvider) == AccountSessionMode.demo,
 );
 const sharedTestUserModeRequested = bool.fromEnvironment(
   'SHARED_TEST_USER_MODE',
@@ -189,7 +192,7 @@ final sharedTestUserModeProvider = Provider<bool>(
   ),
 );
 
-enum AccountSessionMode { standard, private }
+enum AccountSessionMode { standard, demo, private }
 
 const sessionModeStorageKey = 'accountSessionMode';
 const pendingAuthChallengeKey = 'pendingAuthChallenge';
@@ -388,6 +391,12 @@ class _AuthBootstrapState extends ConsumerState<AuthBootstrap> {
       if (access != null) {
         client.options.headers['Authorization'] = 'Bearer $access';
         final profile = await client.get('/auth/me');
+        final profileMode = profile.data['accountMode'] == 'demo'
+            ? AccountSessionMode.demo
+            : profile.data['accountMode'] == 'private'
+            ? AccountSessionMode.private
+            : AccountSessionMode.standard;
+        ref.read(accountSessionModeProvider.notifier).state = profileMode;
         if (privateSession && profile.data['accountMode'] != 'private') {
           throw StateError('Stored private session identity is invalid');
         }
@@ -486,6 +495,13 @@ class _AuthBootstrapState extends ConsumerState<AuthBootstrap> {
             );
           widget.onReady?.call();
         }
+      } else if (kIsWeb && !privateSession) {
+        try {
+          await _publicDemoSession();
+          return;
+        } catch (_) {
+          if (mounted) _showLogin();
+        }
       } else if (mounted) {
         _showLogin();
       }
@@ -505,6 +521,15 @@ class _AuthBootstrapState extends ConsumerState<AuthBootstrap> {
     await _save(
       response.data as Map<String, dynamic>,
       mode: AccountSessionMode.standard,
+    );
+    await _enterAuthenticatedApp(forceHome: true);
+  }
+
+  Future<void> _publicDemoSession() async {
+    final response = await ref.read(api).post('/auth/public-demo-session');
+    await _save(
+      Map<String, dynamic>.from(response.data as Map),
+      mode: AccountSessionMode.demo,
     );
     await _enterAuthenticatedApp(forceHome: true);
   }
@@ -721,6 +746,14 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
       }
       ref.read(api).options.headers['Authorization'] =
           'Bearer ${response.data['accessToken']}';
+      final profile = await ref.read(api).get('/auth/me');
+      ref
+          .read(accountSessionModeProvider.notifier)
+          .state = profile.data['accountMode'] == 'private'
+          ? AccountSessionMode.private
+          : profile.data['accountMode'] == 'demo'
+          ? AccountSessionMode.demo
+          : AccountSessionMode.standard;
       final onboarding = await ref.read(onboardingRepositoryProvider).get();
       if (mounted) {
         if (kIsWeb) {

@@ -81,6 +81,14 @@ class _MoreScreenState extends ConsumerState<MoreScreen> {
   }
 
   Future<void> _enterPrivateAccount() async {
+    if (kIsWeb) {
+      await ref.read(privateAccountRepositoryProvider).signOut();
+      ref.read(accountSessionModeProvider.notifier).state =
+          AccountSessionMode.standard;
+      _clearAccountState();
+      if (mounted) context.go('/login');
+      return;
+    }
     Map<String, dynamic>? challenge;
     await showDialog<void>(
       context: context,
@@ -146,12 +154,12 @@ class _MoreScreenState extends ConsumerState<MoreScreen> {
     setState(() => _switchingAccount = true);
     try {
       if (kIsWeb) {
-        await ref.read(privateAccountRepositoryProvider).signOut();
+        await ref.read(privateAccountRepositoryProvider).returnToBeta();
         ref.read(accountSessionModeProvider.notifier).state =
-            AccountSessionMode.standard;
+            AccountSessionMode.demo;
         _clearAccountState();
         if (!mounted) return;
-        context.go('/login');
+        context.go('/');
         return;
       }
       await ref.read(privateAccountRepositoryProvider).returnToBeta();
@@ -469,6 +477,8 @@ class _MoreScreenState extends ConsumerState<MoreScreen> {
                 ? kIsWeb
                       ? 'End this private browser session securely'
                       : 'Leave the private account and restore beta access'
+                : kIsWeb
+                ? 'Sign in securely to your private workspace'
                 : 'Password-protected private access',
             trailing: _switchingAccount
                 ? const SizedBox.square(

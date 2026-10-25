@@ -62,6 +62,12 @@ export class AuthController {
   @HttpCode(200) @Post('login-challenge') challenge(@Req() req: any, @Res({ passthrough: true }) res: any, @Body() dto: LoginChallengeDto) { this.limit(req, 'login-challenge', dto.challengeId, 8); return this.webSession(req, res, this.auth.completeLoginChallenge(dto.challengeId, dto.code)); }
   @HttpCode(200) @Post('login-challenge/resend') resendChallenge(@Req() req: any, @Body() dto: ChallengeIdDto) { this.limit(req, 'login-challenge-resend', dto.challengeId, 3); return this.security.resendEmailChallenge(dto.challengeId); }
   @HttpCode(200) @Post('shared-test-session') sharedTestSession(@Req() req: any) { if (this.isWeb(req)) throw new NotFoundException(); this.limit(req, 'shared-test-session', '', 30); return this.auth.sharedTestSession(req.headers?.['x-fundwell-shared-test-token']); }
+  @HttpCode(200) @Post('public-demo-session') publicDemoSession(@Req() req: any) {
+    if (!this.isWeb(req)) throw new NotFoundException();
+    this.assertWebOrigin(req);
+    this.limit(req, 'public-demo-session', '', 60);
+    return this.auth.publicDemoSession();
+  }
   @HttpCode(200) @Post('private-session') privateSession(@Req() req: any, @Res({ passthrough: true }) res: any, @Body() dto: PrivateSessionDto) { this.limit(req, 'private-session', '', 5); return this.webSession(req, res, this.auth.privateSession(dto.accessCode, dto)); }
   @HttpCode(200) @Post('refresh') refresh(@Req() req: any, @Res({ passthrough: true }) res: any, @Body() dto: RefreshDto) { this.assertWebOrigin(req); const token = this.isWeb(req) ? this.cookie(req) : dto.refreshToken; if (!token) throw new UnauthorizedException('Refresh token required'); return this.webSession(req, res, this.auth.refresh(token)); }
   @HttpCode(204) @Post('logout') async logout(@Req() req: any, @Res({ passthrough: true }) res: any, @Body() dto: RefreshDto) { this.assertWebOrigin(req); const token = this.isWeb(req) ? this.cookie(req) : dto.refreshToken; if (token) await this.auth.logout(token); if (this.isWeb(req)) this.clearWebCookie(res); }
@@ -80,5 +86,5 @@ export class AuthController {
   @ApiBearerAuth() @UseGuards(JwtAuthGuard) @Get('devices') devices(@CurrentUser() user: { sub: string }) { return this.security.devices(user.sub); }
   @ApiBearerAuth() @UseGuards(JwtAuthGuard) @Delete('devices/:id') revokeDevice(@CurrentUser() user: { sub: string }, @Param('id') id: string) { return this.security.revokeDevice(user.sub, id); }
   @ApiBearerAuth() @UseGuards(JwtAuthGuard) @Delete('account') deleteAccount(@CurrentUser() user: { sub: string }, @Body() dto: DeleteAccountDto) { return this.auth.deleteAccount(user.sub, dto.password); }
-  @ApiBearerAuth() @UseGuards(JwtAuthGuard) @Get('me') me(@CurrentUser() user: { sub: string }) { return this.auth.profile(user.sub); }
+  @ApiBearerAuth() @UseGuards(JwtAuthGuard) @Get('me') me(@CurrentUser() user: { sub: string; publicDemo?: boolean }) { return this.auth.profile(user.sub, user.publicDemo === true); }
 }

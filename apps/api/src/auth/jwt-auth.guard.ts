@@ -1,4 +1,4 @@
-import { CanActivate, ExecutionContext, Injectable, UnauthorizedException } from '@nestjs/common';
+import { CanActivate, ExecutionContext, ForbiddenException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../prisma.service';
 
@@ -13,8 +13,14 @@ export class JwtAuthGuard implements CanActivate {
       const payload = await this.jwt.verifyAsync(token, { secret: process.env.JWT_ACCESS_SECRET });
       const user = await this.prisma.user.findFirst({ where: { id: payload.sub, disabledAt: null, deletedAt: null, emailVerifiedAt: { not: null } }, select: { id: true } });
       if (!user) throw new Error();
+      if (payload.publicDemo === true && !['GET', 'HEAD', 'OPTIONS'].includes(request.method)) {
+        throw new ForbiddenException('Demo access is read-only. Sign in to make changes.');
+      }
       request.user = payload;
       return true;
-    } catch { throw new UnauthorizedException('Invalid or expired access token'); }
+    } catch (error) {
+      if (error instanceof ForbiddenException) throw error;
+      throw new UnauthorizedException('Invalid or expired access token');
+    }
   }
 }

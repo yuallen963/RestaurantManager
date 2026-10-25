@@ -119,4 +119,97 @@ void main() {
       expect(await storage.read(key: 'refreshToken'), isNull);
     },
   );
+
+  testWidgets(
+    'browser enters the read-only public demo when no private session exists',
+    (tester) async {
+      await storage.delete(key: 'accessToken');
+      await storage.delete(key: 'refreshToken');
+      await storage.delete(key: sessionModeStorageKey);
+      final paths = <String>[];
+      final dio = Dio()
+        ..interceptors.add(
+          InterceptorsWrapper(
+            onRequest: (options, handler) {
+              paths.add(options.path);
+              if (options.path == '/auth/refresh') {
+                handler.reject(
+                  DioException(
+                    requestOptions: options,
+                    response: Response(
+                      requestOptions: options,
+                      statusCode: 401,
+                    ),
+                  ),
+                );
+                return;
+              }
+              if (options.path == '/auth/public-demo-session') {
+                handler.resolve(
+                  Response(
+                    requestOptions: options,
+                    statusCode: 200,
+                    data: {
+                      'accessToken': 'public-demo-access',
+                      'tokenType': 'Bearer',
+                      'accountMode': 'demo',
+                    },
+                  ),
+                );
+                return;
+              }
+              if (options.path == '/onboarding') {
+                handler.resolve(
+                  Response(
+                    requestOptions: options,
+                    statusCode: 200,
+                    data: {
+                      'onboardingCompletedAt': '2026-10-22T00:00:00.000Z',
+                      'currentStep': 6,
+                      'selectedDataSources': <String>[],
+                    },
+                  ),
+                );
+                return;
+              }
+              handler.resolve(
+                Response(
+                  requestOptions: options,
+                  statusCode: 200,
+                  data: <String, dynamic>{},
+                ),
+              );
+            },
+          ),
+        );
+
+      final container = ProviderContainer(
+        overrides: [
+          api.overrideWithValue(dio),
+          sharedTestUserModeProvider.overrideWithValue(false),
+          activeLocationStateProvider.overrideWithValue(
+            const AsyncData(ActiveLocationState([], null)),
+          ),
+          activeLocationProvider.overrideWithValue(null),
+        ],
+      );
+      addTearDown(container.dispose);
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: const MaterialApp(home: AuthBootstrap()),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(paths, contains('/auth/public-demo-session'));
+      expect(find.byType(Home), findsOneWidget);
+      expect(
+        container.read(accountSessionModeProvider),
+        AccountSessionMode.demo,
+      );
+      expect(container.read(demoModeProvider), isTrue);
+      expect(await storage.read(key: 'refreshToken'), isNull);
+    },
+  );
 }

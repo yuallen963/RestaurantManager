@@ -3,6 +3,11 @@ import {
   ExpenseSource,
   ExtractionStatus,
   InvoiceStatus,
+  BankCategorizationSource,
+  BankProvider,
+  BankReconciliationStatus,
+  BankConnectionStatus,
+  ManualRevenueType,
   MerchantRuleMatchType,
   OrganizationRole,
   Prisma,
@@ -13,6 +18,7 @@ import {
   RevenueSource,
 } from '@prisma/client';
 import * as argon2 from 'argon2';
+import { randomBytes } from 'crypto';
 
 const prisma = new PrismaClient();
 
@@ -41,6 +47,9 @@ const demoOrgId = '00000000-0000-4000-8000-000000000001';
 const downtownId = '00000000-0000-4000-8000-000000000002';
 const lakesideId = '00000000-0000-4000-8000-000000000003';
 const bangkokCuisineId = '00000000-0000-4000-8000-000000000004';
+const demoConnectionId = '00000000-0000-4000-8000-000000000005';
+const demoMainAccountId = '00000000-0000-4000-8000-000000000006';
+const demoDowntownAccountId = '00000000-0000-4000-8000-000000000007';
 
 const vendors = [
   ['Sysco', 'sysco'],
@@ -179,6 +188,31 @@ async function main() {
     ),
   );
 
+  const existingOrganization = await prisma.organization.findUnique({
+    where: { id: demoOrgId },
+    include: {
+      memberships: { include: { user: { select: { email: true } } } },
+      locations: { select: { id: true } },
+      bankConnections: { select: { provider: true } },
+    },
+  });
+  if (existingOrganization) {
+    const expectedLocationIds = new Set([downtownId, lakesideId, bangkokCuisineId]);
+    const unsafe =
+      !['Demo Restaurant Group', 'FundWell Public Demo'].includes(existingOrganization.name) ||
+      existingOrganization.memberships.some((membership) => membership.user.email !== demoEmail) ||
+      existingOrganization.locations.some((location) => !expectedLocationIds.has(location.id)) ||
+      existingOrganization.bankConnections.some((connection) => connection.provider !== BankProvider.DEMO);
+    if (unsafe) throw new Error('Refusing to seed: the fixed demo organization contains non-demo ownership or data');
+  }
+  const existingDemoUser = await prisma.user.findUnique({
+    where: { email: demoEmail },
+    select: { memberships: { select: { organizationId: true } } },
+  });
+  if (existingDemoUser?.memberships.some((membership) => membership.organizationId !== demoOrgId)) {
+    throw new Error('Refusing to seed: the demo user belongs to a non-demo organization');
+  }
+
   for (const [name, slug, classification] of categories) {
     const found = await prisma.expenseCategory.findFirst({
       where: { organizationId: null, slug },
@@ -192,10 +226,15 @@ async function main() {
 
   const user = await prisma.user.upsert({
     where: { email: demoEmail },
-    update: { emailVerifiedAt: new Date(), disabledAt: null, deletedAt: null },
+    update: {
+      passwordHash: await argon2.hash(randomBytes(32).toString('base64url')),
+      emailVerifiedAt: new Date(),
+      disabledAt: null,
+      deletedAt: null,
+    },
     create: {
       email: demoEmail,
-      passwordHash: await argon2.hash('DemoProfit2026!'),
+      passwordHash: await argon2.hash(randomBytes(32).toString('base64url')),
       firstName: 'Demo',
       lastName: 'Owner',
       emailVerifiedAt: new Date(),
@@ -203,8 +242,8 @@ async function main() {
   });
   await prisma.organization.upsert({
     where: { id: demoOrgId },
-    update: { name: 'Demo Restaurant Group' },
-    create: { id: demoOrgId, name: 'Demo Restaurant Group' },
+    update: { name: 'FundWell Public Demo' },
+    create: { id: demoOrgId, name: 'FundWell Public Demo' },
   });
   await prisma.organizationMember.upsert({
     where: {
@@ -221,8 +260,7 @@ async function main() {
     },
   });
   for (const [id, name, addressLine1, city, state, postalCode, invoiceEmailToken] of [
-    [downtownId, 'Downtown Grill', null, null, null, null, 'd84f7c9a61e24337b95d5b822e48a3f1'],
-    [lakesideId, 'Lakeside Grill', null, null, null, null, 'a39e1c72f5b64b62941da52f8c17e604'],
+    [downtownId, 'Bangkok Cuisine — Downtown', null, 'Rochester', 'MI', null, 'd84f7c9a61e24337b95d5b822e48a3f1'],
     [
       bangkokCuisineId,
       'Bangkok Cuisine',
@@ -289,11 +327,10 @@ async function main() {
 
   for (const [locationId, baseRevenue] of [
     [downtownId, 2600],
-    [lakesideId, 1900],
     [bangkokCuisineId, 2250],
   ] as const) {
-    for (let index = 0; index < 92; index += 1) {
-      const daysAgo = 91 - index;
+    for (let index = 0; index < 365; index += 1) {
+      const daysAgo = 364 - index;
       const date = new Date(seedToday);
       date.setUTCDate(seedToday.getUTCDate() - daysAgo);
       const dayOfWeek = date.getUTCDay();
@@ -315,20 +352,32 @@ async function main() {
           trend,
       );
 
-      revenueRows.push({
-        organizationId: demoOrgId,
-        restaurantLocationId: locationId,
-        date,
-        amount: revenue,
-        source: RevenueSource.MANUAL,
-        notes: 'Daily sales',
-        createdByUserId: user.id,
-      });
+      const cashRevenue = money(revenue * (0.24 + ((index % 5) - 2) * 0.01));
+      revenueRows.push(
+        {
+          organizationId: demoOrgId,
+          restaurantLocationId: locationId,
+          date,
+          amount: cashRevenue,
+          source: RevenueSource.MANUAL,
+          manualType: ManualRevenueType.CASH,
+          notes: 'Synthetic daily cash sales excluding tax and tips',
+          createdByUserId: user.id,
+        },
+        {
+          organizationId: demoOrgId,
+          restaurantLocationId: locationId,
+          date,
+          amount: money(revenue - cashRevenue),
+          source: RevenueSource.MANUAL,
+          manualType: ManualRevenueType.CARD,
+          notes: 'Synthetic daily card sales excluding tax and tips',
+          createdByUserId: user.id,
+        },
+      );
 
       const recipe = locationId === bangkokCuisineId
         ? bangkokCuisineStable
-        : locationId === lakesideId
-        ? lakesideStable
         : date.getUTCFullYear() === seedToday.getUTCFullYear() &&
           date.getUTCMonth() === seedToday.getUTCMonth()
         ? downtownCurrent
@@ -358,6 +407,79 @@ async function main() {
   ]);
   await prisma.revenueEntry.createMany({ data: revenueRows });
   await prisma.expense.createMany({ data: expenseRows });
+  await prisma.restaurantLocation.deleteMany({
+    where: { id: lakesideId, organizationId: demoOrgId },
+  });
+
+  const connection = await prisma.bankConnection.create({
+    data: {
+      id: demoConnectionId,
+      organizationId: demoOrgId,
+      provider: BankProvider.DEMO,
+      providerItemId: 'fundwell-public-demo',
+      encryptedAccessToken: 'synthetic-demo-no-bank-credential',
+      institutionId: 'fundwell-demo-bank',
+      institutionName: 'FundWell Demo Bank',
+      status: BankConnectionStatus.CONNECTED,
+      lastSyncAt: seedToday,
+      createdByUserId: user.id,
+    },
+  });
+  const demoAccounts = await Promise.all([
+    prisma.bankAccount.create({
+      data: { id: demoMainAccountId, bankConnectionId: connection.id, organizationId: demoOrgId, restaurantLocationId: bangkokCuisineId, providerAccountId: 'bangkok-main-checking', name: 'Bangkok Cuisine Operating', mask: '4242', subtype: 'checking', type: 'depository' },
+    }),
+    prisma.bankAccount.create({
+      data: { id: demoDowntownAccountId, bankConnectionId: connection.id, organizationId: demoOrgId, restaurantLocationId: downtownId, providerAccountId: 'bangkok-downtown-checking', name: 'Downtown Operating', mask: '8181', subtype: 'checking', type: 'depository' },
+    }),
+  ]);
+  for (const account of demoAccounts) {
+    const expenses = await prisma.expense.findMany({
+      where: { organizationId: demoOrgId, restaurantLocationId: account.restaurantLocationId!, description: { in: ['Electric and gas service', 'Restaurant occupancy'] } },
+      orderBy: { date: 'desc' },
+      take: 12,
+    });
+    await prisma.bankTransaction.createMany({
+      data: [
+        ...expenses.map((expense, index) => ({
+          organizationId: demoOrgId,
+          restaurantLocationId: account.restaurantLocationId,
+          bankAccountId: account.id,
+          providerTransactionId: `demo-expense-${account.id}-${index}`,
+          postedDate: expense.date,
+          merchantNameRaw: expense.description,
+          merchantNameNormalized: expense.description,
+          description: expense.description ?? 'Operating expense',
+          amount: expense.amount,
+          expenseId: expense.id,
+          categoryId: expense.expenseCategoryId,
+          vendorId: expense.vendorId,
+          reconciliationStatus: BankReconciliationStatus.MATCHED_EXPENSE,
+          categorizationSource: BankCategorizationSource.MANUAL,
+        })),
+        ...Array.from({ length: 12 }, (_, index) => {
+          const postedDate = new Date(seedToday);
+          postedDate.setUTCMonth(seedToday.getUTCMonth() - index);
+          postedDate.setUTCDate(5);
+          return {
+            organizationId: demoOrgId,
+            restaurantLocationId: account.restaurantLocationId,
+            bankAccountId: account.id,
+            providerTransactionId: `demo-deposit-${account.id}-${index}`,
+            postedDate,
+            merchantNameRaw: 'CARD SALES DEPOSIT',
+            merchantNameNormalized: 'Card Sales Deposit',
+            description: 'Synthetic merchant processor deposit',
+            amount: new Prisma.Decimal(-money(18000 + ((index * 977) % 6000))),
+            providerCategory: 'Deposit',
+            providerCategoryId: 'DEPOSIT',
+            reconciliationStatus: BankReconciliationStatus.NEEDS_REVIEW,
+            categorizationSource: BankCategorizationSource.PROVIDER,
+          };
+        }),
+      ],
+    });
+  }
 
   // Deterministic, reviewed invoice history for the demo organization only.
   // These records are synthetic and are never mixed with another tenant.
@@ -433,10 +555,13 @@ async function main() {
     invoiceDate.setUTCDate(seedToday.getUTCDate() - seeded.daysAgo);
     const selectedVendorId = vendorId(seeded.vendor)!;
     const invoiceTotal = seeded.lines.reduce((sum, line) => sum + line.quantity * line.unitPrice, 0);
+    const invoiceLocationId = seeded.id.endsWith('0001') || seeded.id.endsWith('0002')
+      ? bangkokCuisineId
+      : downtownId;
     await prisma.invoice.upsert({
       where: { id: seeded.id },
       update: {
-        restaurantLocationId: downtownId,
+        restaurantLocationId: invoiceLocationId,
         vendorId: selectedVendorId,
         invoiceDate,
         invoiceNumber: `DEMO-${seeded.id.slice(-4)}`,
@@ -450,7 +575,7 @@ async function main() {
       create: {
         id: seeded.id,
         organizationId: demoOrgId,
-        restaurantLocationId: downtownId,
+        restaurantLocationId: invoiceLocationId,
         vendorId: selectedVendorId,
         fileName: `synthetic-${seeded.id}.pdf`,
         originalFileName: 'Synthetic demo invoice.pdf',
@@ -473,7 +598,7 @@ async function main() {
       data: seeded.lines.map((line, index) => ({
         invoiceId: seeded.id,
         organizationId: demoOrgId,
-        restaurantLocationId: downtownId,
+        restaurantLocationId: invoiceLocationId,
         lineNumber: index + 1,
         rawDescription: line.rawDescription,
         sku: line.sku,
@@ -521,7 +646,7 @@ async function main() {
   });
 
   console.log(
-    `Demo seeded through ${seedToday.toISOString().slice(0, 10)}: ${demoEmail} / DemoProfit2026!`,
+    `Public demo seeded through ${seedToday.toISOString().slice(0, 10)} for ${demoOrgId}`,
   );
 }
 

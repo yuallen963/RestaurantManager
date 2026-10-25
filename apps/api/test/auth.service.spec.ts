@@ -13,6 +13,9 @@ describe('auth service', () => {
   const originalSharedClientToken = process.env.SHARED_TEST_CLIENT_TOKEN;
   const originalPrivateEmail = process.env.PRIVATE_BETA_USER_EMAIL;
   const originalPrivateHash = process.env.PRIVATE_BETA_ACCESS_CODE_HASH;
+  const originalPublicDemoMode = process.env.PUBLIC_DEMO_MODE;
+  const originalPublicDemoEmail = process.env.PUBLIC_DEMO_USER_EMAIL;
+  const originalPublicDemoOrganizationId = process.env.PUBLIC_DEMO_ORGANIZATION_ID;
   beforeEach(() => jest.clearAllMocks());
   afterEach(() => {
     if (originalSharedMode === undefined) delete process.env.SHARED_TEST_USER_MODE;
@@ -25,6 +28,43 @@ describe('auth service', () => {
     else process.env.PRIVATE_BETA_USER_EMAIL = originalPrivateEmail;
     if (originalPrivateHash === undefined) delete process.env.PRIVATE_BETA_ACCESS_CODE_HASH;
     else process.env.PRIVATE_BETA_ACCESS_CODE_HASH = originalPrivateHash;
+    if (originalPublicDemoMode === undefined) delete process.env.PUBLIC_DEMO_MODE;
+    else process.env.PUBLIC_DEMO_MODE = originalPublicDemoMode;
+    if (originalPublicDemoEmail === undefined) delete process.env.PUBLIC_DEMO_USER_EMAIL;
+    else process.env.PUBLIC_DEMO_USER_EMAIL = originalPublicDemoEmail;
+    if (originalPublicDemoOrganizationId === undefined) delete process.env.PUBLIC_DEMO_ORGANIZATION_ID;
+    else process.env.PUBLIC_DEMO_ORGANIZATION_ID = originalPublicDemoOrganizationId;
+  });
+
+  it('issues a short-lived public demo access token without a refresh credential', async () => {
+    process.env.PUBLIC_DEMO_MODE = 'true';
+    process.env.PUBLIC_DEMO_USER_EMAIL = 'demo@profitlens.local';
+    process.env.PUBLIC_DEMO_ORGANIZATION_ID = 'demo-org';
+    const prisma: any = {
+      user: { findFirst: jest.fn().mockResolvedValue({ id: 'demo-user', email: 'demo@profitlens.local', memberships: [{ organizationId: 'demo-org' }] }) },
+      refreshToken: { create: jest.fn() },
+    };
+    const jwt = { signAsync: jest.fn().mockResolvedValue('demo-access') };
+    const service = new AuthService(prisma, jwt as any, mail() as any, audit as any);
+
+    await expect(service.publicDemoSession()).resolves.toEqual({
+      accessToken: 'demo-access', tokenType: 'Bearer', accountMode: 'demo',
+    });
+    expect(jwt.signAsync).toHaveBeenCalledWith(
+      { sub: 'demo-user', email: 'demo@profitlens.local', publicDemo: true },
+      expect.objectContaining({ expiresIn: 900 }),
+    );
+    expect(prisma.refreshToken.create).not.toHaveBeenCalled();
+  });
+
+  it('fails closed if the public demo user belongs to another organization', async () => {
+    process.env.PUBLIC_DEMO_MODE = 'true';
+    process.env.PUBLIC_DEMO_ORGANIZATION_ID = 'demo-org';
+    const prisma: any = {
+      user: { findFirst: jest.fn().mockResolvedValue({ id: 'demo-user', email: 'demo@profitlens.local', memberships: [{ organizationId: 'demo-org' }, { organizationId: 'private-org' }] }) },
+    };
+    const service = new AuthService(prisma, { signAsync: jest.fn() } as any, mail() as any, audit as any);
+    await expect(service.publicDemoSession()).rejects.toBeInstanceOf(NotFoundException);
   });
 
   it('issues a session only for the configured shared test owner when enabled', async () => {

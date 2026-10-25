@@ -85,6 +85,8 @@ class MoreRepository {
       organizationName: organization['name'] as String,
       accountMode: profile['accountMode'] == 'private'
           ? AccountSessionMode.private
+          : profile['accountMode'] == 'demo'
+          ? AccountSessionMode.demo
           : AccountSessionMode.standard,
       role: role,
     );
@@ -124,15 +126,17 @@ class MoreRepository {
       }
     }
     dio.options.headers.remove('Authorization');
-    final response = await dio.post(
-      '/auth/shared-test-session',
-      options: Options(
-        headers: {'X-FundWell-Shared-Test-Token': sharedTestClientToken},
-      ),
-    );
+    final response = kIsWeb
+        ? await dio.post('/auth/public-demo-session')
+        : await dio.post(
+            '/auth/shared-test-session',
+            options: Options(
+              headers: {'X-FundWell-Shared-Test-Token': sharedTestClientToken},
+            ),
+          );
     await _installSession(
       Map<String, dynamic>.from(response.data as Map),
-      AccountSessionMode.standard,
+      kIsWeb ? AccountSessionMode.demo : AccountSessionMode.standard,
     );
   }
 
