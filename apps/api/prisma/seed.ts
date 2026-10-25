@@ -19,6 +19,11 @@ import {
 } from '@prisma/client';
 import * as argon2 from 'argon2';
 import { randomBytes } from 'crypto';
+import {
+  demoExpenseAmount,
+  downtownExpenseRecipe,
+  mainExpenseRecipe,
+} from './demo-financial-profile';
 
 const prisma = new PrismaClient();
 
@@ -69,109 +74,6 @@ const vendors = [
   ['Thai Specialty Produce', 'thai specialty produce'],
   ['Metro Asian Foods', 'metro asian foods'],
 ] as const;
-
-type ExpenseRecipe = readonly [
-  slug: string,
-  ratio: number,
-  vendorName: string | null,
-  description: string,
-];
-
-const downtownPrevious: readonly ExpenseRecipe[] = [
-  ['food', .27, 'sysco', 'Food inventory'],
-  ['labor', .29, 'adp', 'Hourly and salaried labor'],
-  ['beverage', .035, 'us foods', 'Beverage inventory'],
-  ['payroll-taxes', .03, 'adp', 'Payroll taxes'],
-  ['rent', .085, 'main street properties', 'Restaurant occupancy'],
-  ['utilities', .025, 'dte energy', 'Electric and gas service'],
-  ['delivery-fees', .04, 'doordash', 'Delivery marketplace fees'],
-  ['merchant-fees', .028, 'toast', 'Card processing'],
-  ['supplies', .015, 'restaurant depot', 'Operating supplies'],
-  ['insurance', .008, 'harbor insurance', 'Business insurance'],
-  ['repairs-maintenance', .008, null, 'Repairs and maintenance'],
-  ['marketing', .012, 'brightline marketing', 'Local marketing'],
-  ['software-subscriptions', .004, 'toast', 'Restaurant software'],
-  ['taxes', .015, null, 'Local business taxes'],
-  ['professional-services', .005, null, 'Professional services'],
-  ['equipment', .01, 'restaurant depot', 'Small equipment'],
-];
-
-const downtownRecent: readonly ExpenseRecipe[] = [
-  ['food', .305, 'sysco', 'Food inventory'],
-  ['labor', .34, 'adp', 'Hourly and salaried labor'],
-  ['beverage', .03, 'us foods', 'Beverage inventory'],
-  ['payroll-taxes', .032, 'adp', 'Payroll taxes'],
-  ['rent', .06, 'main street properties', 'Restaurant occupancy'],
-  ['utilities', .022, 'dte energy', 'Electric and gas service'],
-  ['delivery-fees', .05, 'doordash', 'Delivery marketplace fees'],
-  ['merchant-fees', .028, 'toast', 'Card processing'],
-  ['supplies', .012, 'restaurant depot', 'Operating supplies'],
-  ['insurance', .007, 'harbor insurance', 'Business insurance'],
-  ['repairs-maintenance', .006, null, 'Repairs and maintenance'],
-  ['marketing', .004, 'brightline marketing', 'Local marketing'],
-  ['software-subscriptions', .004, 'toast', 'Restaurant software'],
-  ['taxes', .009, null, 'Local business taxes'],
-  ['professional-services', .003, null, 'Professional services'],
-  ['equipment', .003, 'restaurant depot', 'Small equipment'],
-];
-
-// Current-month demo pressure creates deterministic Needs Attention signals
-// without changing any non-demo organization data.
-const downtownCurrent: readonly ExpenseRecipe[] = downtownRecent.map(
-  ([slug, ratio, vendor, description]) => [
-    slug,
-    slug === 'food'
-      ? .37
-      : slug === 'labor'
-      ? .40
-      : slug === 'utilities'
-      ? .033
-      : ratio,
-    vendor,
-    description,
-  ],
-);
-
-const lakesideStable: readonly ExpenseRecipe[] = [
-  ['food', .26, 'local produce co.', 'Food inventory'],
-  ['labor', .27, 'adp', 'Hourly and salaried labor'],
-  ['beverage', .03, 'us foods', 'Beverage inventory'],
-  ['payroll-taxes', .028, 'adp', 'Payroll taxes'],
-  ['rent', .09, 'main street properties', 'Restaurant occupancy'],
-  ['utilities', .025, 'dte energy', 'Electric and gas service'],
-  ['delivery-fees', .02, 'uber eats', 'Delivery marketplace fees'],
-  ['merchant-fees', .028, 'toast', 'Card processing'],
-  ['supplies', .015, 'restaurant depot', 'Operating supplies'],
-  ['insurance', .008, 'harbor insurance', 'Business insurance'],
-  ['repairs-maintenance', .008, null, 'Repairs and maintenance'],
-  ['marketing', .008, 'brightline marketing', 'Local marketing'],
-  ['software-subscriptions', .004, 'toast', 'Restaurant software'],
-  ['taxes', .012, null, 'Local business taxes'],
-  ['professional-services', .004, null, 'Professional services'],
-  ['equipment', .006, 'restaurant depot', 'Small equipment'],
-];
-
-// Synthetic Thai-restaurant operating mix for the Rochester demo location.
-// It is inspired by the restaurant's public menu categories, not actual sales,
-// purchases, vendors, or financial performance.
-const bangkokCuisineStable: readonly ExpenseRecipe[] = [
-  ['food', .31, 'thai specialty produce', 'Thai ingredients and fresh produce'],
-  ['labor', .31, 'adp', 'Front and back of house labor'],
-  ['beverage', .035, 'gordon food service', 'Beverage inventory'],
-  ['payroll-taxes', .03, 'adp', 'Payroll taxes'],
-  ['rent', .075, 'main street properties', 'Restaurant occupancy'],
-  ['utilities', .026, 'dte energy', 'Electric and gas service'],
-  ['delivery-fees', .045, 'doordash', 'Delivery marketplace fees'],
-  ['merchant-fees', .029, 'toast', 'Card processing'],
-  ['supplies', .014, 'gordon food service', 'Operating supplies'],
-  ['insurance', .008, 'harbor insurance', 'Business insurance'],
-  ['repairs-maintenance', .007, null, 'Repairs and maintenance'],
-  ['marketing', .006, 'brightline marketing', 'Local marketing'],
-  ['software-subscriptions', .004, 'toast', 'Restaurant software'],
-  ['taxes', .011, null, 'Local business taxes'],
-  ['professional-services', .004, null, 'Professional services'],
-  ['equipment', .006, 'metro asian foods', 'Kitchen equipment and smallwares'],
-];
 
 const money = (value: number) => Math.round(value * 100) / 100;
 
@@ -377,13 +279,8 @@ async function main() {
       );
 
       const recipe = locationId === bangkokCuisineId
-        ? bangkokCuisineStable
-        : date.getUTCFullYear() === seedToday.getUTCFullYear() &&
-          date.getUTCMonth() === seedToday.getUTCMonth()
-        ? downtownCurrent
-        : isRecent
-        ? downtownRecent
-        : downtownPrevious;
+        ? mainExpenseRecipe
+        : downtownExpenseRecipe;
       for (const [slug, ratio, normalizedVendor, description] of recipe) {
         expenseRows.push({
           organizationId: demoOrgId,
@@ -391,7 +288,7 @@ async function main() {
           expenseCategoryId: categoryId(slug),
           vendorId: vendorId(normalizedVendor),
           date,
-          amount: money(revenue * ratio),
+          amount: demoExpenseAmount(revenue, ratio, date, locationId),
           description,
           source: ExpenseSource.MANUAL,
           createdByUserId: user.id,
