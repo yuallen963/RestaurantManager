@@ -3,7 +3,7 @@ import { InvoicesService } from '../src/invoices/invoices.service';
 
 const location = { id: 'loc-a', organizationId: 'org-a' };
 const invoiceBytes = Buffer.from('%PDF-invoice bytes');
-const invoice = { id: 'invoice-a', organizationId: 'org-a', restaurantLocationId: 'loc-a', vendorId: null, storageKey: 'org/file.pdf', fileType: 'application/pdf', fileSize: invoiceBytes.length, status: 'UPLOADED', attachmentHash: 'hash-a', reviewStatus: 'NOT_REVIEWED', extractionStatus: 'NOT_STARTED', extractionStartedAt: null, extractionAttemptCount: 0 };
+const invoice = { id: 'invoice-a', organizationId: 'org-a', restaurantLocationId: 'loc-a', vendorId: null, storageKey: 'org/file.pdf', fileType: 'application/pdf', fileSize: invoiceBytes.length, status: 'UPLOADED', attachmentHash: 'hash-a', reviewStatus: 'NOT_REVIEWED', extractionStatus: 'NOT_STARTED', extractionStartedAt: null, extractionAttemptCount: 0, bankTransactions: [] };
 
 function setup() {
   const prisma: any = {
@@ -61,12 +61,13 @@ describe('InvoicesService', () => {
 
   it('keeps invoice lists isolated to the authorized location', async () => {
     const { service, prisma, access } = setup();
-    await service.list('user-a', { restaurantLocationId: 'loc-a' });
+    const result = await service.list('user-a', { restaurantLocationId: 'loc-a' });
     expect(access.requireMember).toHaveBeenCalledWith('user-a', 'org-a');
     expect(prisma.invoice.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ organizationId: 'org-a', restaurantLocationId: 'loc-a' }) }));
+    expect(result[0].paymentStatus).toBe('AWAITING_PAYMENT');
   });
 
-  it('preserves explicit UTC invoice-list boundaries without rounding them', async () => {
+  it('filters invoice lists by invoice date and falls back to creation date when absent', async () => {
     const { service, prisma } = setup();
     await service.list('user-a', {
       restaurantLocationId: 'loc-a',
@@ -76,10 +77,21 @@ describe('InvoicesService', () => {
     expect(prisma.invoice.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({
-          createdAt: {
-            gte: new Date('2026-10-01T04:00:00.000Z'),
-            lte: new Date('2026-10-10T03:59:59.999Z'),
-          },
+          OR: [
+            {
+              invoiceDate: {
+                gte: new Date('2026-10-01T04:00:00.000Z'),
+                lte: new Date('2026-10-10T03:59:59.999Z'),
+              },
+            },
+            {
+              invoiceDate: null,
+              createdAt: {
+                gte: new Date('2026-10-01T04:00:00.000Z'),
+                lte: new Date('2026-10-10T03:59:59.999Z'),
+              },
+            },
+          ],
         }),
       }),
     );

@@ -13,6 +13,7 @@
     "prisma:migrate": "prisma migrate dev",
     "prisma:seed": "tsx prisma/seed.ts",
     "demo:rebalance": "tsx prisma/rebalance-public-demo.ts",
+    "demo:enhance": "tsx prisma/enhance-public-demo.ts",
     "seed:fundwell-test": "tsx prisma/seed-fundwell-test.ts",
     "setup:private-beta": "tsx prisma/setup-private-beta.ts"
   },

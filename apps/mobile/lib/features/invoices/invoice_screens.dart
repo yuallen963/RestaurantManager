@@ -85,7 +85,7 @@ class InvoiceListScreen extends ConsumerWidget {
                       title: Text(invoice.vendorName ?? invoice.fileName),
                       subtitle: Text(
                         '${invoice.ingestionSource == 'EMAIL_FORWARD' ? 'Email' : 'Manual Upload'} • ${_date(invoice.invoiceDate ?? invoice.createdAt)}\n'
-                        '${invoice.total == null ? 'Total not entered' : formatCurrency(invoice.total!)}',
+                        '${invoice.total == null ? 'Total not entered' : formatCurrency(invoice.total!)} • ${invoice.paymentStatus == 'PAID' ? 'Paid' : 'Awaiting payment'}',
                       ),
                       isThreeLine: true,
                       trailing: Chip(label: Text(_status(invoice.status))),

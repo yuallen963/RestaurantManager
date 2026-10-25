@@ -26,6 +26,7 @@ final invoice = InvoiceRecord(
   vendorName: 'Sysco',
   invoiceNumber: '1001',
   total: 2842.16,
+  paymentStatus: 'PAID',
 );
 
 class FakeInvoiceRepository extends InvoiceRepository {
@@ -185,6 +186,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Sysco'), findsOneWidget);
     expect(find.textContaining(r'$2,842'), findsOneWidget);
+    expect(find.textContaining('Paid'), findsOneWidget);
     expect(find.text('Uploaded'), findsOneWidget);
   });
 

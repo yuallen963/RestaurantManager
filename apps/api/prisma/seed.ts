@@ -1,20 +1,13 @@
 import {
   ExpenseClassification,
   ExpenseSource,
-  ExtractionStatus,
-  InvoiceStatus,
-  BankCategorizationSource,
   BankProvider,
-  BankReconciliationStatus,
   BankConnectionStatus,
   ManualRevenueType,
   MerchantRuleMatchType,
   OrganizationRole,
   Prisma,
   PrismaClient,
-  ProductMatchConfidence,
-  ProductMatchStatus,
-  ReviewStatus,
   RevenueSource,
 } from '@prisma/client';
 import * as argon2 from 'argon2';
@@ -24,6 +17,7 @@ import {
   downtownExpenseRecipe,
   mainExpenseRecipe,
 } from './demo-financial-profile';
+import { replaceDemoBankingAndInvoices } from './demo-banking-invoices';
 
 const prisma = new PrismaClient();
 
@@ -322,7 +316,7 @@ async function main() {
       createdByUserId: user.id,
     },
   });
-  const demoAccounts = await Promise.all([
+  await Promise.all([
     prisma.bankAccount.create({
       data: { id: demoMainAccountId, bankConnectionId: connection.id, organizationId: demoOrgId, restaurantLocationId: bangkokCuisineId, providerAccountId: 'bangkok-main-checking', name: 'Bangkok Cuisine Operating', mask: '4242', subtype: 'checking', type: 'depository' },
     }),
@@ -330,217 +324,10 @@ async function main() {
       data: { id: demoDowntownAccountId, bankConnectionId: connection.id, organizationId: demoOrgId, restaurantLocationId: downtownId, providerAccountId: 'bangkok-downtown-checking', name: 'Downtown Operating', mask: '8181', subtype: 'checking', type: 'depository' },
     }),
   ]);
-  for (const account of demoAccounts) {
-    const expenses = await prisma.expense.findMany({
-      where: { organizationId: demoOrgId, restaurantLocationId: account.restaurantLocationId!, description: { in: ['Electric and gas service', 'Restaurant occupancy'] } },
-      orderBy: { date: 'desc' },
-      take: 12,
-    });
-    await prisma.bankTransaction.createMany({
-      data: [
-        ...expenses.map((expense, index) => ({
-          organizationId: demoOrgId,
-          restaurantLocationId: account.restaurantLocationId,
-          bankAccountId: account.id,
-          providerTransactionId: `demo-expense-${account.id}-${index}`,
-          postedDate: expense.date,
-          merchantNameRaw: expense.description,
-          merchantNameNormalized: expense.description,
-          description: expense.description ?? 'Operating expense',
-          amount: expense.amount,
-          expenseId: expense.id,
-          categoryId: expense.expenseCategoryId,
-          vendorId: expense.vendorId,
-          reconciliationStatus: BankReconciliationStatus.MATCHED_EXPENSE,
-          categorizationSource: BankCategorizationSource.MANUAL,
-        })),
-        ...Array.from({ length: 12 }, (_, index) => {
-          const postedDate = new Date(seedToday);
-          postedDate.setUTCMonth(seedToday.getUTCMonth() - index);
-          postedDate.setUTCDate(5);
-          return {
-            organizationId: demoOrgId,
-            restaurantLocationId: account.restaurantLocationId,
-            bankAccountId: account.id,
-            providerTransactionId: `demo-deposit-${account.id}-${index}`,
-            postedDate,
-            merchantNameRaw: 'CARD SALES DEPOSIT',
-            merchantNameNormalized: 'Card Sales Deposit',
-            description: 'Synthetic merchant processor deposit',
-            amount: new Prisma.Decimal(-money(18000 + ((index * 977) % 6000))),
-            providerCategory: 'Deposit',
-            providerCategoryId: 'DEPOSIT',
-            reconciliationStatus: BankReconciliationStatus.NEEDS_REVIEW,
-            categorizationSource: BankCategorizationSource.PROVIDER,
-          };
-        }),
-      ],
-    });
-  }
-
-  // Deterministic, reviewed invoice history for the demo organization only.
-  // These records are synthetic and are never mixed with another tenant.
-  const syntheticInvoices = [
-    {
-      id: '10000000-0000-4000-8000-000000000001',
-      vendor: 'sysco',
-      daysAgo: 80,
-      lines: [
-        { rawDescription: 'CHKN BRST BNLS SKLS 4/10 LB', sku: '384920', quantity: 12, unit: 'CASE', packSize: '4 x 10 lb', unitPrice: 91 },
-        { rawDescription: 'FRY OIL CANOLA 35 LB', sku: '220410', quantity: 4, unit: 'JUG', packSize: '35 lb', unitPrice: 42 },
-      ],
-    },
-    {
-      id: '10000000-0000-4000-8000-000000000002',
-      vendor: 'sysco',
-      daysAgo: 40,
-      lines: [
-        { rawDescription: 'CHKN BRST BNLS  SKLS 4/10 LB', sku: '384920', quantity: 12, unit: 'CASE', packSize: '4 x 10 lb', unitPrice: 98 },
-        { rawDescription: 'FRY OIL CANOLA 35 LB', sku: '220410', quantity: 4, unit: 'JUG', packSize: '35 lb', unitPrice: 42 },
-      ],
-    },
-    {
-      id: '10000000-0000-4000-8000-000000000003',
-      vendor: 'sysco',
-      daysAgo: 5,
-      lines: [
-        { rawDescription: 'CHKN BRST BNLS SKLS 4/10 LB', sku: '384920', quantity: 12, unit: 'CASE', packSize: '4 x 10 lb', unitPrice: 106.5 },
-        { rawDescription: 'FRY OIL CANOLA 35 LB', sku: '220410', quantity: 4, unit: 'JUG', packSize: '35 lb', unitPrice: 42 },
-      ],
-    },
-    {
-      id: '10000000-0000-4000-8000-000000000004',
-      vendor: 'us foods',
-      daysAgo: 60,
-      lines: [{ rawDescription: 'COLA SYRUP 5 GAL BIB', sku: 'COLA-5', quantity: 9, unit: 'BIB', packSize: '5 gal', unitPrice: 55 }],
-    },
-    {
-      id: '10000000-0000-4000-8000-000000000005',
-      vendor: 'us foods',
-      daysAgo: 10,
-      lines: [{ rawDescription: 'COLA SYRUP 5 GAL BIB', sku: 'COLA-5', quantity: 9, unit: 'BIB', packSize: '5 gal', unitPrice: 49 }],
-    },
-    {
-      id: '10000000-0000-4000-8000-000000000006',
-      vendor: 'restaurant depot',
-      daysAgo: 50,
-      lines: [{ rawDescription: 'NITRILE GLOVES LARGE', sku: 'GLOVE-L', quantity: 2, unit: 'CASE', packSize: '10 x 100', unitPrice: 64 }],
-    },
-    {
-      id: '10000000-0000-4000-8000-000000000007',
-      vendor: 'restaurant depot',
-      daysAgo: 5,
-      lines: [{ rawDescription: 'NITRILE GLOVES LARGE', sku: 'GLOVE-L', quantity: 2, unit: 'CASE', packSize: '5 x 100', unitPrice: 38 }],
-    },
-    {
-      id: '10000000-0000-4000-8000-000000000008',
-      vendor: 'us foods',
-      daysAgo: 10,
-      lines: [
-        { rawDescription: 'CHICKEN BREAST B/S 40LB', sku: 'USF-CHKN-40', quantity: 12, unit: 'CASE', packSize: '40 lb', unitPrice: 94.2 },
-        { rawDescription: 'CHICKEN BREAST B/S 20LB', sku: 'USF-CHKN-20', quantity: 5, unit: 'CASE', packSize: '20 lb', unitPrice: 54 },
-        { rawDescription: 'FROZEN CHICKEN THIGH 40LB', sku: 'USF-THIGH-40', quantity: 4, unit: 'CASE', packSize: '40 lb', unitPrice: 72 },
-      ],
-    },
-  ] as const;
-
-  await prisma.productMatchDecision.deleteMany({ where: { organizationId: demoOrgId } });
-  await prisma.productGroup.deleteMany({ where: { organizationId: demoOrgId } });
-
-  for (const seeded of syntheticInvoices) {
-    const invoiceDate = new Date(seedToday);
-    invoiceDate.setUTCDate(seedToday.getUTCDate() - seeded.daysAgo);
-    const selectedVendorId = vendorId(seeded.vendor)!;
-    const invoiceTotal = seeded.lines.reduce((sum, line) => sum + line.quantity * line.unitPrice, 0);
-    const invoiceLocationId = seeded.id.endsWith('0001') || seeded.id.endsWith('0002')
-      ? bangkokCuisineId
-      : downtownId;
-    await prisma.invoice.upsert({
-      where: { id: seeded.id },
-      update: {
-        restaurantLocationId: invoiceLocationId,
-        vendorId: selectedVendorId,
-        invoiceDate,
-        invoiceNumber: `DEMO-${seeded.id.slice(-4)}`,
-        total: new Prisma.Decimal(invoiceTotal),
-        status: InvoiceStatus.COMPLETED,
-        extractionStatus: ExtractionStatus.COMPLETED,
-        reviewStatus: ReviewStatus.REVIEWED,
-        reviewedAt: invoiceDate,
-        reviewedByUserId: user.id,
-      },
-      create: {
-        id: seeded.id,
-        organizationId: demoOrgId,
-        restaurantLocationId: invoiceLocationId,
-        vendorId: selectedVendorId,
-        fileName: `synthetic-${seeded.id}.pdf`,
-        originalFileName: 'Synthetic demo invoice.pdf',
-        fileType: 'application/pdf',
-        fileSize: 1,
-        storageKey: `synthetic-price-history/${seeded.id}.pdf`,
-        invoiceDate,
-        invoiceNumber: `DEMO-${seeded.id.slice(-4)}`,
-        total: new Prisma.Decimal(invoiceTotal),
-        status: InvoiceStatus.COMPLETED,
-        extractionStatus: ExtractionStatus.COMPLETED,
-        reviewStatus: ReviewStatus.REVIEWED,
-        reviewedAt: invoiceDate,
-        reviewedByUserId: user.id,
-        createdByUserId: user.id,
-      },
-    });
-    await prisma.invoiceLineItem.deleteMany({ where: { invoiceId: seeded.id } });
-    await prisma.invoiceLineItem.createMany({
-      data: seeded.lines.map((line, index) => ({
-        invoiceId: seeded.id,
-        organizationId: demoOrgId,
-        restaurantLocationId: invoiceLocationId,
-        lineNumber: index + 1,
-        rawDescription: line.rawDescription,
-        sku: line.sku,
-        quantity: new Prisma.Decimal(line.quantity),
-        unit: line.unit,
-        packSize: line.packSize,
-        unitPrice: new Prisma.Decimal(line.unitPrice),
-        extendedPrice: new Prisma.Decimal(line.quantity * line.unitPrice),
-        confidence: new Prisma.Decimal(1),
-      })),
-    });
-  }
-
-  const [syscoChicken, usFoodsChicken] = await Promise.all([
-    prisma.invoiceLineItem.findFirstOrThrow({ where: { invoiceId: '10000000-0000-4000-8000-000000000003', sku: '384920' } }),
-    prisma.invoiceLineItem.findFirstOrThrow({ where: { invoiceId: '10000000-0000-4000-8000-000000000008', sku: 'USF-CHKN-40' } }),
-  ]);
-  const chickenGroup = await prisma.productGroup.create({
-    data: {
-      id: '20000000-0000-4000-8000-000000000001',
-      organizationId: demoOrgId,
-      restaurantLocationId: downtownId,
-      displayName: 'Boneless Skinless Chicken Breast',
-      members: {
-        create: [
-          { invoiceLineItemId: syscoChicken.id, vendorId: vendorId('sysco')!, confirmed: true },
-          { invoiceLineItemId: usFoodsChicken.id, vendorId: vendorId('us foods')!, confirmed: true },
-        ],
-      },
-    },
-  });
-  await prisma.productMatchDecision.create({
-    data: {
-      organizationId: demoOrgId,
-      restaurantLocationId: downtownId,
-      candidateLineItemAId: [syscoChicken.id, usFoodsChicken.id].sort()[0],
-      candidateLineItemBId: [syscoChicken.id, usFoodsChicken.id].sort()[1],
-      status: ProductMatchStatus.CONFIRMED,
-      confidence: ProductMatchConfidence.HIGH,
-      reason: 'Synthetic demo confirmation: compatible case unit and 40 lb total weight',
-      productGroupId: chickenGroup.id,
-      reviewedByUserId: user.id,
-      reviewedAt: seedToday,
-    },
-  });
+  await prisma.$transaction(
+    (tx) => replaceDemoBankingAndInvoices(tx, seedToday, user.id),
+    { maxWait: 10000, timeout: 120000 },
+  );
 
   console.log(
     `Public demo seeded through ${seedToday.toISOString().slice(0, 10)} for ${demoOrgId}`,

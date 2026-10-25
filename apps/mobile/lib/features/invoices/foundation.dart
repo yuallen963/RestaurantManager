@@ -113,6 +113,7 @@ class InvoiceRecord {
     this.canRetryExtraction = false,
     this.reviewStatus = 'NOT_REVIEWED',
     this.ingestionSource = 'MANUAL_UPLOAD',
+    this.paymentStatus = 'AWAITING_PAYMENT',
     this.uncertainFields = const [],
     this.reconciliation,
     this.fieldProvenance = const {},
@@ -128,7 +129,7 @@ class InvoiceRecord {
   final DateTime? invoiceDate, dueDate;
   final DateTime createdAt;
   final double? subtotal, tax, otherFees, discount, total;
-  final String extractionStatus, reviewStatus;
+  final String extractionStatus, reviewStatus, paymentStatus;
   final String ingestionSource;
   final double? extractionConfidence;
   final String? extractionError;
@@ -175,6 +176,7 @@ class InvoiceRecord {
       canRetryExtraction: json['canRetryExtraction'] as bool? ?? false,
       reviewStatus: json['reviewStatus'] as String? ?? 'NOT_REVIEWED',
       ingestionSource: json['ingestionSource'] as String? ?? 'MANUAL_UPLOAD',
+      paymentStatus: json['paymentStatus'] as String? ?? 'AWAITING_PAYMENT',
       uncertainFields: (json['uncertainFields'] as List? ?? const [])
           .cast<String>(),
       reconciliation: reconciliationJson is Map
