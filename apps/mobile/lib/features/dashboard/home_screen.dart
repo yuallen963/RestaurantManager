@@ -10,6 +10,7 @@ import '../banking/bank_screens.dart';
 import '../invoices/invoice_screens.dart';
 import '../pos/pos_integrations_screen.dart';
 import '../responsive.dart';
+import '../design/fundwell_theme.dart';
 
 class HomeScreen extends ConsumerWidget {
   const HomeScreen({super.key});
@@ -281,12 +282,10 @@ class _DashboardContent extends StatelessWidget {
 
     return ResponsiveContent(
       child: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
+        padding: const EdgeInsets.fromLTRB(20, 20, 20, 40),
         children: [
           _DashboardHeader(location: location, locations: locations),
-          const SizedBox(height: 16),
-          const NeedsAttentionPreview(),
-          const SizedBox(height: 20),
+          const SizedBox(height: FundWellTokens.space6),
           if (noSources) ...[
             const EmptyState(
               message:
@@ -300,83 +299,18 @@ class _DashboardContent extends StatelessWidget {
             const _FirstRunActions(),
           ],
           if (availability.profitability) ...[
-            Card(
-              key: const Key('profit-card'),
-              color: Theme.of(context).colorScheme.primaryContainer,
-              elevation: 0,
-              child: Padding(
-                padding: const EdgeInsets.all(20),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Estimated Profit',
-                      style: Theme.of(context).textTheme.titleMedium,
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      formatCurrency(current.estimatedProfit),
-                      style: Theme.of(context).textTheme.headlineLarge
-                          ?.copyWith(
-                            fontWeight: FontWeight.w700,
-                            color: Theme.of(
-                              context,
-                            ).colorScheme.onPrimaryContainer,
-                          ),
-                    ),
-                    const SizedBox(height: 10),
-                    PercentageChange(
-                      current: current.estimatedProfit,
-                      previous: previousSummary?.estimatedProfit,
-                    ),
-                  ],
-                ),
+            _DashboardMetricGrid(current: current, previous: previousSummary),
+            const SizedBox(height: FundWellTokens.space3),
+            Text(
+              'Based on recorded revenue and confirmed expenses for this period.',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
               ),
             ),
-            const SizedBox(height: 16),
-            LayoutBuilder(
-              builder: (context, constraints) {
-                final columns = constraints.maxWidth >= 900 ? 3 : 2;
-                final cardWidth = math.max(
-                  140.0,
-                  (constraints.maxWidth - (12 * (columns - 1))) / columns,
-                );
-                return Wrap(
-                  spacing: 12,
-                  runSpacing: 12,
-                  children: [
-                    FinancialMetricCard(
-                      key: const Key('revenue-card'),
-                      width: cardWidth,
-                      label: 'Revenue',
-                      value: formatCurrency(current.revenue),
-                      current: current.revenue,
-                      previous: previousSummary?.revenue,
-                    ),
-                    FinancialMetricCard(
-                      key: const Key('expenses-card'),
-                      width: cardWidth,
-                      label: 'Expenses',
-                      value: formatCurrency(current.expenses),
-                      current: current.expenses,
-                      previous: previousSummary?.expenses,
-                      favorableWhenIncrease: false,
-                    ),
-                    FinancialMetricCard(
-                      key: const Key('margin-card'),
-                      width: cardWidth,
-                      label: 'Profit Margin',
-                      value: formatPercent(current.profitMargin),
-                      current: current.profitMargin,
-                      previous: previousSummary?.profitMargin,
-                    ),
-                  ],
-                );
-              },
-            ),
-            const SizedBox(height: 8),
-            const Text(
-              'Estimated from recorded revenue and expenses for this period.',
+            const SizedBox(height: FundWellTokens.space6),
+            _FinancialComparisonCard(
+              current: current,
+              previous: previousSummary,
             ),
           ] else if (!noSources) ...[
             Text(
@@ -398,6 +332,10 @@ class _DashboardContent extends StatelessWidget {
                   ? 'Sales recorded from your connected revenue source.'
                   : 'Revenue recorded for this period.',
             ),
+          ],
+          if (availability.profitability) ...[
+            const SizedBox(height: FundWellTokens.space6),
+            const NeedsAttentionPreview(),
           ],
           if (availability.bank && dashboard.bank != null) ...[
             const SizedBox(height: 28),
@@ -422,7 +360,7 @@ class _DashboardContent extends StatelessWidget {
             ),
           ],
           if (availability.expenses && breakdown.isNotEmpty) ...[
-            const SizedBox(height: 28),
+            const SizedBox(height: FundWellTokens.space6),
             Text(
               'Where your recorded expenses went',
               style: Theme.of(
@@ -445,7 +383,7 @@ class _DashboardContent extends StatelessWidget {
             ),
           ],
           if (availability.profitability) ...[
-            const SizedBox(height: 28),
+            const SizedBox(height: FundWellTokens.space6),
             Text(
               'Key Costs',
               style: Theme.of(
@@ -492,6 +430,241 @@ String _missingProfitMessage(DashboardAvailability value) {
     return 'More complete cost data is needed before profit and margins can be estimated.';
   }
   return 'More complete financial data is needed before profit can be estimated.';
+}
+
+class _DashboardMetricGrid extends StatelessWidget {
+  const _DashboardMetricGrid({required this.current, required this.previous});
+
+  final DashboardSummary current;
+  final DashboardSummary? previous;
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) {
+      // The desktop navigation rail leaves roughly 976 logical pixels of
+      // content at a 1280-wide browser. Keep the KPI row desktop-oriented at
+      // that common viewport while tablet content remains two-column.
+      final desktop = constraints.maxWidth >= 900;
+      final tablet = constraints.maxWidth >= 620;
+      final columns = desktop ? 4 : 2;
+      final gap = FundWellTokens.space3;
+      final width = (constraints.maxWidth - gap * (columns - 1)) / columns;
+      final profit = _PremiumMetricCard(
+        key: const Key('profit-card'),
+        width: desktop || tablet ? width : constraints.maxWidth,
+        label: 'Estimated Profit',
+        value: formatCurrency(current.estimatedProfit),
+        current: current.estimatedProfit,
+        previous: previous?.estimatedProfit,
+        featured: true,
+      );
+      final revenue = _PremiumMetricCard(
+        key: const Key('revenue-card'),
+        width: width,
+        label: 'Revenue',
+        value: formatCurrency(current.revenue),
+        current: current.revenue,
+        previous: previous?.revenue,
+      );
+      final expenses = _PremiumMetricCard(
+        key: const Key('expenses-card'),
+        width: width,
+        label: 'Expenses',
+        value: formatCurrency(current.expenses),
+        current: current.expenses,
+        previous: previous?.expenses,
+        favorableWhenIncrease: false,
+      );
+      final margin = _PremiumMetricCard(
+        key: const Key('margin-card'),
+        width: desktop ? width : (tablet ? width : constraints.maxWidth),
+        label: 'Profit margin',
+        value: formatPercent(current.profitMargin),
+        current: current.profitMargin,
+        previous: previous?.profitMargin,
+      );
+      return Wrap(
+        spacing: gap,
+        runSpacing: gap,
+        children: desktop
+            ? [revenue, expenses, profit, margin]
+            : [profit, revenue, expenses, margin],
+      );
+    },
+  );
+}
+
+class _PremiumMetricCard extends StatelessWidget {
+  const _PremiumMetricCard({
+    required this.width,
+    required this.label,
+    required this.value,
+    required this.current,
+    required this.previous,
+    this.favorableWhenIncrease = true,
+    this.featured = false,
+    super.key,
+  });
+
+  final double width;
+  final String label;
+  final String value;
+  final double current;
+  final double? previous;
+  final bool favorableWhenIncrease;
+  final bool featured;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return SizedBox(
+      width: width,
+      child: Card(
+        color: featured ? scheme.primaryContainer : null,
+        child: Padding(
+          padding: const EdgeInsets.all(FundWellTokens.space4),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                label,
+                style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                  color: featured
+                      ? scheme.onPrimaryContainer.withValues(alpha: .75)
+                      : scheme.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: FundWellTokens.space2),
+              FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  value,
+                  style:
+                      (featured
+                              ? Theme.of(context).textTheme.headlineMedium
+                              : Theme.of(context).textTheme.titleLarge)
+                          ?.copyWith(
+                            fontWeight: FontWeight.w700,
+                            fontFeatures: const [FontFeature.tabularFigures()],
+                          ),
+                ),
+              ),
+              const SizedBox(height: FundWellTokens.space2),
+              PercentageChange(
+                current: current,
+                previous: previous,
+                favorableWhenIncrease: favorableWhenIncrease,
+                compact: true,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// This presents actual current/previous totals, rather than manufacturing a
+/// time series that the dashboard endpoint does not provide.
+class _FinancialComparisonCard extends StatelessWidget {
+  const _FinancialComparisonCard({
+    required this.current,
+    required this.previous,
+  });
+
+  final DashboardSummary current;
+  final DashboardSummary? previous;
+
+  @override
+  Widget build(BuildContext context) => Card(
+    child: Padding(
+      padding: const EdgeInsets.all(FundWellTokens.space4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'This period compared',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+          const SizedBox(height: FundWellTokens.space1),
+          Text(
+            'Revenue and expenses, using the selected reporting period.',
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: FundWellTokens.space4),
+          _ComparisonBar(
+            label: 'Revenue',
+            current: current.revenue,
+            previous: previous?.revenue,
+          ),
+          const SizedBox(height: FundWellTokens.space3),
+          _ComparisonBar(
+            label: 'Expenses',
+            current: current.expenses,
+            previous: previous?.expenses,
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+class _ComparisonBar extends StatelessWidget {
+  const _ComparisonBar({
+    required this.label,
+    required this.current,
+    required this.previous,
+  });
+
+  final String label;
+  final double current;
+  final double? previous;
+
+  @override
+  Widget build(BuildContext context) {
+    final maximum = math.max(current, previous ?? 0).abs();
+    final progress = maximum == 0 ? 0.0 : current.abs() / maximum;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(label, style: Theme.of(context).textTheme.labelLarge),
+            ),
+            Text(
+              formatCurrency(current),
+              style: const TextStyle(
+                fontWeight: FontWeight.w700,
+                fontFeatures: [FontFeature.tabularFigures()],
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: FundWellTokens.space2),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(99),
+          child: LinearProgressIndicator(
+            value: progress,
+            minHeight: 8,
+            backgroundColor: Theme.of(
+              context,
+            ).colorScheme.surfaceContainerHighest,
+          ),
+        ),
+        if (previous != null) ...[
+          const SizedBox(height: FundWellTokens.space1),
+          Text(
+            'Previous period ${formatCurrency(previous!)}',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        ],
+      ],
+    );
+  }
 }
 
 class _PrimaryAmountCard extends StatelessWidget {

@@ -165,9 +165,21 @@ void main() {
     expect(find.text('Estimated Profit'), findsOneWidget);
     expect(find.text('\$8,300'), findsOneWidget);
     expect(find.byKey(const Key('revenue-card')), findsOneWidget);
-    expect(find.text('\$94,200'), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('revenue-card')),
+        matching: find.text('\$94,200'),
+      ),
+      findsOneWidget,
+    );
     expect(find.byKey(const Key('expenses-card')), findsOneWidget);
-    expect(find.text('\$85,900'), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('expenses-card')),
+        matching: find.text('\$85,900'),
+      ),
+      findsOneWidget,
+    );
     expect(find.byKey(const Key('margin-card')), findsOneWidget);
     expect(find.text('8.8%'), findsOneWidget);
   });
@@ -178,7 +190,9 @@ void main() {
     await tester.pumpWidget(dashboardApp());
     await tester.pumpAndSettle();
 
-    await tester.drag(find.byType(ListView), const Offset(0, -450));
+    // The premium header adds a compact period comparison before the detail
+    // sections; scroll to the section rather than relying on its old offset.
+    await tester.drag(find.byType(ListView), const Offset(0, -850));
     await tester.pumpAndSettle();
     expect(find.text('Where your recorded expenses went'), findsOneWidget);
     expect(find.text('Labor'), findsOneWidget);
@@ -187,7 +201,7 @@ void main() {
     expect(find.text('Food'), findsOneWidget);
     expect(find.text('Rent'), findsOneWidget);
 
-    await tester.drag(find.byType(ListView), const Offset(0, -600));
+    await tester.drag(find.byType(ListView), const Offset(0, -700));
     await tester.pumpAndSettle();
     expect(find.text('Key Costs'), findsOneWidget);
     expect(find.byKey(const Key('food-cost-bar')), findsOneWidget);

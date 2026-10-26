@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../main.dart' show demoModeProvider;
 import '../dashboard/foundation.dart';
 import '../dashboard/home_screen.dart';
 import 'foundation.dart';
@@ -10,10 +11,13 @@ class InvoiceEmailScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final location = ref.watch(activeLocationProvider);
+    final demoMode = ref.watch(demoModeProvider);
     return Scaffold(
       appBar: AppBar(title: const Text('Invoice Email')),
       body: location == null
           ? const EmptyState(message: 'No restaurant locations available')
+          : demoMode
+          ? const _DemoInvoiceEmailState()
           : ref
                 .watch(invoiceEmailAddressProvider)
                 .when(
@@ -94,4 +98,39 @@ class InvoiceEmailScreen extends ConsumerWidget {
                 ),
     );
   }
+}
+
+class _DemoInvoiceEmailState extends StatelessWidget {
+  const _DemoInvoiceEmailState();
+
+  @override
+  Widget build(BuildContext context) => Center(
+    child: Padding(
+      padding: const EdgeInsets.all(24),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            Icons.mark_email_unread_outlined,
+            size: 40,
+            color: Theme.of(context).colorScheme.primary,
+          ),
+          const SizedBox(height: 16),
+          Text(
+            'Invoice email is available in a private account',
+            textAlign: TextAlign.center,
+            style: Theme.of(context).textTheme.titleLarge,
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'The public demo does not expose a forwarding address. Open Private Account from More to use your restaurant’s secure invoice email.',
+            textAlign: TextAlign.center,
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
 }

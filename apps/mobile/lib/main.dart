@@ -32,6 +32,7 @@ import 'features/auth/web_url_strategy_stub.dart'
     as web_url_strategy;
 import 'features/banking/plaid_link/plaid_link.dart';
 import 'features/responsive.dart';
+import 'features/design/fundwell_theme.dart';
 
 final AuthSessionStore storage = auth_store.createAuthSessionStore();
 const apiBaseUrl = String.fromEnvironment(
@@ -308,14 +309,14 @@ class _ProfitAppState extends ConsumerState<ProfitApp> {
     if (kIsWeb) {
       return MaterialApp.router(
         title: 'FundWell',
-        theme: ThemeData(useMaterial3: true),
+        theme: fundWellTheme(),
         routerConfig: webRouter,
       );
     }
     return MaterialApp(
       navigatorKey: navigatorKey,
       title: 'FundWell',
-      theme: ThemeData(useMaterial3: true),
+      theme: fundWellTheme(),
       home: AuthBootstrap(onReady: links.ready),
     );
   }

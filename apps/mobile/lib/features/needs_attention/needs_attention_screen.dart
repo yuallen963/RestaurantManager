@@ -10,6 +10,7 @@ import '../price_intelligence/price_changes_screen.dart';
 import '../vendors/vendors_screen.dart';
 import '../invoices/invoice_screens.dart';
 import '../banking/bank_screens.dart';
+import '../design/fundwell_theme.dart';
 import 'foundation.dart';
 
 class NeedsAttentionPreview extends ConsumerWidget {
@@ -22,7 +23,7 @@ class NeedsAttentionPreview extends ConsumerWidget {
       key: const Key('needs-attention-preview'),
       elevation: 0,
       child: Padding(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(FundWellTokens.space4),
         child: data.when(
           loading: () => const SizedBox(
             height: 72,
@@ -60,27 +61,41 @@ class NeedsAttentionPreview extends ConsumerWidget {
                   ),
                   Text(
                     '${result.summary.total} ${result.summary.total == 1 ? 'issue' : 'issues'}',
+                    style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                      color: result.summary.total == 0
+                          ? Theme.of(context).colorScheme.onSurfaceVariant
+                          : Theme.of(context).colorScheme.primary,
+                    ),
                   ),
                 ],
               ),
-              const SizedBox(height: 10),
+              const SizedBox(height: FundWellTokens.space2),
               if (result.items.isEmpty)
                 const Text('No major cost issues detected for this period.')
-              else
-                for (final item in result.items.take(3))
-                  _PreviewRow(item: item),
-              Align(
-                alignment: Alignment.centerRight,
-                child: TextButton(
-                  key: const Key('view-all-attention'),
-                  onPressed: () => Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => const NeedsAttentionScreen(),
+              else ...[
+                _PreviewRow(item: result.items.first),
+                if (result.summary.total > 1)
+                  Padding(
+                    padding: const EdgeInsets.only(top: FundWellTokens.space2),
+                    child: Text(
+                      '${result.summary.total - 1} more ${result.summary.total == 2 ? 'item' : 'items'} to review',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
                     ),
                   ),
-                  child: const Text('View All'),
+              ],
+              const SizedBox(height: FundWellTokens.space2),
+              TextButton.icon(
+                key: const Key('view-all-attention'),
+                onPressed: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => const NeedsAttentionScreen(),
+                  ),
                 ),
+                icon: const Icon(Icons.arrow_forward, size: 18),
+                label: const Text('Review attention items'),
               ),
             ],
           ),
@@ -95,24 +110,36 @@ class _PreviewRow extends StatelessWidget {
   final AttentionItem item;
 
   @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.only(bottom: 10),
-    child: Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        SeverityBadge(item.severity),
-        const SizedBox(width: 10),
-        Expanded(
-          child: Text(item.title, maxLines: 2, overflow: TextOverflow.ellipsis),
-        ),
-        if (item.estimatedMonthlyImpact != null) ...[
-          const SizedBox(width: 8),
-          Text(
-            '+${attentionCurrency(item.estimatedMonthlyImpact!)}/mo',
-            style: const TextStyle(fontWeight: FontWeight.w700),
+  Widget build(BuildContext context) => DecoratedBox(
+    decoration: BoxDecoration(
+      color: Theme.of(
+        context,
+      ).colorScheme.surfaceContainerHighest.withValues(alpha: .45),
+      borderRadius: BorderRadius.circular(FundWellTokens.radiusSmall),
+    ),
+    child: Padding(
+      padding: const EdgeInsets.all(FundWellTokens.space3),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SeverityBadge(item.severity),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              item.title,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
           ),
+          if (item.estimatedMonthlyImpact != null) ...[
+            const SizedBox(width: 8),
+            Text(
+              '+${attentionCurrency(item.estimatedMonthlyImpact!)}/mo',
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
+          ],
         ],
-      ],
+      ),
     ),
   );
 }

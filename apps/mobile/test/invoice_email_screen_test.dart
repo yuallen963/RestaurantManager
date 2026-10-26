@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:restaurant_profit_mobile/features/dashboard/foundation.dart';
 import 'package:restaurant_profit_mobile/features/invoice_email/foundation.dart';
 import 'package:restaurant_profit_mobile/features/invoice_email/invoice_email_screen.dart';
+import 'package:restaurant_profit_mobile/main.dart' show demoModeProvider;
 
 const location = RestaurantLocation(
   id: 'loc-a',
@@ -53,6 +54,27 @@ class FakeInvoiceEmailActions extends InvoiceEmailActions {
 }
 
 void main() {
+  testWidgets('explains that forwarding addresses are private in demo mode', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          activeLocationProvider.overrideWithValue(location),
+          demoModeProvider.overrideWithValue(true),
+        ],
+        child: const MaterialApp(home: InvoiceEmailScreen()),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.text('Invoice email is available in a private account'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('does not expose'), findsOneWidget);
+    expect(find.text('Retry'), findsNothing);
+  });
+
   testWidgets('renders forwarding address and instructions', (tester) async {
     await tester.pumpWidget(
       ProviderScope(
