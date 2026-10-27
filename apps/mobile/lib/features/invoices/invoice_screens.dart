@@ -5,8 +5,10 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../main.dart' show demoModeProvider;
 import '../dashboard/foundation.dart';
 import '../dashboard/home_screen.dart' show formatCurrency;
+import '../design/fundwell_theme.dart';
 import '../expenses/foundation.dart';
 import '../needs_attention/foundation.dart';
 import '../price_intelligence/foundation.dart';
@@ -14,19 +16,36 @@ import 'foundation.dart';
 import 'invoice_upload.dart';
 import '../responsive.dart';
 
-class InvoiceListScreen extends ConsumerWidget {
+class InvoiceListScreen extends ConsumerStatefulWidget {
   const InvoiceListScreen({super.key});
+
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<InvoiceListScreen> createState() => _InvoiceListScreenState();
+}
+
+class _InvoiceListScreenState extends ConsumerState<InvoiceListScreen> {
+  final searchController = TextEditingController();
+  String search = '';
+  String status = 'ALL';
+
+  @override
+  void dispose() {
+    searchController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final location = ref.watch(activeLocationProvider);
     final invoices = ref.watch(invoiceListProvider);
+    final readOnly = ref.watch(demoModeProvider);
     void openUpload() => Navigator.push(
       context,
       MaterialPageRoute(builder: (_) => const InvoiceUploadScreen()),
     );
     return Scaffold(
       appBar: AppBar(title: const Text('Invoices')),
-      floatingActionButton: location == null
+      floatingActionButton: location == null || readOnly
           ? null
           : FloatingActionButton.extended(
               key: const Key('upload-invoice'),
@@ -64,45 +83,361 @@ class InvoiceListScreen extends ConsumerWidget {
                     ),
                   ),
                   const SizedBox(height: 12),
-                  FilledButton(
-                    onPressed: location == null ? null : openUpload,
-                    child: const Text('Upload Invoice'),
-                  ),
+                  if (!readOnly)
+                    FilledButton(
+                      onPressed: location == null ? null : openUpload,
+                      child: const Text('Upload Invoice'),
+                    )
+                  else
+                    const _DemoInvoiceNotice(),
                 ],
               ),
             );
           }
+          final visible = items.where((invoice) {
+            final query = search.trim().toLowerCase();
+            final matchesSearch =
+                query.isEmpty ||
+                (invoice.vendorName ?? '').toLowerCase().contains(query) ||
+                (invoice.invoiceNumber ?? '').toLowerCase().contains(query) ||
+                invoice.fileName.toLowerCase().contains(query);
+            final matchesStatus =
+                status == 'ALL' ||
+                (status == 'NEEDS_REVIEW'
+                    ? invoice.reviewStatus != 'REVIEWED'
+                    : invoice.reviewStatus == 'REVIEWED');
+            return matchesSearch && matchesStatus;
+          }).toList();
           return RefreshIndicator(
             onRefresh: () async => ref.refresh(invoiceListProvider.future),
             child: ResponsiveContent(
-              child: ListView.builder(
-                padding: const EdgeInsets.all(16),
-                itemCount: items.length,
-                itemBuilder: (_, index) {
-                  final invoice = items[index];
-                  return Card(
-                    child: ListTile(
-                      title: Text(invoice.vendorName ?? invoice.fileName),
-                      subtitle: Text(
-                        '${invoice.ingestionSource == 'EMAIL_FORWARD' ? 'Email' : 'Manual Upload'} • ${_date(invoice.invoiceDate ?? invoice.createdAt)}\n'
-                        '${invoice.total == null ? 'Total not entered' : formatCurrency(invoice.total!)} • ${invoice.paymentStatus == 'PAID' ? 'Paid' : 'Awaiting payment'}',
-                      ),
-                      isThreeLine: true,
-                      trailing: Chip(label: Text(_status(invoice.status))),
-                      onTap: () => Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) =>
-                              InvoiceDetailScreen(invoiceId: invoice.id),
+              maxWidth: 1240,
+              child: ListView(
+                padding: const EdgeInsets.all(FundWellTokens.space6),
+                children: [
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Invoice activity',
+                              style: Theme.of(context).textTheme.headlineSmall,
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              'Review vendor bills, extracted details, and expense status.',
+                              style: Theme.of(context).textTheme.bodyMedium
+                                  ?.copyWith(
+                                    color: Theme.of(
+                                      context,
+                                    ).colorScheme.onSurfaceVariant,
+                                  ),
+                            ),
+                          ],
                         ),
                       ),
+                      if (readOnly) const _ReadOnlyChip(),
+                    ],
+                  ),
+                  if (readOnly) ...[
+                    const SizedBox(height: FundWellTokens.space4),
+                    const _DemoInvoiceNotice(),
+                  ],
+                  const SizedBox(height: FundWellTokens.space4),
+                  LayoutBuilder(
+                    builder: (context, constraints) => Wrap(
+                      spacing: FundWellTokens.space2,
+                      runSpacing: FundWellTokens.space2,
+                      children: [
+                        SizedBox(
+                          width: constraints.maxWidth < 700
+                              ? constraints.maxWidth
+                              : 420,
+                          child: TextField(
+                            key: const Key('invoice-search'),
+                            controller: searchController,
+                            onChanged: (value) =>
+                                setState(() => search = value),
+                            decoration: const InputDecoration(
+                              hintText: 'Search vendor or invoice number',
+                              prefixIcon: Icon(Icons.search),
+                            ),
+                          ),
+                        ),
+                        SegmentedButton<String>(
+                          segments: const [
+                            ButtonSegment(value: 'ALL', label: Text('All')),
+                            ButtonSegment(
+                              value: 'NEEDS_REVIEW',
+                              label: Text('Needs Review'),
+                            ),
+                            ButtonSegment(
+                              value: 'REVIEWED',
+                              label: Text('Reviewed'),
+                            ),
+                          ],
+                          selected: {status},
+                          onSelectionChanged: (value) =>
+                              setState(() => status = value.first),
+                        ),
+                      ],
                     ),
-                  );
-                },
+                  ),
+                  const SizedBox(height: FundWellTokens.space4),
+                  if (visible.isEmpty)
+                    const _InvoiceFilteredEmptyState()
+                  else
+                    LayoutBuilder(
+                      builder: (context, constraints) => Column(
+                        children: [
+                          if (constraints.maxWidth >= 900)
+                            const _InvoiceTableHeader(),
+                          for (final invoice in visible) ...[
+                            _InvoiceRow(
+                              invoice: invoice,
+                              desktop: constraints.maxWidth >= 900,
+                              onTap: () => Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => InvoiceDetailScreen(
+                                    invoiceId: invoice.id,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                          ],
+                        ],
+                      ),
+                    ),
+                ],
               ),
             ),
           );
         },
+      ),
+    );
+  }
+}
+
+class _ReadOnlyChip extends StatelessWidget {
+  const _ReadOnlyChip();
+  @override
+  Widget build(BuildContext context) => const Chip(
+    avatar: Icon(Icons.visibility_outlined, size: 17),
+    label: Text('Demo · View only'),
+  );
+}
+
+class _DemoInvoiceNotice extends StatelessWidget {
+  const _DemoInvoiceNotice();
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.all(16),
+    decoration: BoxDecoration(
+      color: FundWellTokens.surfaceSubtle,
+      borderRadius: BorderRadius.circular(FundWellTokens.radius),
+      border: Border.all(color: FundWellTokens.outline),
+    ),
+    child: const Row(
+      children: [
+        Icon(Icons.visibility_outlined, size: 20),
+        SizedBox(width: 12),
+        Expanded(
+          child: Text(
+            'Public demo is view only. Browse invoices and extracted details; uploads and financial changes are disabled.',
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+class _InvoiceFilteredEmptyState extends StatelessWidget {
+  const _InvoiceFilteredEmptyState();
+  @override
+  Widget build(BuildContext context) => const Card(
+    child: Padding(
+      padding: EdgeInsets.all(32),
+      child: Center(child: Text('No invoices match these filters.')),
+    ),
+  );
+}
+
+class _InvoiceTableHeader extends StatelessWidget {
+  const _InvoiceTableHeader();
+  @override
+  Widget build(BuildContext context) => const Padding(
+    padding: EdgeInsets.fromLTRB(18, 0, 18, 8),
+    child: Row(
+      children: [
+        Expanded(flex: 4, child: Text('VENDOR / INVOICE')),
+        Expanded(flex: 2, child: Text('INVOICE DATE')),
+        Expanded(flex: 2, child: Text('STATUS')),
+        SizedBox(width: 140, child: Text('AMOUNT', textAlign: TextAlign.right)),
+        SizedBox(width: 28),
+      ],
+    ),
+  );
+}
+
+class _InvoiceRow extends StatelessWidget {
+  const _InvoiceRow({
+    required this.invoice,
+    required this.desktop,
+    required this.onTap,
+  });
+  final InvoiceRecord invoice;
+  final bool desktop;
+  final VoidCallback onTap;
+
+  String get vendor => invoice.vendorName ?? invoice.fileName;
+  String get source =>
+      invoice.ingestionSource == 'EMAIL_FORWARD' ? 'Email' : 'Manual Upload';
+
+  @override
+  Widget build(BuildContext context) {
+    final statusLabel = invoice.reviewStatus == 'REVIEWED'
+        ? 'Reviewed'
+        : invoice.extractionStatus == 'COMPLETED'
+        ? 'Needs Review'
+        : _status(invoice.status);
+    final identifier = invoice.invoiceNumber == null
+        ? '$source • ${_date(invoice.invoiceDate ?? invoice.createdAt)}'
+        : 'Invoice ${invoice.invoiceNumber} · $source';
+    return Card(
+      child: InkWell(
+        borderRadius: BorderRadius.circular(FundWellTokens.radius),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+          child: desktop
+              ? Row(
+                  children: [
+                    Expanded(
+                      flex: 4,
+                      child: _InvoiceIdentity(
+                        vendor: vendor,
+                        detail: identifier,
+                      ),
+                    ),
+                    Expanded(
+                      flex: 2,
+                      child: Text(
+                        _date(invoice.invoiceDate ?? invoice.createdAt),
+                      ),
+                    ),
+                    Expanded(
+                      flex: 2,
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: _InvoiceStatus(label: statusLabel),
+                      ),
+                    ),
+                    SizedBox(
+                      width: 140,
+                      child: Text(
+                        invoice.total == null
+                            ? 'Total not entered'
+                            : formatCurrency(invoice.total!),
+                        textAlign: TextAlign.right,
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    const Icon(Icons.chevron_right, size: 20),
+                  ],
+                )
+              : Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: _InvoiceIdentity(
+                            vendor: vendor,
+                            detail: identifier,
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Text(
+                          invoice.total == null
+                              ? '—'
+                              : formatCurrency(invoice.total!),
+                          style: Theme.of(context).textTheme.titleMedium,
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    Wrap(
+                      spacing: 10,
+                      runSpacing: 8,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        _InvoiceStatus(label: statusLabel),
+                        Text(_date(invoice.invoiceDate ?? invoice.createdAt)),
+                        Text(
+                          invoice.paymentStatus == 'PAID'
+                              ? 'Paid'
+                              : 'Awaiting payment',
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+        ),
+      ),
+    );
+  }
+}
+
+class _InvoiceIdentity extends StatelessWidget {
+  const _InvoiceIdentity({required this.vendor, required this.detail});
+  final String vendor, detail;
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Text(
+        vendor,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: Theme.of(context).textTheme.titleMedium,
+      ),
+      Text(
+        detail,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+          color: Theme.of(context).colorScheme.onSurfaceVariant,
+        ),
+      ),
+    ],
+  );
+}
+
+class _InvoiceStatus extends StatelessWidget {
+  const _InvoiceStatus({required this.label});
+  final String label;
+  @override
+  Widget build(BuildContext context) {
+    final needsReview = label == 'Needs Review';
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+      decoration: BoxDecoration(
+        color: needsReview ? const Color(0xFFFFF4DF) : const Color(0xFFEAF6F0),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        label,
+        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+          color: needsReview ? FundWellTokens.warning : FundWellTokens.positive,
+          fontWeight: FontWeight.w700,
+        ),
       ),
     );
   }
@@ -374,136 +709,273 @@ class InvoiceDetailScreen extends ConsumerWidget {
           error: (_, _) => const Center(child: Text('Unable to load invoice')),
           data: (invoice) {
             final extractionState = ref.watch(invoiceExtractionProvider);
-            final rows = <MapEntry<String, String>>[
-              MapEntry(
-                'Source',
-                invoice.ingestionSource == 'EMAIL_FORWARD'
-                    ? 'Email'
-                    : 'Manual Upload',
-              ),
-              MapEntry('Vendor', invoice.vendorName ?? 'Not selected'),
-              MapEntry(
-                'Invoice number',
-                invoice.invoiceNumber ?? 'Not entered',
-              ),
-              MapEntry(
-                'Invoice date',
-                invoice.invoiceDate == null
-                    ? 'Not entered'
-                    : _date(invoice.invoiceDate!),
-              ),
-              MapEntry(
-                'Subtotal',
-                invoice.subtotal == null
-                    ? 'Not entered'
-                    : formatCurrency(invoice.subtotal!),
-              ),
-              MapEntry(
-                'Tax',
-                invoice.tax == null
-                    ? 'Not entered'
-                    : formatCurrency(invoice.tax!),
-              ),
-              MapEntry(
-                'Total',
-                invoice.total == null
-                    ? 'Not entered'
-                    : formatCurrency(invoice.total!),
-              ),
-              MapEntry('File', invoice.fileName),
-              MapEntry('File type', invoice.fileType),
-              MapEntry('File size', _size(invoice.fileSize)),
-              MapEntry('Uploaded', _date(invoice.createdAt)),
-              MapEntry('Status', _status(invoice.status)),
-              MapEntry('Extraction', _status(invoice.extractionStatus)),
-              MapEntry('Review', _status(invoice.reviewStatus)),
-              MapEntry('Notes', invoice.notes ?? 'None'),
-            ];
-            return ListView(
-              padding: const EdgeInsets.all(20),
-              children: [
-                _ReconciliationWarning(reconciliation: invoice.reconciliation),
-                for (final row in rows)
-                  ListTile(title: Text(row.key), subtitle: Text(row.value)),
-                if (invoice.extractionStatus == 'PROCESSING') ...[
-                  const LinearProgressIndicator(),
-                  const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 12),
-                    child: Text('Processing invoice extraction...'),
-                  ),
-                ],
-                if (invoice.extractionStatus == 'FAILED') ...[
-                  Text(
-                    invoice.extractionError ??
-                        'Unable to process this invoice. Retry or enter the fields manually.',
-                    style: TextStyle(
-                      color: Theme.of(context).colorScheme.error,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                ],
-                if (extractionState.hasError) ...[
-                  Text(
-                    'Unable to start extraction. Check the service configuration and try again later.',
-                    style: TextStyle(
-                      color: Theme.of(context).colorScheme.error,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                ],
-                if (invoice.extractionStatus == 'NOT_STARTED' ||
-                    (invoice.extractionStatus == 'FAILED' &&
-                        invoice.canRetryExtraction))
-                  FilledButton.icon(
-                    onPressed: extractionState.isLoading
-                        ? null
-                        : () => ref
-                              .read(invoiceExtractionProvider.notifier)
-                              .extract(invoice.id),
-                    icon: const Icon(Icons.document_scanner_outlined),
-                    label: Text(
-                      invoice.extractionStatus == 'FAILED'
-                          ? 'Retry Extraction'
-                          : 'Extract Invoice',
-                    ),
-                  ),
-                if (invoice.extractionStatus == 'COMPLETED')
-                  FilledButton.icon(
-                    onPressed: () async {
-                      await Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) =>
-                              InvoiceReviewScreen(invoiceId: invoice.id),
+            final readOnly = ref.watch(demoModeProvider);
+            return ResponsiveContent(
+              maxWidth: 1120,
+              child: ListView(
+                padding: const EdgeInsets.all(FundWellTokens.space6),
+                children: [
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              invoice.vendorName ?? 'Invoice details',
+                              style: Theme.of(context).textTheme.headlineSmall,
+                            ),
+                            Text(
+                              invoice.invoiceNumber == null
+                                  ? invoice.fileName
+                                  : 'Invoice ${invoice.invoiceNumber}',
+                              style: Theme.of(context).textTheme.bodyMedium
+                                  ?.copyWith(
+                                    color: Theme.of(
+                                      context,
+                                    ).colorScheme.onSurfaceVariant,
+                                  ),
+                            ),
+                          ],
                         ),
-                      );
-                      ref.invalidate(invoiceDetailProvider(invoiceId));
-                    },
-                    icon: const Icon(Icons.fact_check_outlined),
-                    label: Text(
-                      invoice.reviewStatus == 'REVIEWED'
-                          ? 'View Reviewed Invoice'
-                          : 'Review Extracted Invoice',
+                      ),
+                      if (readOnly) const _ReadOnlyChip(),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  if (readOnly) ...[
+                    const _DemoInvoiceNotice(),
+                    const SizedBox(height: 16),
+                  ],
+                  _ReconciliationWarning(
+                    reconciliation: invoice.reconciliation,
+                  ),
+                  Card(
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Invoice overview',
+                            style: Theme.of(context).textTheme.titleLarge,
+                          ),
+                          const SizedBox(height: 16),
+                          Wrap(
+                            spacing: 28,
+                            runSpacing: 18,
+                            children: [
+                              _InvoiceDetailField(
+                                label: 'Source',
+                                value:
+                                    invoice.ingestionSource == 'EMAIL_FORWARD'
+                                    ? 'Email'
+                                    : 'Manual Upload',
+                              ),
+                              _InvoiceDetailField(
+                                label: 'Invoice number',
+                                value: invoice.invoiceNumber ?? 'Not entered',
+                              ),
+                              _InvoiceDetailField(
+                                label: 'Invoice date',
+                                value: invoice.invoiceDate == null
+                                    ? 'Not entered'
+                                    : _date(invoice.invoiceDate!),
+                              ),
+                              if (invoice.dueDate != null)
+                                _InvoiceDetailField(
+                                  label: 'Due date',
+                                  value: _date(invoice.dueDate!),
+                                ),
+                              _InvoiceDetailField(
+                                label: 'Status',
+                                value: _status(invoice.status),
+                              ),
+                              _InvoiceDetailField(
+                                label: 'Review',
+                                value: _status(invoice.reviewStatus),
+                              ),
+                            ],
+                          ),
+                          const Divider(height: 32),
+                          Wrap(
+                            spacing: 32,
+                            runSpacing: 18,
+                            children: [
+                              _InvoiceDetailField(
+                                label: 'Subtotal',
+                                value: invoice.subtotal == null
+                                    ? 'Not entered'
+                                    : formatCurrency(invoice.subtotal!),
+                              ),
+                              _InvoiceDetailField(
+                                label: 'Tax',
+                                value: invoice.tax == null
+                                    ? 'Not entered'
+                                    : formatCurrency(invoice.tax!),
+                              ),
+                              _InvoiceDetailField(
+                                label: 'Total',
+                                value: invoice.total == null
+                                    ? 'Not entered'
+                                    : formatCurrency(invoice.total!),
+                                emphasized: true,
+                              ),
+                              _InvoiceDetailField(
+                                label: 'Payment status',
+                                value: invoice.paymentStatus == 'PAID'
+                                    ? 'Paid'
+                                    : 'Awaiting payment',
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
                     ),
                   ),
-                const SizedBox(height: 16),
-                FilledButton(
-                  onPressed: () async {
-                    await Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => InvoiceEditScreen(invoice: invoice),
+                  const SizedBox(height: 12),
+                  if (invoice.extractionStatus == 'PROCESSING') ...[
+                    const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 12),
+                      child: Row(
+                        children: [
+                          Icon(Icons.hourglass_top_outlined, size: 20),
+                          SizedBox(width: 8),
+                          Text('Processing invoice extraction...'),
+                        ],
                       ),
-                    );
-                    ref.invalidate(invoiceDetailProvider(invoiceId));
-                  },
-                  child: const Text('Edit Metadata'),
-                ),
-                OutlinedButton(
-                  onPressed: () => _delete(context, ref, invoice),
-                  child: const Text('Delete Invoice'),
-                ),
-              ],
+                    ),
+                  ],
+                  if (invoice.extractionStatus == 'FAILED') ...[
+                    Text(
+                      invoice.extractionError ??
+                          'Unable to process this invoice. Retry or enter the fields manually.',
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.error,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                  ],
+                  if (extractionState.hasError) ...[
+                    Text(
+                      'Unable to start extraction. Check the service configuration and try again later.',
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.error,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                  ],
+                  if (!readOnly &&
+                      (invoice.extractionStatus == 'NOT_STARTED' ||
+                          (invoice.extractionStatus == 'FAILED' &&
+                              invoice.canRetryExtraction)))
+                    FilledButton.icon(
+                      onPressed: extractionState.isLoading
+                          ? null
+                          : () => ref
+                                .read(invoiceExtractionProvider.notifier)
+                                .extract(invoice.id),
+                      icon: const Icon(Icons.document_scanner_outlined),
+                      label: Text(
+                        invoice.extractionStatus == 'FAILED'
+                            ? 'Retry Extraction'
+                            : 'Extract Invoice',
+                      ),
+                    ),
+                  if (invoice.extractionStatus == 'COMPLETED')
+                    FilledButton.icon(
+                      onPressed: () async {
+                        await Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) =>
+                                InvoiceReviewScreen(invoiceId: invoice.id),
+                          ),
+                        );
+                        ref.invalidate(invoiceDetailProvider(invoiceId));
+                      },
+                      icon: const Icon(Icons.fact_check_outlined),
+                      label: Text(
+                        readOnly || invoice.reviewStatus == 'REVIEWED'
+                            ? 'View Reviewed Invoice'
+                            : 'Review Extracted Invoice',
+                      ),
+                    ),
+                  const SizedBox(height: 16),
+                  Card(
+                    child: Padding(
+                      padding: const EdgeInsets.all(20),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Original document',
+                            style: Theme.of(context).textTheme.titleLarge,
+                          ),
+                          const SizedBox(height: 12),
+                          _InvoiceDetailField(
+                            label: 'File',
+                            value: invoice.fileName,
+                            width: 320,
+                          ),
+                          const SizedBox(height: 12),
+                          Wrap(
+                            spacing: 24,
+                            runSpacing: 12,
+                            children: [
+                              _InvoiceDetailField(
+                                label: 'File type',
+                                value: invoice.fileType,
+                                width: 240,
+                              ),
+                              _InvoiceDetailField(
+                                label: 'File size',
+                                value: _size(invoice.fileSize),
+                              ),
+                              _InvoiceDetailField(
+                                label: 'Uploaded',
+                                value: _date(invoice.createdAt),
+                              ),
+                              _InvoiceDetailField(
+                                label: 'Extraction',
+                                value: _status(invoice.extractionStatus),
+                              ),
+                            ],
+                          ),
+                          if (invoice.notes != null) ...[
+                            const Divider(height: 28),
+                            _InvoiceDetailField(
+                              label: 'Notes',
+                              value: invoice.notes!,
+                              width: 320,
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ),
+                  if (!readOnly) ...[
+                    const SizedBox(height: 16),
+                    FilledButton(
+                      onPressed: () async {
+                        await Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => InvoiceEditScreen(invoice: invoice),
+                          ),
+                        );
+                        ref.invalidate(invoiceDetailProvider(invoiceId));
+                      },
+                      child: const Text('Edit Metadata'),
+                    ),
+                    OutlinedButton(
+                      onPressed: () => _delete(context, ref, invoice),
+                      child: const Text('Delete Invoice'),
+                    ),
+                  ],
+                ],
+              ),
             );
           },
         ),
@@ -539,6 +1011,74 @@ class InvoiceDetailScreen extends ConsumerWidget {
   }
 }
 
+class _InvoiceDetailField extends StatelessWidget {
+  const _InvoiceDetailField({
+    required this.label,
+    required this.value,
+    this.emphasized = false,
+    this.width,
+  });
+  final String label, value;
+  final bool emphasized;
+  final double? width;
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+    width: width ?? (emphasized ? 180 : 170),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+          ),
+        ),
+        const SizedBox(height: 3),
+        Text(
+          value,
+          style: emphasized
+              ? Theme.of(context).textTheme.headlineSmall
+              : Theme.of(context).textTheme.titleMedium,
+        ),
+      ],
+    ),
+  );
+}
+
+class _ReviewFieldTile extends StatelessWidget {
+  const _ReviewFieldTile({
+    required this.label,
+    required this.value,
+    this.emphasized = false,
+  });
+  final String label, value;
+  final bool emphasized;
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+    width: 220,
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          value,
+          style: emphasized
+              ? Theme.of(context).textTheme.titleLarge
+              : Theme.of(context).textTheme.titleSmall,
+        ),
+      ],
+    ),
+  );
+}
+
 class InvoiceReviewScreen extends ConsumerWidget {
   const InvoiceReviewScreen({required this.invoiceId, super.key});
   final String invoiceId;
@@ -547,6 +1087,7 @@ class InvoiceReviewScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final invoice = ref.watch(invoiceDetailProvider(invoiceId));
     final lineItems = ref.watch(invoiceLineItemsProvider(invoiceId));
+    final readOnly = ref.watch(demoModeProvider);
     return Scaffold(
       appBar: AppBar(title: const Text('Review Invoice')),
       body: invoice.when(
@@ -567,277 +1108,314 @@ class InvoiceReviewScreen extends ConsumerWidget {
                   .where((item) => item.lowConfidence)
                   .map((item) => item.id),
             ].length;
-            return ListView(
-              padding: const EdgeInsets.all(16),
-              children: [
-                _ReconciliationWarning(reconciliation: data.reconciliation),
-                Card(
-                  color: issueCount > 0
-                      ? Theme.of(context).colorScheme.errorContainer
-                      : Theme.of(context).colorScheme.primaryContainer,
-                  child: ListTile(
-                    leading: Icon(
-                      issueCount > 0
-                          ? Icons.warning_amber
-                          : Icons.check_circle_outline,
-                    ),
-                    title: Text(
-                      data.reviewStatus == 'REVIEWED'
-                          ? 'Reviewed'
-                          : issueCount > 0
-                          ? 'Needs review'
-                          : 'Ready for review',
-                    ),
-                    subtitle: Text(
-                      issueCount == 1
-                          ? '1 field needs attention'
-                          : '$issueCount fields need attention',
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                Text(
-                  'Invoice Summary',
-                  style: Theme.of(context).textTheme.titleLarge,
-                ),
-                ListTile(
-                  title: const Text('Vendor'),
-                  subtitle: Text(
-                    _reviewFieldValue(
-                      data,
-                      'vendorName',
-                      data.vendorName,
-                      data.uncertainFields.contains('vendorName'),
-                    ),
-                  ),
-                ),
-                if (data.vendorAddress != null)
-                  ListTile(
-                    title: const Text('Vendor address'),
-                    subtitle: Text(data.vendorAddress!),
-                  ),
-                ListTile(
-                  title: const Text('Invoice number'),
-                  subtitle: Text(
-                    _reviewFieldValue(
-                      data,
-                      'invoiceNumber',
-                      data.invoiceNumber,
-                      data.uncertainFields.contains('invoiceNumber'),
-                    ),
-                  ),
-                ),
-                ListTile(
-                  title: const Text('Invoice date'),
-                  subtitle: Text(
-                    _reviewFieldValue(
-                      data,
-                      'invoiceDate',
-                      data.invoiceDate == null
-                          ? null
-                          : _date(data.invoiceDate!),
-                      data.uncertainFields.contains('invoiceDate'),
-                    ),
-                  ),
-                ),
-                if (data.dueDate != null)
-                  ListTile(
-                    title: const Text('Due date'),
-                    subtitle: Text(
-                      _reviewFieldValue(
-                        data,
-                        'dueDate',
-                        _date(data.dueDate!),
-                        data.uncertainFields.contains('dueDate'),
-                      ),
-                    ),
-                  ),
-                ListTile(
-                  title: const Text('Subtotal'),
-                  subtitle: Text(
-                    _reviewFieldValue(
-                      data,
-                      'subtotal',
-                      data.subtotal == null
-                          ? null
-                          : formatCurrency(data.subtotal!),
-                      data.uncertainFields.contains('subtotal'),
-                    ),
-                  ),
-                ),
-                ListTile(
-                  title: const Text('Tax'),
-                  subtitle: Text(
-                    _reviewFieldValue(
-                      data,
-                      'tax',
-                      data.tax == null ? null : formatCurrency(data.tax!),
-                      data.uncertainFields.contains('tax'),
-                    ),
-                  ),
-                ),
-                ListTile(
-                  title: const Text('Total'),
-                  subtitle: Text(
-                    _reviewFieldValue(
-                      data,
-                      'total',
-                      data.total == null ? null : formatCurrency(data.total!),
-                      data.uncertainFields.contains('total'),
-                    ),
-                  ),
-                ),
-                ListTile(
-                  title: const Text('Other fees'),
-                  subtitle: Text(
-                    _reviewFieldValue(
-                      data,
-                      'otherFees',
-                      data.otherFees == null
-                          ? null
-                          : formatCurrency(data.otherFees!),
-                      data.uncertainFields.contains('otherFees'),
-                    ),
-                  ),
-                ),
-                ListTile(
-                  title: const Text('Discount'),
-                  subtitle: Text(
-                    _reviewFieldValue(
-                      data,
-                      'discount',
-                      data.discount == null
-                          ? null
-                          : formatCurrency(data.discount!),
-                      data.uncertainFields.contains('discount'),
-                    ),
-                  ),
-                ),
-                ListTile(
-                  title: const Text('Currency'),
-                  subtitle: Text(
-                    _reviewFieldValue(
-                      data,
-                      'currency',
-                      data.currency,
-                      data.uncertainFields.contains('currency'),
-                    ),
-                  ),
-                ),
-                if (data.extractionConfidence != null)
-                  ListTile(
-                    title: const Text('Extraction confidence'),
-                    subtitle: Text(
-                      '${(data.extractionConfidence! * 100).toStringAsFixed(0)}%',
-                    ),
-                  ),
-                if (data.reviewStatus != 'REVIEWED')
-                  OutlinedButton.icon(
-                    onPressed: () async {
-                      await Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => InvoiceEditScreen(
-                            invoice: data,
-                            reviewMode: true,
-                          ),
-                        ),
-                      );
-                      ref.invalidate(invoiceDetailProvider(invoiceId));
-                    },
-                    icon: const Icon(Icons.edit_outlined),
-                    label: const Text('Edit Invoice Fields'),
-                  ),
-                const Divider(height: 32),
-                Text(
-                  'Extracted Line Items',
-                  style: Theme.of(context).textTheme.titleLarge,
-                ),
-                if (items.isEmpty)
-                  const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 20),
-                    child: Text('No line items were extracted.'),
-                  ),
-                for (final item in items)
-                  Card(
-                    color: item.lowConfidence
-                        ? Theme.of(context).colorScheme.errorContainer
-                        : null,
-                    child: InkWell(
-                      onTap: data.reviewStatus == 'REVIEWED'
-                          ? null
-                          : () => _editLine(context, ref, data, item),
-                      child: Padding(
-                        padding: const EdgeInsets.all(16),
+            return ResponsiveContent(
+              maxWidth: 1040,
+              child: ListView(
+                padding: const EdgeInsets.all(FundWellTokens.space6),
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: Text(
-                                    item.rawDescription,
-                                    style: Theme.of(
-                                      context,
-                                    ).textTheme.titleMedium,
-                                  ),
-                                ),
-                                if (data.reviewStatus != 'REVIEWED')
-                                  const Icon(Icons.edit_outlined),
-                              ],
-                            ),
-                            const SizedBox(height: 8),
                             Text(
-                              [
-                                if (item.normalizedName != null)
-                                  'Interpreted as: ${item.normalizedName}',
-                                if (item.sku != null) 'SKU: ${item.sku}',
-                                if (item.sourcePage != null)
-                                  'Page: ${item.sourcePage}',
-                                'Quantity: ${item.quantity?.toString() ?? 'Missing'} ${item.unit ?? ''}',
-                                if (item.packSize != null)
-                                  'Pack: ${item.packSize}',
-                                if (item.totalPackageQuantity != null)
-                                  'Package total: ${item.totalPackageQuantity!.toStringAsFixed(1)} ${item.measurementUnit ?? ''}',
-                                'Unit price: ${item.unitPrice == null ? 'Missing' : formatCurrency(item.unitPrice!)}',
-                                'Extended: ${item.extendedPrice == null ? 'Missing' : formatCurrency(item.extendedPrice!)}',
-                                'Confidence: ${item.lowConfidence
-                                    ? 'Low'
-                                    : (item.confidence ?? 0) < .9
-                                    ? 'Medium'
-                                    : 'High'}',
-                                if (item.uncertainFields.isNotEmpty)
-                                  'Check: ${item.uncertainFields.map(_uncertainFieldLabel).join(', ')}',
-                                if (item.fieldProvenance.values.any(
-                                  (value) => value.kind == 'OBSERVED',
-                                ))
-                                  'Evidence: page ${item.sourcePage ?? '?'} • confirm quantities and prices against the printed row',
-                                if (item.productAttributes.values.any(
-                                  (value) => value != null,
-                                ))
-                                  'Attributes: ${item.productAttributes.entries.where((entry) => entry.value != null).map((entry) => '${entry.key}: ${entry.value}').join(', ')}',
-                              ].join('\n'),
+                              data.vendorName ?? 'Review extracted invoice',
+                              style: Theme.of(context).textTheme.headlineSmall,
+                            ),
+                            Text(
+                              'Compare extracted values with the original document before confirming.',
+                              style: Theme.of(context).textTheme.bodyMedium
+                                  ?.copyWith(
+                                    color: Theme.of(
+                                      context,
+                                    ).colorScheme.onSurfaceVariant,
+                                  ),
                             ),
                           ],
                         ),
                       ),
+                      if (readOnly) const _ReadOnlyChip(),
+                    ],
+                  ),
+                  if (readOnly) ...[
+                    const SizedBox(height: 16),
+                    const _DemoInvoiceNotice(),
+                  ],
+                  const SizedBox(height: 16),
+                  _ReconciliationWarning(reconciliation: data.reconciliation),
+                  Card(
+                    color: issueCount > 0
+                        ? Theme.of(context).colorScheme.errorContainer
+                        : Theme.of(context).colorScheme.primaryContainer,
+                    child: ListTile(
+                      leading: Icon(
+                        issueCount > 0
+                            ? Icons.warning_amber
+                            : Icons.check_circle_outline,
+                      ),
+                      title: Text(
+                        data.reviewStatus == 'REVIEWED'
+                            ? 'Reviewed'
+                            : issueCount > 0
+                            ? 'Needs review'
+                            : 'Ready for review',
+                      ),
+                      subtitle: Text(
+                        issueCount == 1
+                            ? '1 field needs attention'
+                            : '$issueCount fields need attention',
+                      ),
                     ),
                   ),
-                const SizedBox(height: 16),
-                if (data.reviewStatus != 'REVIEWED')
-                  const Padding(
-                    padding: EdgeInsets.only(bottom: 12),
-                    child: Text(
-                      'Marking reviewed confirms that you checked the displayed values against the original invoice.',
+                  const SizedBox(height: 12),
+                  Card(
+                    child: Padding(
+                      padding: const EdgeInsets.all(20),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Invoice Summary',
+                            style: Theme.of(context).textTheme.titleLarge,
+                          ),
+                          const SizedBox(height: 16),
+                          Wrap(
+                            spacing: 20,
+                            runSpacing: 20,
+                            children: [
+                              _ReviewFieldTile(
+                                label: 'Vendor',
+                                value: _reviewFieldValue(
+                                  data,
+                                  'vendorName',
+                                  data.vendorName,
+                                  data.uncertainFields.contains('vendorName'),
+                                ),
+                              ),
+                              if (data.vendorAddress != null)
+                                _ReviewFieldTile(
+                                  label: 'Vendor address',
+                                  value: data.vendorAddress!,
+                                ),
+                              _ReviewFieldTile(
+                                label: 'Invoice number',
+                                value: _reviewFieldValue(
+                                  data,
+                                  'invoiceNumber',
+                                  data.invoiceNumber,
+                                  data.uncertainFields.contains(
+                                    'invoiceNumber',
+                                  ),
+                                ),
+                              ),
+                              _ReviewFieldTile(
+                                label: 'Invoice date',
+                                value: _reviewFieldValue(
+                                  data,
+                                  'invoiceDate',
+                                  data.invoiceDate == null
+                                      ? null
+                                      : _date(data.invoiceDate!),
+                                  data.uncertainFields.contains('invoiceDate'),
+                                ),
+                              ),
+                              if (data.dueDate != null)
+                                _ReviewFieldTile(
+                                  label: 'Due date',
+                                  value: _reviewFieldValue(
+                                    data,
+                                    'dueDate',
+                                    _date(data.dueDate!),
+                                    data.uncertainFields.contains('dueDate'),
+                                  ),
+                                ),
+                              _ReviewFieldTile(
+                                label: 'Subtotal',
+                                value: _reviewFieldValue(
+                                  data,
+                                  'subtotal',
+                                  data.subtotal == null
+                                      ? null
+                                      : formatCurrency(data.subtotal!),
+                                  data.uncertainFields.contains('subtotal'),
+                                ),
+                              ),
+                              _ReviewFieldTile(
+                                label: 'Tax',
+                                value: _reviewFieldValue(
+                                  data,
+                                  'tax',
+                                  data.tax == null
+                                      ? null
+                                      : formatCurrency(data.tax!),
+                                  data.uncertainFields.contains('tax'),
+                                ),
+                              ),
+                              _ReviewFieldTile(
+                                label: 'Total',
+                                value: _reviewFieldValue(
+                                  data,
+                                  'total',
+                                  data.total == null
+                                      ? null
+                                      : formatCurrency(data.total!),
+                                  data.uncertainFields.contains('total'),
+                                ),
+                                emphasized: true,
+                              ),
+                              _ReviewFieldTile(
+                                label: 'Other fees',
+                                value: _reviewFieldValue(
+                                  data,
+                                  'otherFees',
+                                  data.otherFees == null
+                                      ? null
+                                      : formatCurrency(data.otherFees!),
+                                  data.uncertainFields.contains('otherFees'),
+                                ),
+                              ),
+                              _ReviewFieldTile(
+                                label: 'Discount',
+                                value: _reviewFieldValue(
+                                  data,
+                                  'discount',
+                                  data.discount == null
+                                      ? null
+                                      : formatCurrency(data.discount!),
+                                  data.uncertainFields.contains('discount'),
+                                ),
+                              ),
+                              _ReviewFieldTile(
+                                label: 'Currency',
+                                value: _reviewFieldValue(
+                                  data,
+                                  'currency',
+                                  data.currency,
+                                  data.uncertainFields.contains('currency'),
+                                ),
+                              ),
+                              if (data.extractionConfidence != null)
+                                _ReviewFieldTile(
+                                  label: 'Extraction confidence',
+                                  value:
+                                      '${(data.extractionConfidence! * 100).toStringAsFixed(0)}%',
+                                ),
+                            ],
+                          ),
+                        ],
+                      ),
                     ),
                   ),
-                if (data.reviewStatus != 'REVIEWED')
-                  FilledButton.icon(
-                    onPressed: () => _markReviewed(context, ref, data),
-                    icon: const Icon(Icons.check),
-                    label: const Text('Mark Reviewed'),
+                  if (!readOnly && data.reviewStatus != 'REVIEWED')
+                    OutlinedButton.icon(
+                      onPressed: () async {
+                        await Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => InvoiceEditScreen(
+                              invoice: data,
+                              reviewMode: true,
+                            ),
+                          ),
+                        );
+                        ref.invalidate(invoiceDetailProvider(invoiceId));
+                      },
+                      icon: const Icon(Icons.edit_outlined),
+                      label: const Text('Edit Invoice Fields'),
+                    ),
+                  const Divider(height: 32),
+                  Text(
+                    'Extracted Line Items',
+                    style: Theme.of(context).textTheme.titleLarge,
                   ),
-              ],
+                  if (items.isEmpty)
+                    const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 20),
+                      child: Text('No line items were extracted.'),
+                    ),
+                  for (final item in items)
+                    Card(
+                      color: item.lowConfidence
+                          ? Theme.of(context).colorScheme.errorContainer
+                          : null,
+                      child: InkWell(
+                        onTap: readOnly || data.reviewStatus == 'REVIEWED'
+                            ? null
+                            : () => _editLine(context, ref, data, item),
+                        child: Padding(
+                          padding: const EdgeInsets.all(16),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      item.rawDescription,
+                                      style: Theme.of(
+                                        context,
+                                      ).textTheme.titleMedium,
+                                    ),
+                                  ),
+                                  if (!readOnly &&
+                                      data.reviewStatus != 'REVIEWED')
+                                    const Icon(Icons.edit_outlined),
+                                ],
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                [
+                                  if (item.normalizedName != null)
+                                    'Interpreted as: ${item.normalizedName}',
+                                  if (item.sku != null) 'SKU: ${item.sku}',
+                                  if (item.sourcePage != null)
+                                    'Page: ${item.sourcePage}',
+                                  'Quantity: ${item.quantity?.toString() ?? 'Missing'} ${item.unit ?? ''}',
+                                  if (item.packSize != null)
+                                    'Pack: ${item.packSize}',
+                                  if (item.totalPackageQuantity != null)
+                                    'Package total: ${item.totalPackageQuantity!.toStringAsFixed(1)} ${item.measurementUnit ?? ''}',
+                                  'Unit price: ${item.unitPrice == null ? 'Missing' : formatCurrency(item.unitPrice!)}',
+                                  'Extended: ${item.extendedPrice == null ? 'Missing' : formatCurrency(item.extendedPrice!)}',
+                                  'Confidence: ${item.lowConfidence
+                                      ? 'Low'
+                                      : (item.confidence ?? 0) < .9
+                                      ? 'Medium'
+                                      : 'High'}',
+                                  if (item.uncertainFields.isNotEmpty)
+                                    'Check: ${item.uncertainFields.map(_uncertainFieldLabel).join(', ')}',
+                                  if (item.fieldProvenance.values.any(
+                                    (value) => value.kind == 'OBSERVED',
+                                  ))
+                                    'Evidence: page ${item.sourcePage ?? '?'} • confirm quantities and prices against the printed row',
+                                  if (item.productAttributes.values.any(
+                                    (value) => value != null,
+                                  ))
+                                    'Attributes: ${item.productAttributes.entries.where((entry) => entry.value != null).map((entry) => '${entry.key}: ${entry.value}').join(', ')}',
+                                ].join('\n'),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  const SizedBox(height: 16),
+                  if (!readOnly && data.reviewStatus != 'REVIEWED')
+                    const Padding(
+                      padding: EdgeInsets.only(bottom: 12),
+                      child: Text(
+                        'Marking reviewed confirms that you checked the displayed values against the original invoice.',
+                      ),
+                    ),
+                  if (!readOnly && data.reviewStatus != 'REVIEWED')
+                    FilledButton.icon(
+                      onPressed: () => _markReviewed(context, ref, data),
+                      icon: const Icon(Icons.check),
+                      label: const Text('Mark Reviewed'),
+                    ),
+                ],
+              ),
             );
           },
         ),

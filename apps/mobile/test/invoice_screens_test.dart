@@ -9,6 +9,7 @@ import 'package:restaurant_profit_mobile/features/dashboard/foundation.dart';
 import 'package:restaurant_profit_mobile/features/expenses/foundation.dart';
 import 'package:restaurant_profit_mobile/features/invoices/foundation.dart';
 import 'package:restaurant_profit_mobile/features/invoices/invoice_screens.dart';
+import 'package:restaurant_profit_mobile/main.dart' show demoModeProvider;
 
 const location = RestaurantLocation(
   id: 'loc-a',
@@ -188,6 +189,51 @@ void main() {
     expect(find.textContaining(r'$2,842'), findsOneWidget);
     expect(find.textContaining('Paid'), findsOneWidget);
     expect(find.text('Uploaded'), findsOneWidget);
+  });
+
+  testWidgets('invoice list search filters supported invoice fields', (
+    tester,
+  ) async {
+    final second = InvoiceRecord(
+      id: 'invoice-b',
+      restaurantLocationId: 'loc-a',
+      fileName: 'us-foods.pdf',
+      fileType: 'application/pdf',
+      fileSize: 1024,
+      status: 'UPLOADED',
+      createdAt: DateTime(2026, 10, 5),
+      vendorName: 'US Foods',
+      invoiceNumber: 'INV-2002',
+      total: 810,
+    );
+    await tester.pumpWidget(
+      app([
+        invoiceListProvider.overrideWith((_) async => [invoice, second]),
+      ], const InvoiceListScreen()),
+    );
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('invoice-search')), 'INV-2002');
+    await tester.pump();
+    expect(find.text('US Foods'), findsOneWidget);
+    expect(find.text('Sysco'), findsNothing);
+  });
+
+  testWidgets('public demo invoice list keeps write actions unavailable', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      app([
+        demoModeProvider.overrideWithValue(true),
+        invoiceListProvider.overrideWith((_) async => [invoice]),
+      ], const InvoiceListScreen()),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Demo · View only'), findsOneWidget);
+    expect(find.byKey(const Key('upload-invoice')), findsNothing);
+    expect(
+      find.textContaining('uploads and financial changes are disabled'),
+      findsOneWidget,
+    );
   });
 
   testWidgets('email-ingested invoice shows its source in list and detail', (
