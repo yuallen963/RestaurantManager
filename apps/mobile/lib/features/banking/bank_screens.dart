@@ -3,10 +3,13 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../main.dart' show demoModeProvider;
 import '../dashboard/foundation.dart';
+import '../design/fundwell_theme.dart';
 import '../expenses/foundation.dart';
 import '../needs_attention/foundation.dart';
 import '../vendors/foundation.dart';
+import '../responsive.dart';
 import 'foundation.dart';
 import 'plaid_link/plaid_link.dart';
 
@@ -175,6 +178,7 @@ class _BankAccountsScreenState extends ConsumerState<BankAccountsScreen> {
       }
     });
     final state = ref.watch(bankConnectionsProvider);
+    final readOnly = ref.watch(demoModeProvider);
     return Scaffold(
       appBar: AppBar(title: const Text('Bank Accounts')),
       body: state.when(
@@ -192,56 +196,84 @@ class _BankAccountsScreenState extends ConsumerState<BankAccountsScreen> {
             _BankError(message: 'Unable to load bank accounts', retry: refresh),
         data: (connections) => RefreshIndicator(
           onRefresh: refresh,
-          child: ListView(
-            padding: const EdgeInsets.all(16),
-            children: [
-              if (actionError != null)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 12),
-                  child: Text(
-                    actionError!,
-                    style: TextStyle(
-                      color: Theme.of(context).colorScheme.error,
+          child: ResponsiveContent(
+            maxWidth: 1120,
+            child: ListView(
+              padding: const EdgeInsets.all(FundWellTokens.space6),
+              children: [
+                Text(
+                  'Connected accounts',
+                  style: Theme.of(context).textTheme.headlineSmall,
+                ),
+                const SizedBox(height: FundWellTokens.space1),
+                Text(
+                  'Manage bank connections and restaurant assignments.',
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                if (readOnly) ...[
+                  const SizedBox(height: FundWellTokens.space4),
+                  const _DemoBankingNotice(),
+                ],
+                if (actionError != null)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: Text(
+                      actionError!,
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.error,
+                      ),
                     ),
                   ),
+                const SizedBox(height: FundWellTokens.space4),
+                Wrap(
+                  spacing: FundWellTokens.space2,
+                  runSpacing: FundWellTokens.space2,
+                  children: [
+                    FilledButton.icon(
+                      key: const Key('connect-bank'),
+                      onPressed: busy || readOnly ? null : connect,
+                      icon: busy
+                          ? const SizedBox.square(
+                              dimension: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.add),
+                      label: const Text('Connect bank'),
+                    ),
+                    OutlinedButton.icon(
+                      key: const Key('bank-automation-rules'),
+                      onPressed: readOnly
+                          ? null
+                          : () => Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => const MerchantRulesScreen(),
+                              ),
+                            ),
+                      icon: const Icon(Icons.auto_awesome_outlined),
+                      label: const Text('Automatic rules'),
+                    ),
+                  ],
                 ),
-              FilledButton.icon(
-                key: const Key('connect-bank'),
-                onPressed: busy ? null : connect,
-                icon: busy
-                    ? const SizedBox.square(
-                        dimension: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.account_balance),
-                label: const Text('Connect bank'),
-              ),
-              TextButton.icon(
-                key: const Key('bank-automation-rules'),
-                onPressed: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => const MerchantRulesScreen(),
-                  ),
-                ),
-                icon: const Icon(Icons.auto_awesome),
-                label: const Text('Automatic Bank Rules'),
-              ),
-              const SizedBox(height: 16),
-              if (connections.isEmpty)
-                const Center(
-                  child: Padding(
-                    padding: EdgeInsets.all(32),
-                    child: Text('No bank accounts connected.'),
-                  ),
-                )
-              else
-                for (final connection in connections)
-                  _ConnectionCard(
-                    connection: connection,
-                    onReconnect: () => connect(connection),
-                  ),
-            ],
+                const SizedBox(height: 16),
+                if (connections.isEmpty)
+                  const Center(
+                    child: Padding(
+                      padding: EdgeInsets.all(32),
+                      child: Text('No bank accounts connected.'),
+                    ),
+                  )
+                else
+                  for (final connection in connections)
+                    _ConnectionCard(
+                      connection: connection,
+                      onReconnect: () => connect(connection),
+                      readOnly: readOnly,
+                    ),
+              ],
+            ),
           ),
         ),
       ),
@@ -321,9 +353,14 @@ class MerchantRulesScreen extends ConsumerWidget {
 }
 
 class _ConnectionCard extends ConsumerStatefulWidget {
-  const _ConnectionCard({required this.connection, required this.onReconnect});
+  const _ConnectionCard({
+    required this.connection,
+    required this.onReconnect,
+    required this.readOnly,
+  });
   final BankConnectionData connection;
   final Future<void> Function() onReconnect;
+  final bool readOnly;
   @override
   ConsumerState<_ConnectionCard> createState() => _ConnectionCardState();
 }
@@ -398,20 +435,23 @@ class _ConnectionCardState extends ConsumerState<_ConnectionCard> {
             ),
           const Divider(),
           for (final account in widget.connection.accounts)
-            _AccountTile(account: account),
+            _AccountTile(account: account, readOnly: widget.readOnly),
           Wrap(
             spacing: 8,
             children: [
               if (widget.connection.status == 'NEEDS_ATTENTION')
                 FilledButton.icon(
                   key: const Key('reconnect-bank'),
-                  onPressed: busy ? null : () => run(widget.onReconnect),
+                  onPressed: busy || widget.readOnly
+                      ? null
+                      : () => run(widget.onReconnect),
                   icon: const Icon(Icons.lock_reset),
                   label: const Text('Reconnect'),
                 ),
               OutlinedButton.icon(
                 onPressed:
                     busy ||
+                        widget.readOnly ||
                         widget.connection.status == 'SYNCING' ||
                         widget.connection.status == 'DISCONNECTED'
                     ? null
@@ -424,7 +464,10 @@ class _ConnectionCardState extends ConsumerState<_ConnectionCard> {
                 label: const Text('Sync now'),
               ),
               TextButton(
-                onPressed: busy || widget.connection.status == 'DISCONNECTED'
+                onPressed:
+                    busy ||
+                        widget.readOnly ||
+                        widget.connection.status == 'DISCONNECTED'
                     ? null
                     : () async {
                         final confirmed = await showDialog<bool>(
@@ -467,8 +510,9 @@ class _ConnectionCardState extends ConsumerState<_ConnectionCard> {
 }
 
 class _AccountTile extends ConsumerWidget {
-  const _AccountTile({required this.account});
+  const _AccountTile({required this.account, required this.readOnly});
   final BankAccountData account;
+  final bool readOnly;
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final locations = ref.watch(availableLocationsProvider);
@@ -479,33 +523,35 @@ class _AccountTile extends ConsumerWidget {
         '${account.mask == null ? '' : '•••• ${account.mask} • '}${account.restaurantLocationName ?? 'Needs location assignment'}',
       ),
       trailing: const Icon(Icons.chevron_right),
-      onTap: () async {
-        final selected = await showModalBottomSheet<RestaurantLocation>(
-          context: context,
-          showDragHandle: true,
-          builder: (sheetContext) => SafeArea(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const ListTile(title: Text('Assign restaurant location')),
-                for (final location in locations)
-                  ListTile(
-                    title: Text(location.name),
-                    onTap: () => Navigator.pop(sheetContext, location),
+      onTap: readOnly
+          ? null
+          : () async {
+              final selected = await showModalBottomSheet<RestaurantLocation>(
+                context: context,
+                showDragHandle: true,
+                builder: (sheetContext) => SafeArea(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const ListTile(title: Text('Assign restaurant location')),
+                      for (final location in locations)
+                        ListTile(
+                          title: Text(location.name),
+                          onTap: () => Navigator.pop(sheetContext, location),
+                        ),
+                    ],
                   ),
-              ],
-            ),
-          ),
-        );
-        if (selected != null) {
-          await ref
-              .read(bankingRepositoryProvider)
-              .assignAccount(account.id, selected.id);
-          ref.invalidate(bankConnectionsProvider);
-          ref.invalidate(bankTransactionsProvider);
-          ref.invalidate(bankTransactionsAwaitingReviewProvider);
-        }
-      },
+                ),
+              );
+              if (selected != null) {
+                await ref
+                    .read(bankingRepositoryProvider)
+                    .assignAccount(account.id, selected.id);
+                ref.invalidate(bankConnectionsProvider);
+                ref.invalidate(bankTransactionsProvider);
+                ref.invalidate(bankTransactionsAwaitingReviewProvider);
+              }
+            },
     );
   }
 }
@@ -520,6 +566,15 @@ class BankTransactionsScreen extends ConsumerStatefulWidget {
 class _BankTransactionsScreenState
     extends ConsumerState<BankTransactionsScreen> {
   final selected = <String>{};
+  final searchController = TextEditingController();
+  String search = '';
+  String? accountFilter;
+
+  @override
+  void dispose() {
+    searchController.dispose();
+    super.dispose();
+  }
 
   Future<void> bulkReview({required bool ignored}) async {
     final location = ref.read(activeLocationProvider);
@@ -637,159 +692,503 @@ class _BankTransactionsScreenState
     final sync = ref.watch(bankSyncStatusProvider);
     final connections = ref.watch(bankConnectionsProvider);
     final range = ref.watch(dateRangeProvider);
+    final readOnly = ref.watch(demoModeProvider);
     return Scaffold(
       appBar: AppBar(title: const Text('Bank Transactions')),
-      body: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.all(12),
-            child: SegmentedButton<BankTransactionFilter>(
-              segments: const [
-                ButtonSegment(
-                  value: BankTransactionFilter.needsReview,
-                  label: Text('Needs Review'),
-                ),
-                ButtonSegment(
-                  value: BankTransactionFilter.matched,
-                  label: Text('Added / Linked'),
-                ),
-                ButtonSegment(
-                  value: BankTransactionFilter.all,
-                  label: Text('All'),
-                ),
-              ],
-              selected: {filter},
-              onSelectionChanged: (value) =>
-                  ref.read(bankTransactionFilterProvider.notifier).state =
-                      value.first,
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Align(
-              alignment: Alignment.centerRight,
-              child: Text(
-                'Selected period: ${_date(range.startDate)} – ${_date(range.endDate)}',
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-            ),
-          ),
-          if (sync.valueOrNull?.inProgress == true)
-            const Padding(
-              padding: EdgeInsets.fromLTRB(16, 10, 16, 0),
-              child: Card(
-                child: ListTile(
-                  leading: SizedBox.square(
-                    dimension: 22,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  ),
-                  title: Text('Bank synchronization is still in progress.'),
-                  subtitle: Text(
-                    'Imported transactions will appear automatically when they are available.',
-                  ),
-                ),
-              ),
-            ),
-          if (selected.isNotEmpty)
+      body: ResponsiveContent(
+        maxWidth: 1240,
+        child: Column(
+          children: [
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              child: Card(
-                child: ListTile(
-                  title: Text('${selected.length} selected'),
-                  subtitle: const Text(
-                    'Bulk actions never include pending, matched, or deposit transactions.',
-                  ),
-                  trailing: Wrap(
+              padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
                     children: [
-                      TextButton(
-                        onPressed: () => bulkReview(ignored: true),
-                        child: const Text('Ignore'),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Transaction activity',
+                              style: Theme.of(context).textTheme.headlineSmall,
+                            ),
+                            Text(
+                              '${_date(range.startDate)} – ${_date(range.endDate)}',
+                              style: Theme.of(context).textTheme.bodySmall
+                                  ?.copyWith(
+                                    color: Theme.of(
+                                      context,
+                                    ).colorScheme.onSurfaceVariant,
+                                  ),
+                            ),
+                          ],
+                        ),
                       ),
-                      FilledButton(
-                        onPressed: () => bulkReview(ignored: false),
-                        child: const Text('Add Selected to Expenses'),
-                      ),
+                      if (readOnly)
+                        const Chip(
+                          avatar: Icon(Icons.visibility_outlined, size: 17),
+                          label: Text('Demo · View only'),
+                        ),
                     ],
                   ),
+                  const SizedBox(height: FundWellTokens.space4),
+                  TextField(
+                    key: const Key('bank-transaction-search'),
+                    controller: searchController,
+                    onChanged: (value) =>
+                        setState(() => search = value.trim().toLowerCase()),
+                    decoration: InputDecoration(
+                      hintText: 'Search merchant or description',
+                      prefixIcon: const Icon(Icons.search),
+                      suffixIcon: search.isEmpty
+                          ? null
+                          : IconButton(
+                              tooltip: 'Clear search',
+                              onPressed: () {
+                                searchController.clear();
+                                setState(() => search = '');
+                              },
+                              icon: const Icon(Icons.close),
+                            ),
+                    ),
+                  ),
+                  const SizedBox(height: FundWellTokens.space3),
+                  LayoutBuilder(
+                    builder: (context, constraints) => Wrap(
+                      spacing: FundWellTokens.space2,
+                      runSpacing: FundWellTokens.space2,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        SizedBox(
+                          width: constraints.maxWidth < 620
+                              ? constraints.maxWidth
+                              : 430,
+                          child: SegmentedButton<BankTransactionFilter>(
+                            segments: const [
+                              ButtonSegment(
+                                value: BankTransactionFilter.needsReview,
+                                label: Text('Needs Review'),
+                              ),
+                              ButtonSegment(
+                                value: BankTransactionFilter.matched,
+                                label: Text('Added / Linked'),
+                              ),
+                              ButtonSegment(
+                                value: BankTransactionFilter.all,
+                                label: Text('All'),
+                              ),
+                            ],
+                            selected: {filter},
+                            onSelectionChanged: (value) =>
+                                ref
+                                    .read(
+                                      bankTransactionFilterProvider.notifier,
+                                    )
+                                    .state = value
+                                    .first,
+                          ),
+                        ),
+                        _AccountFilter(
+                          value: accountFilter,
+                          accounts:
+                              connections.valueOrNull
+                                  ?.expand((connection) => connection.accounts)
+                                  .toList() ??
+                              const [],
+                          onChanged: (value) =>
+                              setState(() => accountFilter = value),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (sync.valueOrNull?.inProgress == true)
+              const Padding(
+                padding: EdgeInsets.fromLTRB(16, 10, 16, 0),
+                child: Card(
+                  child: ListTile(
+                    leading: SizedBox.square(
+                      dimension: 22,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                    title: Text('Bank synchronization is still in progress.'),
+                    subtitle: Text(
+                      'Imported transactions will appear automatically when they are available.',
+                    ),
+                  ),
                 ),
               ),
-            ),
-          Expanded(
-            child: state.when(
-              loading: () => const Center(child: CircularProgressIndicator()),
-              error: (_, _) => _BankError(
-                message: 'Unable to load bank transactions',
-                retry: () => ref.refresh(bankTransactionsProvider.future),
+            if (selected.isNotEmpty && !readOnly)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                child: Card(
+                  child: ListTile(
+                    title: Text('${selected.length} selected'),
+                    subtitle: const Text(
+                      'Bulk actions never include pending, matched, or deposit transactions.',
+                    ),
+                    trailing: Wrap(
+                      children: [
+                        TextButton(
+                          onPressed: () => bulkReview(ignored: true),
+                          child: const Text('Ignore'),
+                        ),
+                        FilledButton(
+                          onPressed: () => bulkReview(ignored: false),
+                          child: const Text('Add Selected to Expenses'),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
               ),
-              data: (items) {
-                final visibleItems = items
-                    .where(
-                      (item) =>
-                          !item.postedDate.isBefore(range.startDate) &&
-                          item.postedDate.isBefore(
-                            range.endDate.add(const Duration(days: 1)),
-                          ),
-                    )
-                    .toList();
-                if (visibleItems.isEmpty) {
-                  return _BankTransactionsEmptyState(
-                    filter: filter,
-                    allFilteredItems: items,
-                    sync: sync.valueOrNull,
-                    connections: connections.valueOrNull ?? const [],
-                  );
-                }
-                return ListView.builder(
-                  itemCount: visibleItems.length,
-                  itemBuilder: (context, index) {
-                    final item = visibleItems[index];
-                    return ListTile(
-                      key: ValueKey('bank-transaction-${item.id}'),
-                      leading:
-                          item.status == 'NEEDS_REVIEW' &&
-                              !item.pending &&
-                              item.amount > 0 &&
-                              item.suggestedInvoice == null
-                          ? Checkbox(
-                              value: selected.contains(item.id),
-                              onChanged: (value) => setState(
-                                () => value == true
-                                    ? selected.add(item.id)
-                                    : selected.remove(item.id),
-                              ),
-                            )
-                          : CircleAvatar(
-                              child: Icon(
-                                item.status == 'MATCHED_INVOICE'
-                                    ? Icons.link
-                                    : Icons.help_outline,
-                              ),
-                            ),
-                      title: Text(item.merchant),
-                      subtitle: Text(
-                        '${_date(item.postedDate)} • ${_status(item.status)}${item.categoryName == null ? '' : ' • ${item.categoryName}'}',
-                      ),
-                      trailing: Text(
-                        _currency(item.amount),
-                        style: const TextStyle(fontWeight: FontWeight.w600),
-                      ),
-                      onTap: () => showModalBottomSheet<void>(
-                        context: context,
-                        isScrollControlled: true,
-                        showDragHandle: true,
-                        builder: (_) =>
-                            TransactionReviewSheet(transaction: item),
-                      ),
+            Expanded(
+              child: state.when(
+                loading: () => const Center(child: CircularProgressIndicator()),
+                error: (_, _) => _BankError(
+                  message: 'Unable to load bank transactions',
+                  retry: () => ref.refresh(bankTransactionsProvider.future),
+                ),
+                data: (items) {
+                  final visibleItems = items
+                      .where(
+                        (item) =>
+                            !item.postedDate.isBefore(range.startDate) &&
+                            item.postedDate.isBefore(
+                              range.endDate.add(const Duration(days: 1)),
+                            ) &&
+                            (accountFilter == null ||
+                                item.bankAccountId == accountFilter) &&
+                            (search.isEmpty ||
+                                item.merchant.toLowerCase().contains(search) ||
+                                item.description.toLowerCase().contains(
+                                  search,
+                                )),
+                      )
+                      .toList();
+                  if (visibleItems.isEmpty) {
+                    return _BankTransactionsEmptyState(
+                      filter: filter,
+                      allFilteredItems: items,
+                      sync: sync.valueOrNull,
+                      connections: connections.valueOrNull ?? const [],
                     );
-                  },
-                );
-              },
+                  }
+                  return LayoutBuilder(
+                    builder: (context, constraints) => ListView.separated(
+                      padding: const EdgeInsets.fromLTRB(20, 4, 20, 28),
+                      itemCount: visibleItems.length,
+                      separatorBuilder: (_, _) => const SizedBox(height: 8),
+                      itemBuilder: (context, index) => _TransactionRow(
+                        item: visibleItems[index],
+                        desktop: constraints.maxWidth >= 900,
+                        readOnly: readOnly,
+                        selected: selected.contains(visibleItems[index].id),
+                        onSelected: (value) => setState(
+                          () => value
+                              ? selected.add(visibleItems[index].id)
+                              : selected.remove(visibleItems[index].id),
+                        ),
+                        onOpen: () => showModalBottomSheet<void>(
+                          context: context,
+                          isScrollControlled: true,
+                          showDragHandle: true,
+                          constraints: constraints.maxWidth >= 900
+                              ? const BoxConstraints(maxWidth: 720)
+                              : null,
+                          builder: (_) => TransactionReviewSheet(
+                            transaction: visibleItems[index],
+                          ),
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
+}
+
+class _DemoBankingNotice extends StatelessWidget {
+  const _DemoBankingNotice();
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.all(FundWellTokens.space4),
+    decoration: BoxDecoration(
+      color: FundWellTokens.surfaceSubtle,
+      borderRadius: BorderRadius.circular(FundWellTokens.radius),
+      border: Border.all(color: FundWellTokens.outline),
+    ),
+    child: const Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(Icons.visibility_outlined, size: 20),
+        SizedBox(width: FundWellTokens.space3),
+        Expanded(
+          child: Text(
+            'Public demo is view only. Explore accounts and transactions; changes are disabled.',
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+class _AccountFilter extends StatelessWidget {
+  const _AccountFilter({
+    required this.value,
+    required this.accounts,
+    required this.onChanged,
+  });
+
+  final String? value;
+  final List<BankAccountData> accounts;
+  final ValueChanged<String?> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final matches = accounts.where((account) => account.id == value);
+    final label = matches.isEmpty ? 'All accounts' : matches.first.name;
+    return PopupMenuButton<String?>(
+      tooltip: 'Filter by account',
+      onSelected: onChanged,
+      itemBuilder: (_) => [
+        const PopupMenuItem(value: null, child: Text('All accounts')),
+        for (final account in accounts)
+          PopupMenuItem(value: account.id, child: Text(account.name)),
+      ],
+      child: Container(
+        height: 44,
+        padding: const EdgeInsets.symmetric(horizontal: 14),
+        decoration: BoxDecoration(
+          color: FundWellTokens.surface,
+          borderRadius: BorderRadius.circular(FundWellTokens.radiusSmall),
+          border: Border.all(color: FundWellTokens.outline),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.account_balance_outlined, size: 18),
+            const SizedBox(width: 8),
+            Text(label),
+            const SizedBox(width: 6),
+            const Icon(Icons.expand_more, size: 18),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _TransactionRow extends StatelessWidget {
+  const _TransactionRow({
+    required this.item,
+    required this.desktop,
+    required this.readOnly,
+    required this.selected,
+    required this.onSelected,
+    required this.onOpen,
+  });
+
+  final BankTransactionData item;
+  final bool desktop, readOnly, selected;
+  final ValueChanged<bool> onSelected;
+  final VoidCallback onOpen;
+
+  bool get selectable =>
+      !readOnly &&
+      item.status == 'NEEDS_REVIEW' &&
+      !item.pending &&
+      item.isOutgoing &&
+      item.suggestedInvoice == null;
+
+  String get amount => _currency(item.amount.abs());
+
+  @override
+  Widget build(BuildContext context) {
+    final amountColor = item.isOutgoing
+        ? Theme.of(context).colorScheme.onSurface
+        : FundWellTokens.positive;
+    final description = item.description == item.merchant
+        ? null
+        : item.description;
+    final details = [
+      _date(item.postedDate),
+      if (item.bankAccountName != null) item.bankAccountName!,
+    ].join(' · ');
+    final category = item.invoiceNumber != null
+        ? 'Invoice ${item.invoiceNumber}'
+        : item.categoryName;
+
+    return Card(
+      child: InkWell(
+        borderRadius: BorderRadius.circular(FundWellTokens.radius),
+        onTap: onOpen,
+        child: Padding(
+          padding: EdgeInsets.symmetric(
+            horizontal: desktop ? 16 : 14,
+            vertical: desktop ? 14 : 16,
+          ),
+          child: desktop
+              ? Row(
+                  children: [
+                    SizedBox(
+                      width: 42,
+                      child: selectable
+                          ? Checkbox(
+                              value: selected,
+                              onChanged: (value) => onSelected(value ?? false),
+                            )
+                          : const Icon(Icons.receipt_long_outlined, size: 19),
+                    ),
+                    Expanded(
+                      flex: 4,
+                      child: _TransactionIdentity(
+                        merchant: item.merchant,
+                        description: description,
+                      ),
+                    ),
+                    Expanded(flex: 2, child: Text(details)),
+                    Expanded(
+                      flex: 3,
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            _StatusChip(item.pending ? 'PENDING' : item.status),
+                            if (category != null)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 4),
+                                child: Text(
+                                  category,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: Theme.of(context).textTheme.bodySmall,
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    SizedBox(
+                      width: 132,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          Text(
+                            amount,
+                            style: Theme.of(context).textTheme.titleMedium
+                                ?.copyWith(color: amountColor),
+                          ),
+                          Text(
+                            item.isOutgoing ? 'Money out' : 'Money in',
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    const Icon(Icons.chevron_right, size: 20),
+                  ],
+                )
+              : Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (selectable)
+                          Padding(
+                            padding: const EdgeInsets.only(right: 6),
+                            child: Checkbox(
+                              value: selected,
+                              onChanged: (value) => onSelected(value ?? false),
+                            ),
+                          ),
+                        Expanded(
+                          child: _TransactionIdentity(
+                            merchant: item.merchant,
+                            description: description,
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          children: [
+                            Text(
+                              amount,
+                              style: Theme.of(context).textTheme.titleMedium
+                                  ?.copyWith(color: amountColor),
+                            ),
+                            Text(
+                              item.isOutgoing ? 'Money out' : 'Money in',
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 6,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        _StatusChip(item.pending ? 'PENDING' : item.status),
+                        Text(
+                          details,
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                        if (category != null)
+                          Text(
+                            category,
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                      ],
+                    ),
+                  ],
+                ),
+        ),
+      ),
+    );
+  }
+}
+
+class _TransactionIdentity extends StatelessWidget {
+  const _TransactionIdentity({required this.merchant, this.description});
+  final String merchant;
+  final String? description;
+
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Text(
+        merchant,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: Theme.of(context).textTheme.titleMedium,
+      ),
+      if (description != null)
+        Text(
+          description!,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+          ),
+        ),
+    ],
+  );
 }
 
 class _BankTransactionsEmptyState extends ConsumerWidget {
@@ -1214,6 +1613,9 @@ class _TransactionReviewSheetState
 
   @override
   Widget build(BuildContext context) {
+    if (ref.watch(demoModeProvider)) {
+      return _ReadOnlyTransactionDetails(transaction: widget.transaction);
+    }
     final lookups = ref.watch(expenseLookupsProvider);
     final locations = ref.watch(availableLocationsProvider);
     return SafeArea(
@@ -1498,11 +1900,115 @@ class _TransactionReviewSheetState
   }
 }
 
+class _ReadOnlyTransactionDetails extends StatelessWidget {
+  const _ReadOnlyTransactionDetails({required this.transaction});
+  final BankTransactionData transaction;
+
+  @override
+  Widget build(BuildContext context) {
+    final linkedRecord = transaction.invoiceNumber != null
+        ? 'Invoice ${transaction.invoiceNumber}'
+        : transaction.categoryName ?? 'Not yet classified';
+    final signedAmount = _currency(transaction.amount.abs());
+    return SafeArea(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(24, 4, 24, 32),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              transaction.merchant,
+              style: Theme.of(context).textTheme.headlineSmall,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              signedAmount,
+              style: Theme.of(context).textTheme.headlineMedium,
+            ),
+            Text(transaction.isOutgoing ? 'Money out' : 'Money in'),
+            const SizedBox(height: 20),
+            _DetailLine(label: 'Date', value: _date(transaction.postedDate)),
+            _DetailLine(
+              label: 'Bank account',
+              value: transaction.bankAccountName ?? 'Bank account',
+            ),
+            _DetailLine(
+              label: 'Status',
+              value: _status(
+                transaction.pending ? 'PENDING' : transaction.status,
+              ),
+            ),
+            _DetailLine(label: 'Category or link', value: linkedRecord),
+            _DetailLine(
+              label: 'Bank description',
+              value: transaction.description,
+            ),
+            const SizedBox(height: 16),
+            const _DemoBankingNotice(),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _DetailLine extends StatelessWidget {
+  const _DetailLine({required this.label, required this.value});
+  final String label, value;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 10),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: 132,
+          child: Text(
+            label,
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ),
+        Expanded(
+          child: Text(value, style: Theme.of(context).textTheme.titleSmall),
+        ),
+      ],
+    ),
+  );
+}
+
 class _StatusChip extends StatelessWidget {
   const _StatusChip(this.status);
   final String status;
   @override
-  Widget build(BuildContext context) => Chip(label: Text(_status(status)));
+  Widget build(BuildContext context) {
+    final (foreground, background) = switch (status) {
+      'NEEDS_REVIEW' ||
+      'PENDING' => (FundWellTokens.warning, const Color(0xFFFFF4DF)),
+      'MATCHED_EXPENSE' ||
+      'MATCHED_INVOICE' ||
+      'CONNECTED' => (FundWellTokens.positive, const Color(0xFFEAF6F0)),
+      'NEEDS_ATTENTION' ||
+      'ERROR' => (FundWellTokens.danger, const Color(0xFFFCEDEA)),
+      _ => (FundWellTokens.mutedInk, FundWellTokens.surfaceSubtle),
+    };
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+      decoration: BoxDecoration(
+        color: background,
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        _status(status),
+        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+          color: foreground,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+  }
 }
 
 class _BankError extends StatelessWidget {
@@ -1528,7 +2034,9 @@ class _BankError extends StatelessWidget {
 
 String _status(String value) => switch (value) {
   'MATCHED_EXPENSE' => 'Added to Expenses',
-  'MATCHED_INVOICE' => 'Linked to Invoice',
+  'MATCHED_INVOICE' => 'Matched to Invoice',
+  'NEEDS_REVIEW' => 'Needs Review',
+  'IGNORED' => 'Personal / Transfer',
   _ =>
     value
         .toLowerCase()
