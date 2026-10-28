@@ -89,6 +89,11 @@ void main() {
   ) async {
     await pumpMore(tester);
 
+    await tester.drag(
+      find.byKey(const Key('more-list')),
+      const Offset(0, -1000),
+    );
+    await tester.pumpAndSettle();
     expect(find.text('Demo Restaurant Group'), findsOneWidget);
     expect(find.text('Downtown Grill'), findsOneWidget);
     await tester.scrollUntilVisible(find.text('demo@profitlens.local'), 250);
@@ -131,7 +136,11 @@ void main() {
     final container = await pumpMore(tester, dio: dio);
 
     final signOut = find.text('Sign Out');
-    await tester.scrollUntilVisible(signOut, 250);
+    await tester.drag(
+      find.byKey(const Key('more-list')),
+      const Offset(0, -1200),
+    );
+    await tester.pumpAndSettle();
     await tester.tap(signOut);
     await tester.pumpAndSettle();
 
@@ -159,6 +168,11 @@ void main() {
       accountValue: AsyncError(Exception('network'), StackTrace.empty),
     );
 
+    await tester.drag(
+      find.byKey(const Key('more-list')),
+      const Offset(0, -1000),
+    );
+    await tester.pumpAndSettle();
     expect(find.text('Unable to load restaurant information'), findsOneWidget);
     await tester.scrollUntilVisible(
       find.text('Unable to load account information'),
@@ -174,8 +188,12 @@ void main() {
       await tester.binding.setSurfaceSize(const Size(800, 1500));
       addTearDown(() => tester.binding.setSurfaceSize(null));
       await pumpMore(tester);
+      await tester.drag(
+        find.byKey(const Key('more-list')),
+        const Offset(0, -3000),
+      );
+      await tester.pumpAndSettle();
       final entry = find.text('Private Account');
-      await tester.scrollUntilVisible(entry.last, 300);
       await tester.tap(entry.last);
       await tester.pumpAndSettle();
       expect(find.byType(AlertDialog), findsOneWidget);
@@ -205,8 +223,12 @@ void main() {
           ),
         );
       final container = await pumpMore(tester, dio: dio);
+      await tester.drag(
+        find.byKey(const Key('more-list')),
+        const Offset(0, -3000),
+      );
+      await tester.pumpAndSettle();
       final entry = find.text('Private Account');
-      await tester.scrollUntilVisible(entry.last, 300);
       await tester.tap(entry.last);
       await tester.pumpAndSettle();
       await tester.enterText(find.byType(TextField), 'wrong');
@@ -285,6 +307,18 @@ void main() {
       expect(await storage.read(key: sessionModeStorageKey), 'standard');
     },
   );
+
+  testWidgets('More renders without overflow at target widths', (tester) async {
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    tester.view.devicePixelRatio = 1;
+    for (final width in [390.0, 768.0, 1280.0, 1440.0]) {
+      tester.view.physicalSize = Size(width, 1200);
+      await pumpMore(tester, demoMode: true);
+      expect(find.text('More'), findsOneWidget);
+      expect(tester.takeException(), isNull, reason: 'width $width');
+    }
+  });
 }
 
 Dio successfulLogoutDio({VoidCallback? onLogout}) => Dio()

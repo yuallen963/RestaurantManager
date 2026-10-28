@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../main.dart' show demoModeProvider;
 import '../dashboard/foundation.dart';
+import '../design/fundwell_theme.dart';
+import '../responsive.dart';
 import 'foundation.dart';
 
 class PosIntegrationsScreen extends ConsumerStatefulWidget {
@@ -69,6 +72,7 @@ class _PosIntegrationsScreenState extends ConsumerState<PosIntegrationsScreen>
       );
     }
     final state = ref.watch(posConnectionsProvider(location.organizationId));
+    final readOnly = ref.watch(demoModeProvider);
     return Scaffold(
       appBar: AppBar(title: const Text('POS Integrations')),
       body: state.when(
@@ -87,51 +91,71 @@ class _PosIntegrationsScreenState extends ConsumerState<PosIntegrationsScreen>
             ],
           ),
         ),
-        data: (connections) => ListView(
-          padding: const EdgeInsets.all(20),
-          children: [
-            if (message != null)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 12),
-                child: Text(message!, key: const Key('pos-message')),
+        data: (connections) => ResponsiveContent(
+          maxWidth: 1000,
+          child: ListView(
+            padding: const EdgeInsets.all(24),
+            children: [
+              Text(
+                'Point-of-sale connections',
+                style: Theme.of(context).textTheme.headlineSmall,
               ),
-            if (connections.isEmpty)
-              Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(20),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'Square',
-                        style: TextStyle(
-                          fontSize: 22,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      const SizedBox(height: 6),
-                      const Text('Not connected'),
-                      const SizedBox(height: 16),
-                      FilledButton(
-                        onPressed: busy
-                            ? null
-                            : () => action(
-                                () => ref
-                                    .read(posRepositoryProvider)
-                                    .connect(location.organizationId),
-                                'Complete authorization in Square, then return here.',
-                              ),
-                        child: const Text('Connect'),
-                      ),
-                    ],
-                  ),
+              const SizedBox(height: 5),
+              Text(
+                'Connect Square to import confirmed restaurant sales without manual entry.',
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  color: FundWellTokens.mutedInk,
                 ),
-              )
-            else
-              ...connections.map(
-                (connection) => _connectionCard(context, connection),
               ),
-          ],
+              if (readOnly) ...[
+                const SizedBox(height: 16),
+                const _PosDemoNotice(),
+              ],
+              const SizedBox(height: 20),
+              if (message != null)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: Text(message!, key: const Key('pos-message')),
+                ),
+              if (connections.isEmpty)
+                Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(20),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Square',
+                          style: TextStyle(
+                            fontSize: 22,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        const Text('Not connected'),
+                        const SizedBox(height: 16),
+                        FilledButton(
+                          onPressed: busy || readOnly
+                              ? null
+                              : () => action(
+                                  () => ref
+                                      .read(posRepositoryProvider)
+                                      .connect(location.organizationId),
+                                  'Complete authorization in Square, then return here.',
+                                ),
+                          child: const Text('Connect'),
+                        ),
+                      ],
+                    ),
+                  ),
+                )
+              else
+                ...connections.map(
+                  (connection) =>
+                      _connectionCard(context, connection, readOnly: readOnly),
+                ),
+            ],
+          ),
         ),
       ),
     );
@@ -139,8 +163,9 @@ class _PosIntegrationsScreenState extends ConsumerState<PosIntegrationsScreen>
 
   Widget _connectionCard(
     BuildContext context,
-    PosConnectionData connection,
-  ) => Card(
+    PosConnectionData connection, {
+    required bool readOnly,
+  }) => Card(
     child: Padding(
       padding: const EdgeInsets.all(18),
       child: Column(
@@ -201,7 +226,7 @@ class _PosIntegrationsScreenState extends ConsumerState<PosIntegrationsScreen>
                     ),
                   ),
                   TextButton(
-                    onPressed: busy
+                    onPressed: busy || readOnly
                         ? null
                         : () => action(
                             () => ref
@@ -212,7 +237,7 @@ class _PosIntegrationsScreenState extends ConsumerState<PosIntegrationsScreen>
                     child: const Text('Keep manual'),
                   ),
                   TextButton(
-                    onPressed: busy
+                    onPressed: busy || readOnly
                         ? null
                         : () => action(
                             () => ref
@@ -232,7 +257,7 @@ class _PosIntegrationsScreenState extends ConsumerState<PosIntegrationsScreen>
               if (connection.status == 'DISCONNECTED' ||
                   connection.status == 'REAUTH_REQUIRED')
                 FilledButton(
-                  onPressed: busy
+                  onPressed: busy || readOnly
                       ? null
                       : () => action(
                           () => ref
@@ -244,13 +269,13 @@ class _PosIntegrationsScreenState extends ConsumerState<PosIntegrationsScreen>
                 )
               else ...[
                 OutlinedButton(
-                  onPressed: busy || connection.status == 'SYNCING'
+                  onPressed: busy || readOnly || connection.status == 'SYNCING'
                       ? null
                       : () => _map(connection),
                   child: const Text('Map location'),
                 ),
                 FilledButton(
-                  onPressed: busy || connection.status == 'SYNCING'
+                  onPressed: busy || readOnly || connection.status == 'SYNCING'
                       ? null
                       : () => action(
                           () => ref
@@ -263,7 +288,9 @@ class _PosIntegrationsScreenState extends ConsumerState<PosIntegrationsScreen>
                   ),
                 ),
                 TextButton(
-                  onPressed: busy ? null : () => _disconnect(connection),
+                  onPressed: busy || readOnly
+                      ? null
+                      : () => _disconnect(connection),
                   child: const Text('Disconnect'),
                 ),
               ],
@@ -344,6 +371,29 @@ class _PosIntegrationsScreenState extends ConsumerState<PosIntegrationsScreen>
       );
     }
   }
+}
+
+class _PosDemoNotice extends StatelessWidget {
+  const _PosDemoNotice();
+  @override
+  Widget build(BuildContext context) => Card(
+    color: FundWellTokens.surfaceSubtle,
+    child: const Padding(
+      padding: EdgeInsets.all(16),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.visibility_outlined, color: FundWellTokens.purple),
+          SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              'The public demo is view only. Open Private Account from More to connect, sync, map, or disconnect a POS account.',
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
 }
 
 class _MappingDialog extends StatefulWidget {

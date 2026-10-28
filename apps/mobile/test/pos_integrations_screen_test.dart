@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:restaurant_profit_mobile/features/dashboard/foundation.dart';
 import 'package:restaurant_profit_mobile/features/pos/foundation.dart';
 import 'package:restaurant_profit_mobile/features/pos/pos_integrations_screen.dart';
+import 'package:restaurant_profit_mobile/main.dart' show demoModeProvider;
 
 const downtown = RestaurantLocation(
   id: 'downtown',
@@ -94,19 +95,20 @@ class FakePosRepository extends PosRepository {
   }
 }
 
-Widget app(FakePosRepository repository, List<PosConnectionData> connections) =>
-    ProviderScope(
-      overrides: [
-        activeLocationProvider.overrideWithValue(downtown),
-        availableLocationsProvider.overrideWithValue(const [
-          downtown,
-          lakeside,
-        ]),
-        posRepositoryProvider.overrideWithValue(repository),
-        posConnectionsProvider('org-a').overrideWith((_) async => connections),
-      ],
-      child: const MaterialApp(home: PosIntegrationsScreen()),
-    );
+Widget app(
+  FakePosRepository repository,
+  List<PosConnectionData> connections, {
+  bool demo = false,
+}) => ProviderScope(
+  overrides: [
+    demoModeProvider.overrideWithValue(demo),
+    activeLocationProvider.overrideWithValue(downtown),
+    availableLocationsProvider.overrideWithValue(const [downtown, lakeside]),
+    posRepositoryProvider.overrideWithValue(repository),
+    posConnectionsProvider('org-a').overrideWith((_) async => connections),
+  ],
+  child: const MaterialApp(home: PosIntegrationsScreen()),
+);
 
 void main() {
   testWidgets('shows disconnected Square state and starts connect flow', (
@@ -241,6 +243,35 @@ void main() {
           .widget<OutlinedButton>(
             find.widgetWithText(OutlinedButton, 'Map location'),
           )
+          .onPressed,
+      isNull,
+    );
+  });
+
+  testWidgets('public demo explains and disables POS mutations', (
+    tester,
+  ) async {
+    final repository = FakePosRepository();
+    await tester.pumpWidget(app(repository, [connected], demo: true));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('public demo is view only'), findsOneWidget);
+    expect(
+      tester
+          .widget<FilledButton>(find.widgetWithText(FilledButton, 'Sync now'))
+          .onPressed,
+      isNull,
+    );
+    expect(
+      tester
+          .widget<OutlinedButton>(
+            find.widgetWithText(OutlinedButton, 'Map location'),
+          )
+          .onPressed,
+      isNull,
+    );
+    expect(
+      tester
+          .widget<TextButton>(find.widgetWithText(TextButton, 'Disconnect'))
           .onPressed,
       isNull,
     );

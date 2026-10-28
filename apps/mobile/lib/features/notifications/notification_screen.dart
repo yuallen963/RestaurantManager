@@ -1,8 +1,10 @@
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../main.dart' show api, storage;
+import '../../main.dart' show api, demoModeProvider, storage;
 import '../dashboard/foundation.dart';
+import '../design/fundwell_theme.dart';
+import '../responsive.dart';
 import 'push_service.dart';
 import 'notification_router.dart';
 
@@ -54,7 +56,10 @@ class NotificationRepo {
       );
   Future<void> savePreference(Map<String, dynamic> value) =>
       dio.patch('/notifications/preferences', data: value);
-  Future<void> registerToken(String token) => dio.post('/notifications/devices', data: {'token': token, 'platform': 'IOS'});
+  Future<void> registerToken(String token) => dio.post(
+    '/notifications/devices',
+    data: {'token': token, 'platform': 'IOS'},
+  );
 }
 
 final notificationRepoProvider = Provider(
@@ -134,7 +139,29 @@ class NotificationCenterScreen extends ConsumerWidget {
                                 trailing: Text(
                                   '${n.createdAt.month}/${n.createdAt.day}',
                                 ),
-                                onTap: () async { try { await r.read(notificationRepoProvider).read(n.id); } catch (_) {} r.invalidate(notificationListProvider); if (c.mounted) await r.read(notificationRouterProvider).open(c, r, NotificationRouteData(id: n.id, type: n.type, deepLinkId: n.deepLinkId, restaurantLocationId: n.restaurantLocationId)); },
+                                onTap: () async {
+                                  try {
+                                    await r
+                                        .read(notificationRepoProvider)
+                                        .read(n.id);
+                                  } catch (_) {}
+                                  r.invalidate(notificationListProvider);
+                                  if (c.mounted) {
+                                    await r
+                                        .read(notificationRouterProvider)
+                                        .open(
+                                          c,
+                                          r,
+                                          NotificationRouteData(
+                                            id: n.id,
+                                            type: n.type,
+                                            deepLinkId: n.deepLinkId,
+                                            restaurantLocationId:
+                                                n.restaurantLocationId,
+                                          ),
+                                        );
+                                  }
+                                },
                               ),
                             )
                             .toList(),
@@ -214,21 +241,49 @@ class _NotificationSettingsScreenState
       }
     }
   }
+
   Future<void> togglePush(bool enabled) async {
-    if (!enabled) { setState(() => push = false); await save(); return; }
+    if (!enabled) {
+      setState(() => push = false);
+      await save();
+      return;
+    }
     final client = await FirebasePushClient.create();
-    if (client == null || !await client.requestPermission()) { if (mounted) setState(() { push = false; error = 'Notifications are disabled in system settings.'; }); return; }
+    if (client == null || !await client.requestPermission()) {
+      if (mounted) {
+        setState(() {
+          push = false;
+          error = 'Notifications are disabled in system settings.';
+        });
+      }
+      return;
+    }
     final token = await client.token();
-    if (token == null) { if (mounted) setState(() { push = false; error = 'Unable to register this device for notifications.'; }); return; }
+    if (token == null) {
+      if (mounted) {
+        setState(() {
+          push = false;
+          error = 'Unable to register this device for notifications.';
+        });
+      }
+      return;
+    }
     await ref.read(notificationRepoProvider).registerToken(token);
     await storage.write(key: 'fcmToken', value: token);
-    client.onTokenRefresh.listen((next) async { await ref.read(notificationRepoProvider).registerToken(next); await storage.write(key: 'fcmToken', value: next); });
-    if (mounted) { setState(() => push = true); await save(); }
+    client.onTokenRefresh.listen((next) async {
+      await ref.read(notificationRepoProvider).registerToken(next);
+      await storage.write(key: 'fcmToken', value: next);
+    });
+    if (mounted) {
+      setState(() => push = true);
+      await save();
+    }
   }
 
   @override
   Widget build(BuildContext c) {
     final preference = ref.watch(notificationPreferenceProvider);
+    final readOnly = ref.watch(demoModeProvider);
     return Scaffold(
       appBar: AppBar(title: const Text('Notifications')),
       body: preference.when(
@@ -238,89 +293,137 @@ class _NotificationSettingsScreenState
         ),
         data: (value) {
           load(value);
-          return ListView(
-            padding: const EdgeInsets.all(16),
-            children: [
-              const Text('Choose which useful alerts you receive.'),
-              if (error != null)
+          return ResponsiveContent(
+            maxWidth: 820,
+            child: ListView(
+              padding: const EdgeInsets.all(24),
+              children: [
                 Text(
-                  error!,
-                  style: TextStyle(color: Theme.of(c).colorScheme.error),
+                  'Notification preferences',
+                  style: Theme.of(c).textTheme.headlineSmall,
                 ),
-              SwitchListTile(
-                title: const Text('Push Notifications'),
-                value: push,
-                onChanged: togglePush,
-              ),
-              SwitchListTile(
-                title: const Text('Weekly Digest'),
-                value: digest,
-                onChanged: (v) {
-                  setState(() => digest = v);
-                  save();
-                },
-              ),
-              SwitchListTile(
-                title: const Text('Price Alerts'),
-                value: price,
-                onChanged: (v) {
-                  setState(() => price = v);
-                  save();
-                },
-              ),
-              SwitchListTile(
-                title: const Text('Savings Alerts'),
-                value: savings,
-                onChanged: (v) {
-                  setState(() => savings = v);
-                  save();
-                },
-              ),
-              SwitchListTile(
-                title: const Text('Cost Alerts'),
-                value: cost,
-                onChanged: (v) {
-                  setState(() => cost = v);
-                  save();
-                },
-              ),
-              SwitchListTile(
-                title: const Text('Sync Alerts'),
-                value: sync,
-                onChanged: (v) {
-                  setState(() => sync = v);
-                  save();
-                },
-              ),
-              ListTile(
-                title: const Text('Quiet Hours'),
-                subtitle: Text(
-                  start == null
-                      ? 'Not set'
-                      : '${start!.format(c)} – ${end?.format(c) ?? ''}',
+                const SizedBox(height: 5),
+                Text(
+                  'Choose which useful restaurant alerts you receive.',
+                  style: Theme.of(c).textTheme.bodyMedium?.copyWith(
+                    color: FundWellTokens.mutedInk,
+                  ),
                 ),
-                onTap: () async {
-                  final s = await showTimePicker(
-                    context: c,
-                    initialTime: start ?? const TimeOfDay(hour: 22, minute: 0),
-                  );
-                  if (s == null || !c.mounted) {
-                    return;
-                  }
-                  final e = await showTimePicker(
-                    context: c,
-                    initialTime: end ?? const TimeOfDay(hour: 7, minute: 0),
-                  );
-                  if (e != null) {
-                    setState(() {
-                      start = s;
-                      end = e;
-                    });
-                    save();
-                  }
-                },
-              ),
-            ],
+                if (readOnly) ...[
+                  const SizedBox(height: 16),
+                  Card(
+                    color: FundWellTokens.surfaceSubtle,
+                    child: const Padding(
+                      padding: EdgeInsets.all(16),
+                      child: Text(
+                        'Notification preferences are view only in the public demo. Open Private Account from More to manage alerts for your restaurant.',
+                      ),
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 16),
+                if (error != null)
+                  Text(
+                    error!,
+                    style: TextStyle(color: Theme.of(c).colorScheme.error),
+                  ),
+                Card(
+                  child: Column(
+                    children: [
+                      SwitchListTile(
+                        title: const Text('Push Notifications'),
+                        value: push,
+                        onChanged: readOnly ? null : togglePush,
+                      ),
+                      SwitchListTile(
+                        title: const Text('Weekly Digest'),
+                        value: digest,
+                        onChanged: readOnly
+                            ? null
+                            : (v) {
+                                setState(() => digest = v);
+                                save();
+                              },
+                      ),
+                      SwitchListTile(
+                        title: const Text('Price Alerts'),
+                        value: price,
+                        onChanged: readOnly
+                            ? null
+                            : (v) {
+                                setState(() => price = v);
+                                save();
+                              },
+                      ),
+                      SwitchListTile(
+                        title: const Text('Savings Alerts'),
+                        value: savings,
+                        onChanged: readOnly
+                            ? null
+                            : (v) {
+                                setState(() => savings = v);
+                                save();
+                              },
+                      ),
+                      SwitchListTile(
+                        title: const Text('Cost Alerts'),
+                        value: cost,
+                        onChanged: readOnly
+                            ? null
+                            : (v) {
+                                setState(() => cost = v);
+                                save();
+                              },
+                      ),
+                      SwitchListTile(
+                        title: const Text('Sync Alerts'),
+                        value: sync,
+                        onChanged: readOnly
+                            ? null
+                            : (v) {
+                                setState(() => sync = v);
+                                save();
+                              },
+                      ),
+                      ListTile(
+                        title: const Text('Quiet Hours'),
+                        subtitle: Text(
+                          start == null
+                              ? 'Not set'
+                              : '${start!.format(c)} – ${end?.format(c) ?? ''}',
+                        ),
+                        onTap: readOnly
+                            ? null
+                            : () async {
+                                final s = await showTimePicker(
+                                  context: c,
+                                  initialTime:
+                                      start ??
+                                      const TimeOfDay(hour: 22, minute: 0),
+                                );
+                                if (s == null || !c.mounted) {
+                                  return;
+                                }
+                                final e = await showTimePicker(
+                                  context: c,
+                                  initialTime:
+                                      end ??
+                                      const TimeOfDay(hour: 7, minute: 0),
+                                );
+                                if (e != null) {
+                                  setState(() {
+                                    start = s;
+                                    end = e;
+                                  });
+                                  save();
+                                }
+                              },
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
           );
         },
       ),

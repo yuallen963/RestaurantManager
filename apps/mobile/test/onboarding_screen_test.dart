@@ -33,6 +33,7 @@ void main() {
   testWidgets('restaurant step validates required names', (tester) async {
     await tester.pumpWidget(app(2));
     await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('Continue'));
     await tester.tap(find.text('Continue'));
     await tester.pump();
     expect(find.text('Enter Organization / business name'), findsOneWidget);
@@ -45,9 +46,7 @@ void main() {
     await tester.pumpWidget(app(3, sources: const ['INVOICES', 'BANK']));
     await tester.pumpAndSettle();
     expect(
-      find.text(
-        'How would you like FundWell to learn about your restaurant?',
-      ),
+      find.text('How would you like FundWell to learn about your restaurant?'),
       findsOneWidget,
     );
     expect(
@@ -87,6 +86,21 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('You’re ready to start.'), findsOneWidget);
     expect(find.text('Go to Dashboard'), findsOneWidget);
+  });
+
+  testWidgets('onboarding renders without overflow at target widths', (
+    tester,
+  ) async {
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    tester.view.devicePixelRatio = 1;
+    for (final width in [1440.0, 1280.0, 768.0, 390.0]) {
+      tester.view.physicalSize = Size(width, 1000);
+      await tester.pumpWidget(app(1));
+      await tester.pumpAndSettle();
+      expect(find.text('Welcome to FundWell'), findsOneWidget);
+      expect(tester.takeException(), isNull, reason: 'width $width');
+    }
   });
 }
 

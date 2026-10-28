@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../dashboard/foundation.dart';
+import '../design/fundwell_theme.dart';
+import '../responsive.dart';
 
 class LocationManagementScreen extends ConsumerWidget {
   const LocationManagementScreen({required this.canManage, super.key});
@@ -45,52 +47,85 @@ class LocationManagementScreen extends ConsumerWidget {
             child: const Text('Retry'),
           ),
         ),
-        data: (value) => ListView.separated(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
-          itemCount: value.locations.length,
-          separatorBuilder: (_, _) => const SizedBox(height: 8),
-          itemBuilder: (context, index) {
-            final location = value.locations[index];
-            final active = location.id == value.active?.id;
-            final address = [
-              location.addressLine1,
-              [
-                location.city,
-                location.state,
-                location.postalCode,
-              ].where((part) => part?.isNotEmpty == true).join(' '),
-            ].where((part) => part?.isNotEmpty == true).join('\n');
-            return Card(
-              child: ListTile(
-                key: ValueKey('managed-location-${location.id}'),
-                leading: Icon(
-                  active ? Icons.check_circle : Icons.storefront_outlined,
+        data: (value) => ResponsiveContent(
+          maxWidth: 1000,
+          child: ListView.separated(
+            padding: const EdgeInsets.fromLTRB(20, 24, 20, 96),
+            itemCount: value.locations.length + 1,
+            separatorBuilder: (_, _) => const SizedBox(height: 8),
+            itemBuilder: (context, index) {
+              if (index == 0) {
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Restaurant locations',
+                        style: Theme.of(context).textTheme.headlineSmall,
+                      ),
+                      const SizedBox(height: 5),
+                      Text(
+                        canManage
+                            ? 'Add, update, and choose the active restaurant location.'
+                            : 'Choose the restaurant location you want to explore.',
+                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                          color: FundWellTokens.mutedInk,
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              }
+              final location = value.locations[index - 1];
+              final active = location.id == value.active?.id;
+              final address = [
+                location.addressLine1,
+                [
+                  location.city,
+                  location.state,
+                  location.postalCode,
+                ].where((part) => part?.isNotEmpty == true).join(' '),
+              ].where((part) => part?.isNotEmpty == true).join('\n');
+              return Card(
+                child: ListTile(
+                  key: ValueKey('managed-location-${location.id}'),
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 18,
+                    vertical: 8,
+                  ),
+                  leading: Icon(
+                    active ? Icons.check_circle : Icons.storefront_outlined,
+                    color: active
+                        ? FundWellTokens.positive
+                        : FundWellTokens.purple,
+                  ),
+                  title: Text(location.name),
+                  subtitle: Text(
+                    [
+                      if (active) 'Active location',
+                      if (address.isNotEmpty) address,
+                      location.timezone,
+                    ].join('\n'),
+                  ),
+                  isThreeLine: true,
+                  trailing: canManage
+                      ? IconButton(
+                          tooltip: 'Edit ${location.name}',
+                          icon: const Icon(Icons.edit_outlined),
+                          onPressed: () =>
+                              _openForm(context, ref, location: location),
+                        )
+                      : null,
+                  onTap: active
+                      ? null
+                      : () => ref
+                            .read(activeLocationControllerProvider.notifier)
+                            .select(location),
                 ),
-                title: Text(location.name),
-                subtitle: Text(
-                  [
-                    if (active) 'Active location',
-                    if (address.isNotEmpty) address,
-                    location.timezone,
-                  ].join('\n'),
-                ),
-                isThreeLine: true,
-                trailing: canManage
-                    ? IconButton(
-                        tooltip: 'Edit ${location.name}',
-                        icon: const Icon(Icons.edit_outlined),
-                        onPressed: () =>
-                            _openForm(context, ref, location: location),
-                      )
-                    : null,
-                onTap: active
-                    ? null
-                    : () => ref
-                          .read(activeLocationControllerProvider.notifier)
-                          .select(location),
-              ),
-            );
-          },
+              );
+            },
+          ),
         ),
       ),
     );
@@ -187,96 +222,99 @@ class _LocationFormScreenState extends ConsumerState<LocationFormScreen> {
     appBar: AppBar(
       title: Text(widget.location == null ? 'Add Location' : 'Edit Location'),
     ),
-    body: Form(
-      key: _formKey,
-      child: ListView(
-        padding: const EdgeInsets.all(20),
-        children: [
-          TextFormField(
-            key: const Key('location-name'),
-            controller: _name,
-            decoration: const InputDecoration(labelText: 'Location name'),
-            textCapitalization: TextCapitalization.words,
-            validator: (value) =>
-                _required(value) ??
-                (value!.trim().length < 2
-                    ? 'Enter at least 2 characters'
-                    : null),
-          ),
-          TextFormField(
-            key: const Key('location-address'),
-            controller: _address,
-            decoration: const InputDecoration(labelText: 'Street address'),
-            textCapitalization: TextCapitalization.words,
-            validator: _required,
-          ),
-          TextFormField(
-            key: const Key('location-city'),
-            controller: _city,
-            decoration: const InputDecoration(labelText: 'City'),
-            textCapitalization: TextCapitalization.words,
-            validator: _required,
-          ),
-          Row(
-            children: [
-              Expanded(
-                child: TextFormField(
-                  key: const Key('location-state'),
-                  controller: _state,
-                  decoration: const InputDecoration(labelText: 'State'),
-                  textCapitalization: TextCapitalization.characters,
-                  validator: (value) =>
-                      _required(value) ??
-                      (RegExp(r'^[A-Za-z]{2}$').hasMatch(value!.trim())
-                          ? null
-                          : 'Use 2 letters'),
+    body: ResponsiveContent(
+      maxWidth: 760,
+      child: Form(
+        key: _formKey,
+        child: ListView(
+          padding: const EdgeInsets.all(24),
+          children: [
+            TextFormField(
+              key: const Key('location-name'),
+              controller: _name,
+              decoration: const InputDecoration(labelText: 'Location name'),
+              textCapitalization: TextCapitalization.words,
+              validator: (value) =>
+                  _required(value) ??
+                  (value!.trim().length < 2
+                      ? 'Enter at least 2 characters'
+                      : null),
+            ),
+            TextFormField(
+              key: const Key('location-address'),
+              controller: _address,
+              decoration: const InputDecoration(labelText: 'Street address'),
+              textCapitalization: TextCapitalization.words,
+              validator: _required,
+            ),
+            TextFormField(
+              key: const Key('location-city'),
+              controller: _city,
+              decoration: const InputDecoration(labelText: 'City'),
+              textCapitalization: TextCapitalization.words,
+              validator: _required,
+            ),
+            Row(
+              children: [
+                Expanded(
+                  child: TextFormField(
+                    key: const Key('location-state'),
+                    controller: _state,
+                    decoration: const InputDecoration(labelText: 'State'),
+                    textCapitalization: TextCapitalization.characters,
+                    validator: (value) =>
+                        _required(value) ??
+                        (RegExp(r'^[A-Za-z]{2}$').hasMatch(value!.trim())
+                            ? null
+                            : 'Use 2 letters'),
+                  ),
                 ),
+                const SizedBox(width: 12),
+                Expanded(
+                  flex: 2,
+                  child: TextFormField(
+                    key: const Key('location-postal-code'),
+                    controller: _postalCode,
+                    decoration: const InputDecoration(labelText: 'ZIP code'),
+                    keyboardType: TextInputType.number,
+                    validator: (value) =>
+                        _required(value) ??
+                        (RegExp(r'^\d{5}(-\d{4})?$').hasMatch(value!.trim())
+                            ? null
+                            : 'Enter a valid ZIP'),
+                  ),
+                ),
+              ],
+            ),
+            TextFormField(
+              key: const Key('location-timezone'),
+              controller: _timezone,
+              decoration: const InputDecoration(
+                labelText: 'Time zone',
+                helperText: 'Use an IANA time zone, such as America/Detroit',
               ),
-              const SizedBox(width: 12),
-              Expanded(
-                flex: 2,
-                child: TextFormField(
-                  key: const Key('location-postal-code'),
-                  controller: _postalCode,
-                  decoration: const InputDecoration(labelText: 'ZIP code'),
-                  keyboardType: TextInputType.number,
-                  validator: (value) =>
-                      _required(value) ??
-                      (RegExp(r'^\d{5}(-\d{4})?$').hasMatch(value!.trim())
-                          ? null
-                          : 'Enter a valid ZIP'),
-                ),
+              validator: _required,
+            ),
+            if (_error != null) ...[
+              const SizedBox(height: 16),
+              Text(
+                _error!,
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
               ),
             ],
-          ),
-          TextFormField(
-            key: const Key('location-timezone'),
-            controller: _timezone,
-            decoration: const InputDecoration(
-              labelText: 'Time zone',
-              helperText: 'Use an IANA time zone, such as America/Detroit',
-            ),
-            validator: _required,
-          ),
-          if (_error != null) ...[
-            const SizedBox(height: 16),
-            Text(
-              _error!,
-              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            const SizedBox(height: 24),
+            FilledButton(
+              key: const Key('save-location'),
+              onPressed: _saving ? null : _save,
+              child: _saving
+                  ? const SizedBox.square(
+                      dimension: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Text('Save Location'),
             ),
           ],
-          const SizedBox(height: 24),
-          FilledButton(
-            key: const Key('save-location'),
-            onPressed: _saving ? null : _save,
-            child: _saving
-                ? const SizedBox.square(
-                    dimension: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Text('Save Location'),
-          ),
-        ],
+        ),
       ),
     ),
   );

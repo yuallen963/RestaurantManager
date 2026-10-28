@@ -4,9 +4,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../main.dart' show Home;
 import '../banking/bank_screens.dart';
 import '../dashboard/foundation.dart';
+import '../design/fundwell_theme.dart';
 import '../invoices/foundation.dart';
 import '../invoices/invoice_screens.dart';
 import '../pos/pos_integrations_screen.dart';
+import '../responsive.dart';
 import 'foundation.dart';
 
 // ignore_for_file: curly_braces_in_flow_control_structures
@@ -128,15 +130,43 @@ class _OnboardingState extends ConsumerState<Onboarding> {
               )
             : null,
         title: const Text('Set up FundWell'),
+        actions: [
+          Padding(
+            padding: const EdgeInsets.only(right: 20),
+            child: Center(
+              child: Text(
+                'Step $step of 6',
+                style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                  color: FundWellTokens.mutedInk,
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
       body: SafeArea(
         child: Column(
           children: [
             LinearProgressIndicator(value: step / 6),
             Expanded(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.all(24),
-                child: _content(),
+              child: ResponsiveContent(
+                maxWidth: 820,
+                child: SingleChildScrollView(
+                  padding: EdgeInsets.symmetric(
+                    horizontal: MediaQuery.sizeOf(context).width < 600
+                        ? 16
+                        : 32,
+                    vertical: 28,
+                  ),
+                  child: Card(
+                    child: Padding(
+                      padding: EdgeInsets.all(
+                        MediaQuery.sizeOf(context).width < 600 ? 20 : 36,
+                      ),
+                      child: _content(),
+                    ),
+                  ),
+                ),
               ),
             ),
           ],
@@ -166,8 +196,27 @@ class _OnboardingState extends ConsumerState<Onboarding> {
   Widget _welcome() => Column(
     crossAxisAlignment: CrossAxisAlignment.stretch,
     children: [
-      Text('FundWell', style: Theme.of(context).textTheme.displaySmall),
-      const SizedBox(height: 32),
+      Container(
+        width: 52,
+        height: 52,
+        decoration: BoxDecoration(
+          color: FundWellTokens.surfaceSubtle,
+          borderRadius: BorderRadius.circular(FundWellTokens.radius),
+        ),
+        child: const Icon(
+          Icons.insights_outlined,
+          color: FundWellTokens.purple,
+          size: 28,
+        ),
+      ),
+      const SizedBox(height: 24),
+      Text(
+        'Welcome to FundWell',
+        style: Theme.of(
+          context,
+        ).textTheme.titleLarge?.copyWith(color: FundWellTokens.purple),
+      ),
+      const SizedBox(height: 12),
       Text(
         'Find the costs quietly eating your restaurant’s margin.',
         style: Theme.of(context).textTheme.headlineMedium,
@@ -176,7 +225,7 @@ class _OnboardingState extends ConsumerState<Onboarding> {
       const Text(
         'Track vendor price increases, understand where costs are rising, and see what deserves your attention.',
       ),
-      const SizedBox(height: 32),
+      const SizedBox(height: 28),
       FilledButton(
         onPressed: busy ? null : () => _advance(2),
         child: const Text('Get Started'),
@@ -196,15 +245,24 @@ class _OnboardingState extends ConsumerState<Onboarding> {
         _field(organization, 'Organization / business name'),
         _field(location, 'Restaurant location name'),
         _field(address, 'Street address', optional: true),
-        Row(
-          children: [
-            Expanded(child: _field(city, 'City', optional: true)),
-            const SizedBox(width: 12),
-            SizedBox(
-              width: 92,
-              child: _field(stateName, 'State', optional: true),
-            ),
-          ],
+        LayoutBuilder(
+          builder: (context, constraints) => constraints.maxWidth < 480
+              ? Column(
+                  children: [
+                    _field(city, 'City', optional: true),
+                    _field(stateName, 'State', optional: true),
+                  ],
+                )
+              : Row(
+                  children: [
+                    Expanded(child: _field(city, 'City', optional: true)),
+                    const SizedBox(width: 12),
+                    SizedBox(
+                      width: 110,
+                      child: _field(stateName, 'State', optional: true),
+                    ),
+                  ],
+                ),
         ),
         _field(zip, 'ZIP code', optional: true),
         DropdownButtonFormField(
@@ -275,16 +333,23 @@ class _OnboardingState extends ConsumerState<Onboarding> {
       ),
     ],
   );
-  Widget _source(String value, String title, String subtitle) =>
-      CheckboxListTile(
+  Widget _source(String value, String title, String subtitle) => Padding(
+    padding: const EdgeInsets.only(bottom: 10),
+    child: Card(
+      color: sources.contains(value)
+          ? FundWellTokens.surfaceSubtle
+          : FundWellTokens.surface,
+      child: CheckboxListTile(
         value: sources.contains(value),
         title: Text(title),
         subtitle: Text(subtitle),
-        contentPadding: EdgeInsets.zero,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
         onChanged: (selected) => setState(
           () => selected! ? sources.add(value) : sources.remove(value),
         ),
-      );
+      ),
+    ),
+  );
   Widget _invoices() => Column(
     crossAxisAlignment: CrossAxisAlignment.stretch,
     children: [
