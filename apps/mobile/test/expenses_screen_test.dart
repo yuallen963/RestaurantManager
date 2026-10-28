@@ -8,6 +8,7 @@ import 'package:restaurant_profit_mobile/features/dashboard/foundation.dart';
 import 'package:restaurant_profit_mobile/features/banking/foundation.dart';
 import 'package:restaurant_profit_mobile/features/expenses/expenses_screen.dart';
 import 'package:restaurant_profit_mobile/features/expenses/foundation.dart';
+import 'package:restaurant_profit_mobile/main.dart' show demoModeProvider;
 
 const downtown = RestaurantLocation(
   id: 'downtown',
@@ -131,8 +132,10 @@ void main() {
       canRetry: false,
     ),
     List<BankTransactionData> awaitingReview = const [],
+    bool demo = false,
   }) => ProviderScope(
     overrides: [
+      demoModeProvider.overrideWithValue(demo),
       activeLocationProvider.overrideWithValue(downtown),
       availableLocationsProvider.overrideWithValue([downtown, lakeside]),
       expenseRepositoryProvider.overrideWithValue(repository),
@@ -174,11 +177,16 @@ void main() {
 
     expect(find.text('Confirmed Expenses'), findsOneWidget);
     expect(find.text('\$2,150'), findsOneWidget);
-    expect(find.text('2 expenses'), findsOneWidget);
+    expect(find.text('2 expenses'), findsWidgets);
     expect(find.text('Sysco'), findsOneWidget);
-    expect(find.text('Weekly food delivery'), findsNWidgets(2));
+    expect(find.text('Weekly food delivery'), findsOneWidget);
     expect(find.textContaining('Food • Oct 7, 2026'), findsOneWidget);
     expect(find.text('\$1,250'), findsOneWidget);
+    await tester.drag(
+      find.byKey(const Key('expenses-list')),
+      const Offset(0, -800),
+    );
+    await tester.pumpAndSettle();
     expect(find.text('ADP'), findsOneWidget);
   });
 
@@ -212,6 +220,12 @@ void main() {
       restaurantLocationId: downtown.id,
     );
     await tester.pumpWidget(app(repository, awaitingReview: [waiting]));
+    await tester.pumpAndSettle();
+
+    await tester.drag(
+      find.byKey(const Key('expenses-list')),
+      const Offset(0, -1200),
+    );
     await tester.pumpAndSettle();
 
     expect(find.textContaining('waiting for review'), findsOneWidget);
@@ -379,9 +393,11 @@ void main() {
     await tester.pumpWidget(app(repository));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('Load more'));
+    await tester.drag(
+      find.byKey(const Key('expenses-list')),
+      const Offset(0, -1200),
+    );
     await tester.pumpAndSettle();
-
     expect(repository.requests.map((request) => request.page), [1, 2]);
     expect(find.byKey(const Key('expense-one')), findsOneWidget);
     expect(find.byKey(const Key('expense-two')), findsOneWidget);
@@ -408,5 +424,40 @@ void main() {
     expect(find.text('Paid in full'), findsOneWidget);
     expect(find.text('Source'), findsOneWidget);
     expect(find.text('Manual'), findsOneWidget);
+  });
+
+  testWidgets(
+    'public demo clearly presents the expense workspace as view only',
+    (tester) async {
+      final repository = FakeExpenseRepository(
+        onList: (_) async => page([expense(id: 'one')]),
+      );
+      await tester.pumpWidget(app(repository, demo: true));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('Public demo is view only'), findsOneWidget);
+      await tester.drag(
+        find.byKey(const Key('expenses-list')),
+        const Offset(0, -1200),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('expense-one')), findsOneWidget);
+    },
+  );
+
+  testWidgets('expenses workspace renders without overflow at target widths', (
+    tester,
+  ) async {
+    final repository = FakeExpenseRepository(
+      onList: (_) async => page([expense(id: 'one')]),
+    );
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    tester.view.devicePixelRatio = 1;
+    for (final width in [1440.0, 1280.0, 768.0, 390.0]) {
+      tester.view.physicalSize = Size(width, 1200);
+      await tester.pumpWidget(app(repository));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull, reason: 'width $width');
+    }
   });
 }

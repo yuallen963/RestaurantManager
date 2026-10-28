@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../main.dart' show demoModeProvider;
 import '../dashboard/foundation.dart';
 import '../dashboard/home_screen.dart';
 import '../invoices/invoice_screens.dart';
@@ -11,6 +12,7 @@ import '../banking/bank_screens.dart';
 import '../banking/foundation.dart';
 import 'foundation.dart';
 import '../responsive.dart';
+import '../design/fundwell_theme.dart';
 
 class ExpensesScreen extends ConsumerStatefulWidget {
   const ExpensesScreen({super.key});
@@ -95,7 +97,16 @@ class _ExpensesScreenState extends ConsumerState<ExpensesScreen> {
       child: ListView.builder(
         key: const Key('expenses-list'),
         controller: scrollController,
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
+        padding: EdgeInsets.fromLTRB(
+          MediaQuery.sizeOf(context).width >= FundWellBreakpoints.desktop
+              ? 24
+              : 16,
+          20,
+          MediaQuery.sizeOf(context).width >= FundWellBreakpoints.desktop
+              ? 24
+              : 16,
+          32,
+        ),
         itemCount: expenseData.items.length + 2,
         itemBuilder: (context, index) {
           if (index == 0) {
@@ -227,19 +238,23 @@ class _ExpenseHeader extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final locations = ref.watch(availableLocationsProvider);
+    final readOnly = ref.watch(demoModeProvider);
+    final desktop =
+        MediaQuery.sizeOf(context).width >= FundWellBreakpoints.desktop;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
+        Flex(
+          direction: desktop ? Axis.horizontal : Axis.vertical,
+          crossAxisAlignment: desktop
+              ? CrossAxisAlignment.center
+              : CrossAxisAlignment.start,
           children: [
-            Expanded(
-              child: Text(
-                'Expenses',
-                style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ),
+            if (desktop)
+              Expanded(child: _ExpenseTitle())
+            else
+              const _ExpenseTitle(),
+            SizedBox(width: desktop ? 20 : 0, height: desktop ? 0 : 16),
             const DateRangeSelector(),
           ],
         ),
@@ -251,44 +266,45 @@ class _ExpenseHeader extends ConsumerWidget {
               .read(activeLocationControllerProvider.notifier)
               .select(selected),
         ),
+        if (readOnly) ...[
+          const SizedBox(height: 12),
+          const _ExpenseDemoNotice(),
+        ],
         const SizedBox(height: 12),
-        Align(
-          alignment: Alignment.centerRight,
-          child: Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              OutlinedButton.icon(
-                key: const Key('open-bank-transactions'),
-                onPressed: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => const BankTransactionsScreen(),
-                  ),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            OutlinedButton.icon(
+              key: const Key('open-bank-transactions'),
+              onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => const BankTransactionsScreen(),
                 ),
-                icon: const Icon(Icons.account_balance),
-                label: const Text('Bank Transactions'),
               ),
-              OutlinedButton.icon(
-                key: const Key('open-price-changes'),
-                onPressed: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const PriceChangesScreen()),
-                ),
-                icon: const Icon(Icons.trending_up),
-                label: const Text('Price Changes'),
+              icon: const Icon(Icons.account_balance),
+              label: const Text('Bank Transactions'),
+            ),
+            OutlinedButton.icon(
+              key: const Key('open-price-changes'),
+              onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const PriceChangesScreen()),
               ),
-              OutlinedButton.icon(
-                key: const Key('open-invoices'),
-                onPressed: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const InvoiceListScreen()),
-                ),
-                icon: const Icon(Icons.receipt_long),
-                label: const Text('Invoices'),
+              icon: const Icon(Icons.trending_up),
+              label: const Text('Price Changes'),
+            ),
+            OutlinedButton.icon(
+              key: const Key('open-invoices'),
+              onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const InvoiceListScreen()),
               ),
-            ],
-          ),
+              icon: const Icon(Icons.receipt_long),
+              label: const Text('Invoices'),
+            ),
+          ],
         ),
         const SizedBox(height: 16),
         Consumer(
@@ -298,9 +314,12 @@ class _ExpenseHeader extends ConsumerWidget {
             if (count == 0) return const SizedBox.shrink();
             return Card(
               key: const Key('expense-bank-activity-card'),
-              color: Theme.of(context).colorScheme.secondaryContainer,
+              color: const Color(0xFFFFF8EC),
               child: ListTile(
-                leading: const Icon(Icons.account_balance),
+                leading: const Icon(
+                  Icons.info_outline,
+                  color: FundWellTokens.warning,
+                ),
                 title: Text('Bank activity · $count needs review'),
                 subtitle: const Text(
                   'Unreviewed outflows are kept separate from confirmed Expenses.',
@@ -324,10 +343,8 @@ class _ExpenseHeader extends ConsumerWidget {
           const SizedBox(height: 12),
         Card(
           key: const Key('expense-total-card'),
-          color: Theme.of(context).colorScheme.primaryContainer,
-          elevation: 0,
           child: Padding(
-            padding: const EdgeInsets.all(18),
+            padding: const EdgeInsets.all(20),
             child: Row(
               children: [
                 Expanded(
@@ -336,109 +353,198 @@ class _ExpenseHeader extends ConsumerWidget {
                     children: [
                       Text(
                         'Confirmed Expenses',
-                        style: Theme.of(context).textTheme.titleMedium,
+                        style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                          color: FundWellTokens.mutedInk,
+                        ),
                       ),
                       const SizedBox(height: 4),
                       Text(
                         formatCurrency(totalAmount),
                         style: Theme.of(context).textTheme.headlineMedium
-                            ?.copyWith(fontWeight: FontWeight.w700),
+                            ?.copyWith(
+                              fontWeight: FontWeight.w700,
+                              color: FundWellTokens.purple,
+                              fontFeatures: const [
+                                FontFeature.tabularFigures(),
+                              ],
+                            ),
                       ),
                     ],
                   ),
                 ),
                 Text(
                   '$totalItems ${totalItems == 1 ? 'expense' : 'expenses'}',
-                  style: Theme.of(context).textTheme.labelLarge,
+                  style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                    color: FundWellTokens.mutedInk,
+                  ),
                 ),
               ],
             ),
           ),
         ),
         const SizedBox(height: 16),
-        TextField(
-          key: const Key('expense-search'),
-          controller: searchController,
-          onChanged: onSearchChanged,
-          decoration: InputDecoration(
-            hintText: 'Search expenses or vendors',
-            prefixIcon: const Icon(Icons.search),
-            suffixIcon: searchController.text.isEmpty
-                ? null
-                : IconButton(
-                    tooltip: 'Clear search',
-                    onPressed: () {
-                      searchController.clear();
-                      onSearchChanged('');
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final wide = constraints.maxWidth >= 760;
+            final search = TextField(
+              key: const Key('expense-search'),
+              controller: searchController,
+              onChanged: onSearchChanged,
+              decoration: InputDecoration(
+                hintText: 'Search expenses or vendors',
+                prefixIcon: const Icon(Icons.search),
+                suffixIcon: searchController.text.isEmpty
+                    ? null
+                    : IconButton(
+                        tooltip: 'Clear search',
+                        onPressed: () {
+                          searchController.clear();
+                          onSearchChanged('');
+                        },
+                        icon: const Icon(Icons.close),
+                      ),
+              ),
+            );
+            final filterRow = SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [
+                  _LookupFilter<ExpenseCategoryOption>(
+                    key: const Key('category-filter'),
+                    label: filters.categoryId == null
+                        ? 'All Categories'
+                        : lookups.categoryName(filters.categoryId!),
+                    allLabel: 'All Categories',
+                    selectedId: filters.categoryId,
+                    options: lookups.categories,
+                    idOf: (option) => option.id,
+                    nameOf: (option) => option.name,
+                    onSelected: (id) {
+                      ref.read(expenseFiltersProvider.notifier).state = filters
+                          .copyWith(categoryId: id);
                     },
-                    icon: const Icon(Icons.close),
                   ),
-            border: const OutlineInputBorder(),
-          ),
+                  const SizedBox(width: 8),
+                  _LookupFilter<ExpenseVendorOption>(
+                    key: const Key('vendor-filter'),
+                    label: filters.vendorId == null
+                        ? 'All Vendors'
+                        : lookups.vendorName(filters.vendorId!) ??
+                              'All Vendors',
+                    allLabel: 'All Vendors',
+                    selectedId: filters.vendorId,
+                    options: lookups.vendors,
+                    idOf: (option) => option.id,
+                    nameOf: (option) => option.name,
+                    onSelected: (id) {
+                      ref.read(expenseFiltersProvider.notifier).state = filters
+                          .copyWith(vendorId: id);
+                    },
+                  ),
+                  const SizedBox(width: 8),
+                  PopupMenuButton<ExpenseSort>(
+                    key: const Key('expense-sort'),
+                    tooltip: 'Sort expenses',
+                    initialValue: filters.sort,
+                    onSelected: (sort) {
+                      ref.read(expenseFiltersProvider.notifier).state = filters
+                          .copyWith(sort: sort);
+                    },
+                    itemBuilder: (_) => ExpenseSort.values
+                        .map(
+                          (sort) => PopupMenuItem(
+                            value: sort,
+                            child: Text(sort.label),
+                          ),
+                        )
+                        .toList(),
+                    child: Chip(
+                      avatar: const Icon(Icons.swap_vert, size: 18),
+                      label: Text(filters.sort.label),
+                    ),
+                  ),
+                ],
+              ),
+            );
+            return wide
+                ? Row(
+                    children: [
+                      Expanded(child: search),
+                      const SizedBox(width: 12),
+                      filterRow,
+                    ],
+                  )
+                : Column(
+                    children: [search, const SizedBox(height: 12), filterRow],
+                  );
+          },
         ),
-        const SizedBox(height: 12),
-        SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: Row(
-            children: [
-              _LookupFilter<ExpenseCategoryOption>(
-                key: const Key('category-filter'),
-                label: filters.categoryId == null
-                    ? 'All Categories'
-                    : lookups.categoryName(filters.categoryId!),
-                allLabel: 'All Categories',
-                selectedId: filters.categoryId,
-                options: lookups.categories,
-                idOf: (option) => option.id,
-                nameOf: (option) => option.name,
-                onSelected: (id) {
-                  ref.read(expenseFiltersProvider.notifier).state = filters
-                      .copyWith(categoryId: id);
-                },
+        const SizedBox(height: 20),
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                'Expense activity',
+                style: Theme.of(context).textTheme.titleLarge,
               ),
-              const SizedBox(width: 8),
-              _LookupFilter<ExpenseVendorOption>(
-                key: const Key('vendor-filter'),
-                label: filters.vendorId == null
-                    ? 'All Vendors'
-                    : lookups.vendorName(filters.vendorId!) ?? 'All Vendors',
-                allLabel: 'All Vendors',
-                selectedId: filters.vendorId,
-                options: lookups.vendors,
-                idOf: (option) => option.id,
-                nameOf: (option) => option.name,
-                onSelected: (id) {
-                  ref.read(expenseFiltersProvider.notifier).state = filters
-                      .copyWith(vendorId: id);
-                },
-              ),
-              const SizedBox(width: 8),
-              PopupMenuButton<ExpenseSort>(
-                key: const Key('expense-sort'),
-                tooltip: 'Sort expenses',
-                initialValue: filters.sort,
-                onSelected: (sort) {
-                  ref.read(expenseFiltersProvider.notifier).state = filters
-                      .copyWith(sort: sort);
-                },
-                itemBuilder: (_) => ExpenseSort.values
-                    .map(
-                      (sort) =>
-                          PopupMenuItem(value: sort, child: Text(sort.label)),
-                    )
-                    .toList(),
-                child: Chip(
-                  avatar: const Icon(Icons.swap_vert, size: 18),
-                  label: Text(filters.sort.label),
-                ),
-              ),
-            ],
-          ),
+            ),
+            Text(
+              '$totalItems ${totalItems == 1 ? 'expense' : 'expenses'}',
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(color: FundWellTokens.mutedInk),
+            ),
+          ],
         ),
-        const SizedBox(height: 14),
+        const SizedBox(height: 10),
       ],
     );
   }
+}
+
+class _ExpenseTitle extends StatelessWidget {
+  const _ExpenseTitle();
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Text('Expenses', style: Theme.of(context).textTheme.headlineSmall),
+      const SizedBox(height: 4),
+      Text(
+        'Understand confirmed business spending by vendor and category.',
+        style: Theme.of(
+          context,
+        ).textTheme.bodyMedium?.copyWith(color: FundWellTokens.mutedInk),
+      ),
+    ],
+  );
+}
+
+class _ExpenseDemoNotice extends StatelessWidget {
+  const _ExpenseDemoNotice();
+  @override
+  Widget build(BuildContext context) => Card(
+    color: FundWellTokens.surfaceSubtle,
+    child: const Padding(
+      padding: EdgeInsets.all(14),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            Icons.visibility_outlined,
+            size: 20,
+            color: FundWellTokens.purple,
+          ),
+          SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'Public demo is view only. Explore confirmed expenses and filters; financial changes are disabled.',
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
 }
 
 class _LookupFilter<T> extends StatelessWidget {
@@ -502,6 +608,8 @@ class ExpenseListItem extends StatelessWidget {
         (description?.isNotEmpty == true
             ? description!
             : lookups.categoryName(expense.expenseCategoryId));
+    final desktop = MediaQuery.sizeOf(context).width >= 900;
+    final category = lookups.categoryName(expense.expenseCategoryId);
     return Card(
       key: Key('expense-${expense.id}'),
       elevation: 0,
@@ -511,54 +619,125 @@ class ExpenseListItem extends StatelessWidget {
         onTap: onTap,
         child: Padding(
           padding: const EdgeInsets.all(15),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+          child: desktop
+              ? Row(
                   children: [
-                    Text(
-                      primary,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.w600,
+                    Expanded(
+                      flex: 3,
+                      child: _ExpenseIdentity(
+                        primary: primary,
+                        description: vendor != null ? description : null,
                       ),
                     ),
-                    if (vendor != null && description?.isNotEmpty == true) ...[
-                      const SizedBox(height: 3),
-                      Text(
-                        description!,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
+                    Expanded(
+                      flex: 2,
+                      child: Text(
+                        category,
+                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                          color: FundWellTokens.mutedInk,
+                        ),
                       ),
-                    ],
-                    const SizedBox(height: 7),
+                    ),
+                    SizedBox(
+                      width: 150,
+                      child: Text(
+                        formatExpenseDate(expense.date),
+                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                          color: FundWellTokens.mutedInk,
+                        ),
+                      ),
+                    ),
+                    SizedBox(
+                      width: 150,
+                      child: Text(
+                        formatCurrency(expense.amount),
+                        textAlign: TextAlign.right,
+                        style: Theme.of(context).textTheme.titleMedium
+                            ?.copyWith(
+                              fontWeight: FontWeight.w700,
+                              fontFeatures: const [
+                                FontFeature.tabularFigures(),
+                              ],
+                            ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    const Icon(
+                      Icons.chevron_right,
+                      color: FundWellTokens.mutedInk,
+                    ),
+                  ],
+                )
+              : Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: _ExpenseIdentity(
+                            primary: primary,
+                            description: vendor != null ? description : null,
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Text(
+                          formatCurrency(expense.amount),
+                          textAlign: TextAlign.right,
+                          style: Theme.of(context).textTheme.titleMedium
+                              ?.copyWith(
+                                fontWeight: FontWeight.w700,
+                                fontFeatures: const [
+                                  FontFeature.tabularFigures(),
+                                ],
+                              ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 9),
                     Text(
-                      '${lookups.categoryName(expense.expenseCategoryId)} • ${formatExpenseDate(expense.date)}',
+                      '$category • ${formatExpenseDate(expense.date)}',
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        color: FundWellTokens.mutedInk,
                       ),
                     ),
                   ],
                 ),
-              ),
-              const SizedBox(width: 12),
-              Text(
-                formatCurrency(expense.amount),
-                style: Theme.of(
-                  context,
-                ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
-              ),
-            ],
-          ),
         ),
       ),
     );
   }
+}
+
+class _ExpenseIdentity extends StatelessWidget {
+  const _ExpenseIdentity({required this.primary, this.description});
+  final String primary;
+  final String? description;
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Text(
+        primary,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: Theme.of(context).textTheme.titleMedium,
+      ),
+      if (description?.isNotEmpty == true) ...[
+        const SizedBox(height: 3),
+        Text(
+          description!,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: Theme.of(
+            context,
+          ).textTheme.bodySmall?.copyWith(color: FundWellTokens.mutedInk),
+        ),
+      ],
+    ],
+  );
 }
 
 class ExpenseDetailSheet extends ConsumerWidget {
@@ -595,15 +774,45 @@ class ExpenseDetailSheet extends ConsumerWidget {
               children: [
                 Text(
                   'Expense Details',
-                  style: Theme.of(
-                    context,
-                  ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
+                  style: Theme.of(context).textTheme.headlineSmall,
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Confirmed business expense',
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: FundWellTokens.mutedInk,
+                  ),
                 ),
                 const SizedBox(height: 18),
-                Text(
-                  formatCurrency(expense.amount),
-                  style: Theme.of(context).textTheme.headlineLarge?.copyWith(
-                    fontWeight: FontWeight.w700,
+                Card(
+                  color: FundWellTokens.surfaceSubtle,
+                  child: Padding(
+                    padding: const EdgeInsets.all(18),
+                    child: SizedBox(
+                      width: double.infinity,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Amount',
+                            style: Theme.of(context).textTheme.labelLarge
+                                ?.copyWith(color: FundWellTokens.mutedInk),
+                          ),
+                          const SizedBox(height: 5),
+                          Text(
+                            formatCurrency(expense.amount),
+                            style: Theme.of(context).textTheme.headlineLarge
+                                ?.copyWith(
+                                  fontWeight: FontWeight.w700,
+                                  color: FundWellTokens.purple,
+                                  fontFeatures: const [
+                                    FontFeature.tabularFigures(),
+                                  ],
+                                ),
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
                 ),
                 const SizedBox(height: 20),

@@ -2,9 +2,12 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../main.dart' show demoModeProvider;
 import '../dashboard/foundation.dart';
 import '../dashboard/home_screen.dart';
 import '../banking/foundation.dart';
+import '../design/fundwell_theme.dart';
+import '../responsive.dart';
 import 'foundation.dart';
 
 class RevenueScreen extends ConsumerStatefulWidget {
@@ -62,76 +65,184 @@ class _RevenueScreenState extends ConsumerState<RevenueScreen> {
     BuildContext context,
     RestaurantLocation location,
     RevenueListState data,
-  ) => ListView.builder(
-    key: const Key('revenue-list'),
-    controller: scrollController,
-    padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
-    itemCount: data.items.length + 2,
-    itemBuilder: (context, index) {
-      if (index == 0) return RevenueHeader(location: location, state: data);
-      if (index == data.items.length + 1) {
-        if (data.items.isEmpty) {
-          return const Padding(
-            padding: EdgeInsets.only(top: 32),
-            child: EmptyState(message: 'No revenue found for this period.'),
-          );
+  ) => ResponsiveContent(
+    child: ListView.builder(
+      key: const Key('revenue-list'),
+      controller: scrollController,
+      padding: EdgeInsets.fromLTRB(
+        MediaQuery.sizeOf(context).width >= FundWellBreakpoints.desktop
+            ? 24
+            : 16,
+        20,
+        MediaQuery.sizeOf(context).width >= FundWellBreakpoints.desktop
+            ? 24
+            : 16,
+        32,
+      ),
+      itemCount: data.items.length + 2,
+      itemBuilder: (context, index) {
+        if (index == 0) return RevenueHeader(location: location, state: data);
+        if (index == data.items.length + 1) {
+          if (data.items.isEmpty) {
+            return const Padding(
+              padding: EdgeInsets.only(top: 32),
+              child: EmptyState(message: 'No revenue found for this period.'),
+            );
+          }
+          if (data.isLoadingMore) {
+            return const Padding(
+              padding: EdgeInsets.all(20),
+              child: Center(child: CircularProgressIndicator()),
+            );
+          }
+          if (data.loadMoreFailed) {
+            return Center(
+              child: TextButton(
+                onPressed: () =>
+                    ref.read(revenueListProvider.notifier).loadMore(),
+                child: const Text('Retry loading more'),
+              ),
+            );
+          }
+          return data.pagination.hasMore
+              ? Center(
+                  child: TextButton(
+                    onPressed: () =>
+                        ref.read(revenueListProvider.notifier).loadMore(),
+                    child: const Text('Load more'),
+                  ),
+                )
+              : const SizedBox(height: 12);
         }
-        if (data.isLoadingMore) {
-          return const Padding(
-            padding: EdgeInsets.all(20),
-            child: Center(child: CircularProgressIndicator()),
-          );
-        }
-        if (data.loadMoreFailed) {
-          return Center(
-            child: TextButton(
-              onPressed: () =>
-                  ref.read(revenueListProvider.notifier).loadMore(),
-              child: const Text('Retry loading more'),
-            ),
-          );
-        }
-        return data.pagination.hasMore
-            ? Center(
-                child: TextButton(
-                  onPressed: () =>
-                      ref.read(revenueListProvider.notifier).loadMore(),
-                  child: const Text('Load more'),
-                ),
-              )
-            : const SizedBox(height: 12);
-      }
-      final item = data.items[index - 1];
-      return Card(
-        key: Key('revenue-${item.id}'),
-        elevation: 0,
-        margin: const EdgeInsets.only(bottom: 10),
-        child: ListTile(
+        final item = data.items[index - 1];
+        return _RevenueRow(
+          item: item,
           onTap: () => showModalBottomSheet<void>(
             context: context,
+            isScrollControlled: true,
             showDragHandle: true,
             builder: (_) => RevenueDetailSheet(id: item.id),
           ),
-          title: Text(
-            formatDate(item.date),
-            style: const TextStyle(fontWeight: FontWeight.w600),
+        );
+      },
+    ),
+  );
+}
+
+class _RevenueRow extends StatelessWidget {
+  const _RevenueRow({required this.item, required this.onTap});
+  final RevenueRecord item;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final desktop = MediaQuery.sizeOf(context).width >= 900;
+    final source = revenueSourceLabel(item);
+    final note = item.notes?.trim();
+    return Card(
+      key: Key('revenue-${item.id}'),
+      margin: const EdgeInsets.only(bottom: FundWellTokens.space2),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(FundWellTokens.radius),
+        onTap: onTap,
+        child: Padding(
+          padding: EdgeInsets.symmetric(
+            horizontal: desktop ? 20 : 16,
+            vertical: desktop ? 16 : 14,
           ),
-          subtitle: Text(
-            item.notes?.trim().isNotEmpty == true
-                ? item.notes!
-                : revenueSourceLabel(item),
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-          ),
-          trailing: Text(
-            formatCurrency(item.amount),
-            style: Theme.of(
-              context,
-            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
-          ),
+          child: desktop
+              ? Row(
+                  children: [
+                    Expanded(flex: 2, child: _RevenueDate(date: item.date)),
+                    Expanded(
+                      flex: 3,
+                      child: _RevenueSource(source: source, note: note),
+                    ),
+                    SizedBox(
+                      width: 150,
+                      child: Align(
+                        alignment: Alignment.centerRight,
+                        child: _RevenueAmount(amount: item.amount),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    const Icon(
+                      Icons.chevron_right,
+                      color: FundWellTokens.mutedInk,
+                    ),
+                  ],
+                )
+              : Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: _RevenueSource(source: source, note: note),
+                        ),
+                        const SizedBox(width: 12),
+                        _RevenueAmount(amount: item.amount),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    _RevenueDate(date: item.date),
+                  ],
+                ),
         ),
-      );
-    },
+      ),
+    );
+  }
+}
+
+class _RevenueDate extends StatelessWidget {
+  const _RevenueDate({required this.date});
+  final DateTime date;
+  @override
+  Widget build(BuildContext context) => Text(
+    formatDate(date),
+    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+      color: FundWellTokens.mutedInk,
+      fontWeight: FontWeight.w500,
+    ),
+  );
+}
+
+class _RevenueSource extends StatelessWidget {
+  const _RevenueSource({required this.source, this.note});
+  final String source;
+  final String? note;
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Text(source, style: Theme.of(context).textTheme.titleMedium),
+      if (note?.isNotEmpty == true) ...[
+        const SizedBox(height: 3),
+        Text(
+          note!,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: Theme.of(
+            context,
+          ).textTheme.bodySmall?.copyWith(color: FundWellTokens.mutedInk),
+        ),
+      ],
+    ],
+  );
+}
+
+class _RevenueAmount extends StatelessWidget {
+  const _RevenueAmount({required this.amount});
+  final double amount;
+  @override
+  Widget build(BuildContext context) => Text(
+    formatCurrency(amount),
+    textAlign: TextAlign.right,
+    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+      fontWeight: FontWeight.w700,
+      fontFeatures: const [FontFeature.tabularFigures()],
+    ),
   );
 }
 
@@ -142,33 +253,72 @@ class RevenueHeader extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final summary = state.summary;
+    final readOnly = ref.watch(demoModeProvider);
+    final desktop =
+        MediaQuery.sizeOf(context).width >= FundWellBreakpoints.desktop;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
+        Flex(
+          direction: desktop ? Axis.horizontal : Axis.vertical,
+          crossAxisAlignment: desktop
+              ? CrossAxisAlignment.center
+              : CrossAxisAlignment.start,
           children: [
-            Expanded(
-              child: Text(
-                'Revenue',
-                style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                  fontWeight: FontWeight.w700,
+            if (desktop)
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Revenue',
+                      style: Theme.of(context).textTheme.headlineSmall,
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Track confirmed restaurant sales and review daily performance.',
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        color: FundWellTokens.mutedInk,
+                      ),
+                    ),
+                  ],
                 ),
+              )
+            else
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Revenue',
+                    style: Theme.of(context).textTheme.headlineSmall,
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Track confirmed restaurant sales and review daily performance.',
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: FundWellTokens.mutedInk,
+                    ),
+                  ),
+                ],
               ),
-            ),
-            FilledButton.icon(
-              key: const Key('add-revenue'),
-              onPressed: () => showRevenueForm(context, ref),
-              icon: const Icon(Icons.add),
-              label: const Text('Add Revenue'),
+            SizedBox(width: desktop ? 20 : 0, height: desktop ? 0 : 16),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                const DateRangeSelector(),
+                if (!readOnly)
+                  FilledButton.icon(
+                    key: const Key('add-revenue'),
+                    onPressed: () => showRevenueForm(context, ref),
+                    icon: const Icon(Icons.add, size: 18),
+                    label: const Text('Add Revenue'),
+                  ),
+              ],
             ),
           ],
         ),
-        const SizedBox(height: 8),
-        const Align(
-          alignment: Alignment.centerRight,
-          child: DateRangeSelector(),
-        ),
-        const SizedBox(height: 12),
+        const SizedBox(height: 16),
         LocationSelector(
           active: location,
           locations: ref.watch(availableLocationsProvider).isEmpty
@@ -178,6 +328,10 @@ class RevenueHeader extends ConsumerWidget {
               .read(activeLocationControllerProvider.notifier)
               .select(selected),
         ),
+        if (readOnly) ...[
+          const SizedBox(height: 12),
+          const _RevenueDemoNotice(),
+        ],
         const SizedBox(height: 16),
         Consumer(
           builder: (context, ref, _) {
@@ -187,8 +341,12 @@ class RevenueHeader extends ConsumerWidget {
             if (deposits.isEmpty) return const SizedBox.shrink();
             return Card(
               key: const Key('unverified-bank-deposits'),
-              color: Theme.of(context).colorScheme.secondaryContainer,
+              color: const Color(0xFFFFF8EC),
               child: ExpansionTile(
+                leading: const Icon(
+                  Icons.info_outline,
+                  color: FundWellTokens.warning,
+                ),
                 title: const Text('Bank Deposits Needing Review'),
                 subtitle: Text(
                   '${deposits.length} ${deposits.length == 1 ? 'deposit is' : 'deposits are'} not counted as restaurant sales. Reviewing a deposit only classifies it; deposits may be transfers, loans, refunds, owner contributions, or sales.',
@@ -213,74 +371,71 @@ class RevenueHeader extends ConsumerWidget {
                 ?.isNotEmpty ??
             false))
           const SizedBox(height: 12),
-        Card(
-          key: const Key('revenue-total-card'),
-          color: Theme.of(context).colorScheme.primaryContainer,
-          elevation: 0,
-          child: Padding(
-            padding: const EdgeInsets.all(18),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final columns = constraints.maxWidth >= 1000
+                ? 4
+                : constraints.maxWidth >= 620
+                ? 2
+                : 1;
+            final width = (constraints.maxWidth - (columns - 1) * 12) / columns;
+            return Wrap(
+              spacing: 12,
+              runSpacing: 12,
               children: [
-                Text(
-                  'Total Revenue',
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  formatCurrency(summary.total),
-                  style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                    fontWeight: FontWeight.w700,
+                RevenueMetric(
+                  key: const Key('revenue-total-card'),
+                  width: width,
+                  emphasized: true,
+                  label: 'Total Revenue',
+                  value: formatCurrency(summary.total),
+                  footer: PercentageChange(
+                    current: summary.total,
+                    previous: summary.previousTotal,
                   ),
                 ),
-                const SizedBox(height: 8),
-                PercentageChange(
-                  current: summary.total,
-                  previous: summary.previousTotal,
+                RevenueMetric(
+                  width: width,
+                  label: 'Average Daily Revenue',
+                  value: formatCurrency(summary.averageDaily),
+                ),
+                RevenueMetric(
+                  width: width,
+                  label: 'Strongest Sales Day',
+                  value: summary.highestDay == null
+                      ? '—'
+                      : formatCurrency(summary.highestDay!.amount),
+                  detail: summary.highestDay == null
+                      ? null
+                      : shortDate(summary.highestDay!.date),
+                ),
+                RevenueMetric(
+                  width: width,
+                  label: 'Weakest Sales Day',
+                  value: summary.lowestDay == null
+                      ? '—'
+                      : formatCurrency(summary.lowestDay!.amount),
+                  detail: summary.lowestDay == null
+                      ? null
+                      : shortDate(summary.lowestDay!.date),
                 ),
               ],
-            ),
-          ),
-        ),
-        const SizedBox(height: 12),
-        Wrap(
-          spacing: 10,
-          runSpacing: 10,
-          children: [
-            RevenueMetric(
-              label: 'Average Daily Revenue',
-              value: formatCurrency(summary.averageDaily),
-            ),
-            RevenueMetric(
-              label: 'Strongest Sales Day',
-              value: summary.highestDay == null
-                  ? '—'
-                  : '${formatCurrency(summary.highestDay!.amount)}\n${shortDate(summary.highestDay!.date)}',
-            ),
-            RevenueMetric(
-              label: 'Weakest Sales Day',
-              value: summary.lowestDay == null
-                  ? '—'
-                  : '${formatCurrency(summary.lowestDay!.amount)}\n${shortDate(summary.lowestDay!.date)}',
-            ),
-          ],
+            );
+          },
         ),
         const SizedBox(height: 20),
-        Text(
-          'Daily Revenue Trend',
-          style: Theme.of(
-            context,
-          ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
+        _SectionCard(
+          title: 'Daily Revenue Trend',
+          subtitle: 'Confirmed revenue for the selected reporting period',
+          child: RevenueChart(points: summary.dailyTrend, embedded: true),
         ),
-        const SizedBox(height: 10),
-        RevenueChart(points: summary.dailyTrend),
-        const SizedBox(height: 16),
+        const SizedBox(height: 24),
         Row(
           children: [
             Expanded(
               child: Text(
-                '${state.pagination.totalItems} daily entries',
-                style: Theme.of(context).textTheme.titleMedium,
+                'Revenue entries',
+                style: Theme.of(context).textTheme.titleLarge,
               ),
             ),
             PopupMenuButton<RevenueSort>(
@@ -301,33 +456,69 @@ class RevenueHeader extends ConsumerWidget {
             ),
           ],
         ),
-        const SizedBox(height: 10),
+        const SizedBox(height: 4),
+        Text(
+          '${state.pagination.totalItems} ${state.pagination.totalItems == 1 ? 'entry' : 'entries'} in this period',
+          style: Theme.of(
+            context,
+          ).textTheme.bodySmall?.copyWith(color: FundWellTokens.mutedInk),
+        ),
+        const SizedBox(height: 12),
       ],
     );
   }
 }
 
 class RevenueMetric extends StatelessWidget {
-  const RevenueMetric({required this.label, required this.value, super.key});
+  const RevenueMetric({
+    required this.label,
+    required this.value,
+    this.width,
+    this.detail,
+    this.footer,
+    this.emphasized = false,
+    super.key,
+  });
   final String label, value;
+  final double? width;
+  final String? detail;
+  final Widget? footer;
+  final bool emphasized;
   @override
   Widget build(BuildContext context) => SizedBox(
-    width: (MediaQuery.sizeOf(context).width - 42) / 2,
+    width: width ?? (MediaQuery.sizeOf(context).width - 42) / 2,
     child: Card(
       elevation: 0,
       child: Padding(
-        padding: const EdgeInsets.all(14),
+        padding: const EdgeInsets.all(18),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(label, style: Theme.of(context).textTheme.labelMedium),
-            const SizedBox(height: 6),
             Text(
-              value,
+              label,
               style: Theme.of(
                 context,
-              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+              ).textTheme.labelLarge?.copyWith(color: FundWellTokens.mutedInk),
             ),
+            const SizedBox(height: 10),
+            Text(
+              value,
+              style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                fontWeight: FontWeight.w700,
+                color: emphasized ? FundWellTokens.purple : null,
+                fontFeatures: const [FontFeature.tabularFigures()],
+              ),
+            ),
+            if (detail != null) ...[
+              const SizedBox(height: 5),
+              Text(
+                detail!,
+                style: Theme.of(
+                  context,
+                ).textTheme.bodySmall?.copyWith(color: FundWellTokens.mutedInk),
+              ),
+            ],
+            if (footer != null) ...[const SizedBox(height: 8), footer!],
           ],
         ),
       ),
@@ -336,14 +527,14 @@ class RevenueMetric extends StatelessWidget {
 }
 
 class RevenueChart extends StatelessWidget {
-  const RevenueChart({required this.points, super.key});
+  const RevenueChart({required this.points, this.embedded = false, super.key});
   final List<DailyRevenue> points;
+  final bool embedded;
   @override
-  Widget build(BuildContext context) => Card(
-    elevation: 0,
-    child: SizedBox(
+  Widget build(BuildContext context) {
+    final chart = SizedBox(
       key: const Key('revenue-chart'),
-      height: 190,
+      height: 220,
       width: double.infinity,
       child: points.isEmpty
           ? const Center(child: Text('No trend data'))
@@ -356,6 +547,66 @@ class RevenueChart extends StatelessWidget {
                 ),
               ),
             ),
+    );
+    return embedded ? chart : Card(child: chart);
+  }
+}
+
+class _SectionCard extends StatelessWidget {
+  const _SectionCard({
+    required this.title,
+    required this.subtitle,
+    required this.child,
+  });
+  final String title;
+  final String subtitle;
+  final Widget child;
+  @override
+  Widget build(BuildContext context) => Card(
+    child: Padding(
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(title, style: Theme.of(context).textTheme.titleLarge),
+          const SizedBox(height: 3),
+          Text(
+            subtitle,
+            style: Theme.of(
+              context,
+            ).textTheme.bodySmall?.copyWith(color: FundWellTokens.mutedInk),
+          ),
+          const SizedBox(height: 14),
+          child,
+        ],
+      ),
+    ),
+  );
+}
+
+class _RevenueDemoNotice extends StatelessWidget {
+  const _RevenueDemoNotice();
+  @override
+  Widget build(BuildContext context) => Card(
+    color: FundWellTokens.surfaceSubtle,
+    child: const Padding(
+      padding: EdgeInsets.all(14),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            Icons.visibility_outlined,
+            size: 20,
+            color: FundWellTokens.purple,
+          ),
+          SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'Public demo is view only. Explore confirmed revenue and trends; adding, editing, and removing revenue is disabled.',
+            ),
+          ),
+        ],
+      ),
     ),
   );
 }
@@ -462,7 +713,8 @@ class RevenueDetailSheet extends ConsumerWidget {
                 finalLocationDetail(item, ref),
                 if (item.notes?.trim().isNotEmpty == true)
                   detail('Notes', item.notes!),
-                if (item.source == 'MANUAL') ...[
+                if (item.source == 'MANUAL' &&
+                    !ref.watch(demoModeProvider)) ...[
                   const SizedBox(height: 8),
                   Row(
                     children: [

@@ -7,6 +7,7 @@ import 'package:restaurant_profit_mobile/features/dashboard/foundation.dart';
 import 'package:restaurant_profit_mobile/features/banking/foundation.dart';
 import 'package:restaurant_profit_mobile/features/revenue/foundation.dart';
 import 'package:restaurant_profit_mobile/features/revenue/revenue_screen.dart';
+import 'package:restaurant_profit_mobile/main.dart' show demoModeProvider;
 
 const downtown = RestaurantLocation(
   id: 'downtown',
@@ -118,8 +119,10 @@ void main() {
   Widget app(
     FakeRevenueRepository repository, {
     List<BankTransactionData> deposits = const [],
+    bool demo = false,
   }) => ProviderScope(
     overrides: [
+      demoModeProvider.overrideWithValue(demo),
       activeLocationProvider.overrideWithValue(downtown),
       availableLocationsProvider.overrideWithValue([downtown, lakeside]),
       revenueRepositoryProvider.overrideWithValue(repository),
@@ -287,7 +290,7 @@ void main() {
     expect(find.text('Amount'), findsOneWidget);
     expect(find.text('Date'), findsOneWidget);
     expect(find.text('Source'), findsOneWidget);
-    expect(find.text('Square'), findsOneWidget);
+    expect(find.text('Square'), findsWidgets);
     expect(find.text('Notes'), findsOneWidget);
     expect(find.text('Dinner service'), findsWidgets);
     expect(find.byKey(const Key('edit-revenue')), findsNothing);
@@ -376,7 +379,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('revenue-manual')));
     await tester.pumpAndSettle();
-    expect(find.text('Online Sales'), findsOneWidget);
+    expect(find.text('Online Sales'), findsWidgets);
     expect(find.byKey(const Key('edit-revenue')), findsOneWidget);
     expect(find.byKey(const Key('delete-revenue')), findsOneWidget);
     await tester.tap(find.byKey(const Key('delete-revenue')));
@@ -463,5 +466,50 @@ void main() {
     await tester.pumpAndSettle();
     expect(attempts, hasLength(2));
     expect(attempts.last.additionalToPos, isTrue);
+  });
+
+  testWidgets('public demo explains read-only mode and hides write actions', (
+    tester,
+  ) async {
+    final manual = record(
+      'manual',
+      source: 'MANUAL',
+      manualType: ManualRevenueType.cash,
+    );
+    await tester.pumpWidget(
+      app(
+        FakeRevenueRepository((_) async => page([manual]), detail: manual),
+        demo: true,
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Public demo is view only'), findsOneWidget);
+    expect(find.byKey(const Key('add-revenue')), findsNothing);
+    await tester.drag(
+      find.byKey(const Key('revenue-list')),
+      const Offset(0, -1200),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('revenue-manual')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('edit-revenue')), findsNothing);
+    expect(find.byKey(const Key('delete-revenue')), findsNothing);
+  });
+
+  testWidgets('revenue workspace renders without overflow at target widths', (
+    tester,
+  ) async {
+    final repository = FakeRevenueRepository(
+      (_) async => page([record('one')]),
+    );
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    tester.view.devicePixelRatio = 1;
+    for (final width in [1440.0, 1280.0, 768.0, 390.0]) {
+      tester.view.physicalSize = Size(width, 1200);
+      await tester.pumpWidget(app(repository));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull, reason: 'width $width');
+    }
   });
 }
