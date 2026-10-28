@@ -37,6 +37,7 @@ import '../responsive.dart';
 import 'foundation.dart';
 import 'account_security_screen.dart';
 import 'location_management_screen.dart';
+import 'team_access_screen.dart';
 
 class MoreScreen extends ConsumerStatefulWidget {
   const MoreScreen({super.key});
@@ -407,6 +408,33 @@ class _MoreScreenState extends ConsumerState<MoreScreen> {
                         ),
                       ),
                     ),
+                  ),
+                  const Divider(height: 1),
+                  _InfoTile(
+                    icon: Icons.groups_outlined,
+                    label: 'Team & Access',
+                    value: demoMode
+                        ? 'Learn how private team access works'
+                        : value.role == 'OWNER' || value.role == 'ADMIN'
+                        ? 'Members, invitations, and permissions'
+                        : 'View your access level',
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () {
+                      final organizationId = ref
+                          .read(activeLocationProvider)
+                          ?.organizationId;
+                      if (organizationId == null) return;
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => TeamAccessScreen(
+                            organizationId: organizationId,
+                            role: value.role ?? 'VIEWER',
+                            demoMode: demoMode,
+                          ),
+                        ),
+                      );
+                    },
                   ),
                 ],
               ),

@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, HttpCode, Param, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, ForbiddenException, Get, HttpCode, Param, Post, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from './current-user.decorator';
 import { CreateBetaInvitationDto } from './invitation.dto';
@@ -18,7 +18,8 @@ export class InvitationController {
   }
 
   @Get()
-  list(@CurrentUser() user: { sub: string }, @Query('organizationId') organizationId?: string) {
+  list(@CurrentUser() user: { sub: string; publicDemo?: boolean }, @Query('organizationId') organizationId?: string) {
+    if (user.publicDemo === true) throw new ForbiddenException('Invitation identities are not available in the public demo');
     return this.invitations.list(user.sub, organizationId);
   }
 

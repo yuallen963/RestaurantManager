@@ -57,6 +57,131 @@ class AccountSecurityData {
   final List<Map<String, dynamic>> devices;
 }
 
+class TeamMemberData {
+  const TeamMemberData({
+    required this.id,
+    required this.userId,
+    required this.email,
+    required this.role,
+    this.firstName,
+    this.lastName,
+  });
+  final String id, userId, email, role;
+  final String? firstName, lastName;
+  String get name => [
+    firstName,
+    lastName,
+  ].where((value) => value?.trim().isNotEmpty == true).join(' ').trim();
+}
+
+class TeamInvitationData {
+  const TeamInvitationData({
+    required this.id,
+    required this.email,
+    required this.role,
+    required this.expiresAt,
+    this.revokedAt,
+    this.redeemedAt,
+  });
+  final String id, email, role;
+  final DateTime expiresAt;
+  final DateTime? revokedAt, redeemedAt;
+  bool get pending =>
+      revokedAt == null &&
+      redeemedAt == null &&
+      expiresAt.isAfter(DateTime.now());
+}
+
+class TeamAccessData {
+  const TeamAccessData({
+    required this.currentUserId,
+    required this.currentRole,
+    required this.members,
+    required this.invitations,
+  });
+  final String currentUserId, currentRole;
+  final List<TeamMemberData> members;
+  final List<TeamInvitationData> invitations;
+}
+
+class TeamAccessRepository {
+  TeamAccessRepository(this.dio);
+  final Dio dio;
+
+  Future<TeamAccessData> load(String organizationId) async {
+    final responses = await Future.wait([
+      dio.get('/organizations/$organizationId/members'),
+      dio.get(
+        '/beta-invitations',
+        queryParameters: {'organizationId': organizationId},
+      ),
+    ]);
+    final team = Map<String, dynamic>.from(responses[0].data as Map);
+    return TeamAccessData(
+      currentUserId: team['currentUserId'] as String,
+      currentRole: team['currentRole'] as String,
+      members: (team['members'] as List).map((value) {
+        final member = Map<String, dynamic>.from(value as Map);
+        final user = Map<String, dynamic>.from(member['user'] as Map);
+        return TeamMemberData(
+          id: member['id'] as String,
+          userId: member['userId'] as String,
+          email: user['email'] as String,
+          role: member['role'] as String,
+          firstName: user['firstName'] as String?,
+          lastName: user['lastName'] as String?,
+        );
+      }).toList(),
+      invitations: (responses[1].data as List).map((value) {
+        final invite = Map<String, dynamic>.from(value as Map);
+        return TeamInvitationData(
+          id: invite['id'] as String,
+          email: invite['email'] as String,
+          role: invite['role'] as String? ?? 'VIEWER',
+          expiresAt: DateTime.parse(invite['expiresAt'] as String),
+          revokedAt: invite['revokedAt'] == null
+              ? null
+              : DateTime.parse(invite['revokedAt'] as String),
+          redeemedAt: invite['redeemedAt'] == null
+              ? null
+              : DateTime.parse(invite['redeemedAt'] as String),
+        );
+      }).toList(),
+    );
+  }
+
+  Future<void> invite(String organizationId, String email, String role) async {
+    await dio.post(
+      '/beta-invitations',
+      data: {
+        'email': email,
+        'type': 'JOIN_ORGANIZATION',
+        'organizationId': organizationId,
+        'role': role,
+      },
+    );
+  }
+
+  Future<void> revokeInvitation(String id) async {
+    await dio.delete('/beta-invitations/$id');
+  }
+
+  Future<void> updateRole(
+    String organizationId,
+    String memberId,
+    String role,
+  ) async {
+    await dio.patch(
+      '/organizations/$organizationId/members/$memberId',
+      data: {'role': role},
+    );
+  }
+
+  Future<void> removeMember(String organizationId, String memberId) async {
+    await dio.delete('/organizations/$organizationId/members/$memberId');
+  }
+}
+
 class MoreRepository {
   MoreRepository(this.dio, this.secureStorage);
 
@@ -287,6 +412,14 @@ class MoreRepository {
 
 final moreRepositoryProvider = Provider(
   (ref) => MoreRepository(ref.watch(api), storage),
+);
+
+final teamAccessRepositoryProvider = Provider(
+  (ref) => TeamAccessRepository(ref.watch(api)),
+);
+final teamAccessProvider = FutureProvider.family<TeamAccessData, String>(
+  (ref, organizationId) =>
+      ref.watch(teamAccessRepositoryProvider).load(organizationId),
 );
 
 final moreAccountProvider = FutureProvider<MoreAccountData>((ref) async {
