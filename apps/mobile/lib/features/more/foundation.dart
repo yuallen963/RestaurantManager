@@ -237,31 +237,28 @@ class MoreRepository {
   }
 
   Future<void> returnToBeta() async {
+    if (kIsWeb) throw UnsupportedError('Web account switching is unavailable');
     final privateRefresh = await secureStorage.read(key: 'refreshToken');
-    if (privateRefresh != null || kIsWeb) {
+    if (privateRefresh != null) {
       try {
         await dio.post(
           '/auth/logout',
-          data: privateRefresh == null
-              ? const <String, dynamic>{}
-              : {'refreshToken': privateRefresh},
+          data: {'refreshToken': privateRefresh},
         );
       } on DioException {
         // Replacing local private credentials must not expose stale private data.
       }
     }
     dio.options.headers.remove('Authorization');
-    final response = kIsWeb
-        ? await dio.post('/auth/public-demo-session')
-        : await dio.post(
-            '/auth/shared-test-session',
-            options: Options(
-              headers: {'X-FundWell-Shared-Test-Token': sharedTestClientToken},
-            ),
-          );
+    final response = await dio.post(
+      '/auth/shared-test-session',
+      options: Options(
+        headers: {'X-FundWell-Shared-Test-Token': sharedTestClientToken},
+      ),
+    );
     await _installSession(
       Map<String, dynamic>.from(response.data as Map),
-      kIsWeb ? AccountSessionMode.demo : AccountSessionMode.standard,
+      AccountSessionMode.standard,
     );
   }
 

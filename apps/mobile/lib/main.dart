@@ -67,7 +67,6 @@ const _publicAuthPaths = {
   '/auth/login-challenge',
   '/auth/login-challenge/resend',
   '/auth/shared-test-session',
-  '/auth/public-demo-session',
   '/auth/private-session',
   '/auth/forgot-password',
   '/auth/reset-password',
@@ -164,7 +163,7 @@ void main() {
 const devAutoLoginRequested = bool.fromEnvironment('ENABLE_DEV_AUTO_LOGIN');
 final demoModeProvider = Provider<bool>(
   (ref) =>
-      (!kReleaseMode && devAutoLoginRequested) ||
+      (!kIsWeb && !kReleaseMode && devAutoLoginRequested) ||
       ref.watch(accountSessionModeProvider) == AccountSessionMode.demo,
 );
 const sharedTestUserModeRequested = bool.fromEnvironment(
@@ -459,14 +458,12 @@ class _AuthBootstrapState extends ConsumerState<AuthBootstrap> {
           return;
         } catch (_) {}
       }
-      if (privateSession) {
-        await storage.delete(key: 'accessToken');
-        await storage.delete(key: 'refreshToken');
-        await storage.delete(key: sessionModeStorageKey);
-        client.options.headers.remove('Authorization');
-        ref.read(accountSessionModeProvider.notifier).state =
-            AccountSessionMode.standard;
-      }
+      await storage.delete(key: 'accessToken');
+      await storage.delete(key: 'refreshToken');
+      await storage.delete(key: sessionModeStorageKey);
+      client.options.headers.remove('Authorization');
+      ref.read(accountSessionModeProvider.notifier).state =
+          AccountSessionMode.standard;
       if (sharedTestUserMode) {
         try {
           await _sharedTestSession();
@@ -496,13 +493,6 @@ class _AuthBootstrapState extends ConsumerState<AuthBootstrap> {
             );
           widget.onReady?.call();
         }
-      } else if (kIsWeb && !privateSession) {
-        try {
-          await _publicDemoSession();
-          return;
-        } catch (_) {
-          if (mounted) _showLogin();
-        }
       } else if (mounted) {
         _showLogin();
       }
@@ -522,15 +512,6 @@ class _AuthBootstrapState extends ConsumerState<AuthBootstrap> {
     await _save(
       response.data as Map<String, dynamic>,
       mode: AccountSessionMode.standard,
-    );
-    await _enterAuthenticatedApp(forceHome: true);
-  }
-
-  Future<void> _publicDemoSession() async {
-    final response = await ref.read(api).post('/auth/public-demo-session');
-    await _save(
-      Map<String, dynamic>.from(response.data as Map),
-      mode: AccountSessionMode.demo,
     );
     await _enterAuthenticatedApp(forceHome: true);
   }

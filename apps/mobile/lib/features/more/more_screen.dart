@@ -525,43 +525,45 @@ class _MoreScreenState extends ConsumerState<MoreScreen> {
               ),
             ),
           ),
-          const SizedBox(height: 20),
-          _Section(
-            title: sessionMode == AccountSessionMode.private
-                ? 'Private Account'
-                : 'Private Access',
-            description: sessionMode == AccountSessionMode.private
-                ? 'Manage the active private restaurant session.'
-                : 'Open your secure private restaurant workspace.',
-            child: _InfoTile(
-              icon: sessionMode == AccountSessionMode.private
-                  ? Icons.lock_open_outlined
-                  : Icons.lock_outline,
-              label: sessionMode == AccountSessionMode.private
-                  ? kIsWeb
-                        ? 'Sign Out of Private Account'
-                        : 'Return to Beta Account'
-                  : 'Private Account',
-              value: sessionMode == AccountSessionMode.private
-                  ? kIsWeb
-                        ? 'End this private browser session securely'
-                        : 'Leave the private account and restore beta access'
-                  : kIsWeb
-                  ? 'Sign in securely to your private workspace'
-                  : 'Password-protected private access',
-              trailing: _switchingAccount
-                  ? const SizedBox.square(
-                      dimension: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.chevron_right),
-              onTap: _switchingAccount
-                  ? null
-                  : sessionMode == AccountSessionMode.private
-                  ? _returnToBeta
-                  : _enterPrivateAccount,
+          if (!kIsWeb) ...[
+            const SizedBox(height: 20),
+            _Section(
+              title: sessionMode == AccountSessionMode.private
+                  ? 'Private Account'
+                  : 'Private Access',
+              description: sessionMode == AccountSessionMode.private
+                  ? 'Manage the active private restaurant session.'
+                  : 'Open your secure private restaurant workspace.',
+              child: _InfoTile(
+                icon: sessionMode == AccountSessionMode.private
+                    ? Icons.lock_open_outlined
+                    : Icons.lock_outline,
+                label: sessionMode == AccountSessionMode.private
+                    ? kIsWeb
+                          ? 'Sign Out of Private Account'
+                          : 'Return to Beta Account'
+                    : 'Private Account',
+                value: sessionMode == AccountSessionMode.private
+                    ? kIsWeb
+                          ? 'End this private browser session securely'
+                          : 'Leave the private account and restore beta access'
+                    : kIsWeb
+                    ? 'Sign in securely to your private workspace'
+                    : 'Password-protected private access',
+                trailing: _switchingAccount
+                    ? const SizedBox.square(
+                        dimension: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.chevron_right),
+                onTap: _switchingAccount
+                    ? null
+                    : sessionMode == AccountSessionMode.private
+                    ? _returnToBeta
+                    : _enterPrivateAccount,
+              ),
             ),
-          ),
+          ],
         ],
       ),
     );

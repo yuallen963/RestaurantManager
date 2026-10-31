@@ -5,6 +5,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
 import 'package:restaurant_profit_mobile/features/auth/auth_session_store_web.dart';
 import 'package:restaurant_profit_mobile/features/dashboard/foundation.dart';
 import 'package:restaurant_profit_mobile/main.dart';
@@ -121,7 +122,7 @@ void main() {
   );
 
   testWidgets(
-    'browser enters the read-only public demo when no private session exists',
+    'anonymous browser goes to login without requesting a public demo session',
     (tester) async {
       await storage.delete(key: 'accessToken');
       await storage.delete(key: 'refreshToken');
@@ -140,34 +141,6 @@ void main() {
                       requestOptions: options,
                       statusCode: 401,
                     ),
-                  ),
-                );
-                return;
-              }
-              if (options.path == '/auth/public-demo-session') {
-                handler.resolve(
-                  Response(
-                    requestOptions: options,
-                    statusCode: 200,
-                    data: {
-                      'accessToken': 'public-demo-access',
-                      'tokenType': 'Bearer',
-                      'accountMode': 'demo',
-                    },
-                  ),
-                );
-                return;
-              }
-              if (options.path == '/onboarding') {
-                handler.resolve(
-                  Response(
-                    requestOptions: options,
-                    statusCode: 200,
-                    data: {
-                      'onboardingCompletedAt': '2026-10-22T00:00:00.000Z',
-                      'currentStep': 6,
-                      'selectedDataSources': <String>[],
-                    },
                   ),
                 );
                 return;
@@ -194,22 +167,81 @@ void main() {
         ],
       );
       addTearDown(container.dispose);
+      final router = GoRouter(
+        routes: [
+          GoRoute(path: '/', builder: (_, _) => const AuthBootstrap()),
+          GoRoute(path: '/login', builder: (_, _) => const AuthScreen()),
+        ],
+      );
+      addTearDown(router.dispose);
       await tester.pumpWidget(
         UncontrolledProviderScope(
           container: container,
-          child: const MaterialApp(home: AuthBootstrap()),
+          child: MaterialApp.router(routerConfig: router),
         ),
       );
       await tester.pumpAndSettle();
 
-      expect(paths, contains('/auth/public-demo-session'));
-      expect(find.byType(Home), findsOneWidget);
+      expect(paths, contains('/auth/refresh'));
+      expect(paths, isNot(contains('/auth/public-demo-session')));
+      expect(find.byType(AuthScreen), findsOneWidget);
       expect(
         container.read(accountSessionModeProvider),
-        AccountSessionMode.demo,
+        AccountSessionMode.standard,
       );
-      expect(container.read(demoModeProvider), isTrue);
+      expect(container.read(demoModeProvider), isFalse);
+      expect(await storage.read(key: 'accessToken'), isNull);
       expect(await storage.read(key: 'refreshToken'), isNull);
     },
   );
+
+  testWidgets('rejected browser access and refresh credentials return to login', (
+    tester,
+  ) async {
+    await storage.write(key: 'accessToken', value: 'expired-demo-access');
+    await storage.write(key: sessionModeStorageKey, value: 'demo');
+    final paths = <String>[];
+    final dio = Dio()
+      ..interceptors.add(
+        InterceptorsWrapper(
+          onRequest: (options, handler) {
+            paths.add(options.path);
+            handler.reject(
+              DioException(
+                requestOptions: options,
+                response: Response(requestOptions: options, statusCode: 401),
+              ),
+            );
+          },
+        ),
+      );
+    final container = ProviderContainer(
+      overrides: [
+        api.overrideWithValue(dio),
+        sharedTestUserModeProvider.overrideWithValue(false),
+      ],
+    );
+    addTearDown(container.dispose);
+    final router = GoRouter(
+      routes: [
+        GoRoute(path: '/', builder: (_, _) => const AuthBootstrap()),
+        GoRoute(path: '/login', builder: (_, _) => const AuthScreen()),
+      ],
+    );
+    addTearDown(router.dispose);
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: MaterialApp.router(routerConfig: router),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(paths, contains('/auth/me'));
+    expect(paths, contains('/auth/refresh'));
+    expect(paths, isNot(contains('/auth/public-demo-session')));
+    expect(find.byType(AuthScreen), findsOneWidget);
+    expect(await storage.read(key: 'accessToken'), isNull);
+    expect(await storage.read(key: sessionModeStorageKey), isNull);
+  });
 }
