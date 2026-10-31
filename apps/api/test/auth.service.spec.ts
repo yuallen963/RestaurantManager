@@ -67,6 +67,14 @@ describe('auth service', () => {
     await expect(service.publicDemoSession()).rejects.toBeInstanceOf(NotFoundException);
   });
 
+  it('rejects direct password login for the synthetic demo identity after public mode is disabled', async () => {
+    process.env.PUBLIC_DEMO_MODE = 'false';
+    const prisma: any = { user: { findUnique: jest.fn() } };
+    const service = new AuthService(prisma, {} as any, mail() as any, audit as any);
+    await expect(service.login('demo@profitlens.local', password)).rejects.toBeInstanceOf(UnauthorizedException);
+    expect(prisma.user.findUnique).not.toHaveBeenCalled();
+  });
+
   it('issues a session only for the configured shared test owner when enabled', async () => {
     process.env.SHARED_TEST_USER_MODE = 'true';
     process.env.SHARED_TEST_USER_EMAIL = 'test@profitlens.local';

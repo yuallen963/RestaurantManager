@@ -11,8 +11,24 @@ export class JwtAuthGuard implements CanActivate {
     if (!token) throw new UnauthorizedException('Missing access token');
     try {
       const payload = await this.jwt.verifyAsync(token, { secret: process.env.JWT_ACCESS_SECRET });
-      const user = await this.prisma.user.findFirst({ where: { id: payload.sub, disabledAt: null, deletedAt: null, emailVerifiedAt: { not: null } }, select: { id: true } });
+      const user = await this.prisma.user.findFirst({
+        where: {
+          id: payload.sub,
+          disabledAt: null,
+          deletedAt: null,
+          emailVerifiedAt: { not: null },
+          memberships: { some: { organization: { archivedAt: null } } },
+        },
+        select: { id: true, email: true },
+      });
       if (!user) throw new Error();
+      const demoEmail = (process.env.PUBLIC_DEMO_USER_EMAIL ?? 'demo@profitlens.local').trim().toLowerCase();
+      if (payload.publicDemo === true) {
+        if (process.env.PUBLIC_DEMO_MODE !== 'true' || user.email !== demoEmail) throw new Error();
+      } else if (user.email === demoEmail) {
+        // A normal token for the synthetic account must never bypass the demo flag.
+        throw new Error();
+      }
       if (payload.publicDemo === true && !['GET', 'HEAD', 'OPTIONS'].includes(request.method)) {
         throw new ForbiddenException('Demo access is read-only. Sign in to make changes.');
       }

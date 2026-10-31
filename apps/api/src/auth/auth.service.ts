@@ -152,8 +152,8 @@ export class AuthService {
   async login(rawEmail: string, password: string, device: { deviceId?: string; deviceName?: string } = {}) {
     const email = normalizeEmail(rawEmail);
     const publicDemoEmail = normalizeEmail(process.env.PUBLIC_DEMO_USER_EMAIL ?? 'demo@profitlens.local');
-    if (process.env.PUBLIC_DEMO_MODE === 'true' && email === publicDemoEmail) {
-      throw new UnauthorizedException('Use the public demo instead of signing in to this account');
+    if (email === publicDemoEmail) {
+      throw new UnauthorizedException('Invalid email or password');
     }
     const user = await this.prisma.user.findUnique({ where: { email } });
     if (!user || user.deletedAt || user.disabledAt) throw new UnauthorizedException('Invalid email or password');
@@ -163,7 +163,7 @@ export class AuthService {
       await this.security?.notifySuspiciousLogin(user).catch(() => undefined);
       throw new UnauthorizedException('Invalid email or password');
     }
-    if (!user.emailVerifiedAt && email !== 'demo@profitlens.local') throw new ForbiddenException('Email verification required');
+    if (!user.emailVerifiedAt) throw new ForbiddenException('Email verification required');
     const challenge = await this.security?.beginLogin(user, device);
     if (challenge) return challenge;
     const tokens = await this.issueTokens(user.id, user.email, undefined, device);
@@ -257,7 +257,8 @@ export class AuthService {
   async refresh(rawToken: string) {
     const payload = await this.refreshPayload(rawToken);
     const user = await this.prisma.user.findUnique({ where: { id: payload.sub } });
-    if (!user || user.deletedAt || user.disabledAt || !user.emailVerifiedAt) throw new UnauthorizedException('Invalid refresh token');
+    const publicDemoEmail = normalizeEmail(process.env.PUBLIC_DEMO_USER_EMAIL ?? 'demo@profitlens.local');
+    if (!user || user.deletedAt || user.disabledAt || !user.emailVerifiedAt || user.email === publicDemoEmail) throw new UnauthorizedException('Invalid refresh token');
     const stored = payload.sid ? await this.prisma.refreshToken.findUnique({ where: { id: payload.sid } }) : await this.findLegacyToken(payload.sub, rawToken);
     if (!stored || stored.userId !== payload.sub || stored.expiresAt <= new Date() || !(await argon2.verify(stored.tokenHash, rawToken))) throw new UnauthorizedException('Refresh token revoked');
     if (stored.revokedAt) {
