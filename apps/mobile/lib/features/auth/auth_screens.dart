@@ -683,11 +683,25 @@ class ResetPasswordScreen extends ConsumerStatefulWidget {
 class _ResetPasswordScreenState extends ConsumerState<ResetPasswordScreen> {
   late final token = TextEditingController(text: widget.initialToken);
   final password = TextEditingController();
+  final passwordConfirmation = TextEditingController();
   bool busy = false;
   String? error;
+
+  @override
+  void dispose() {
+    token.dispose();
+    password.dispose();
+    passwordConfirmation.dispose();
+    super.dispose();
+  }
+
   Future<void> submit() async {
     if (password.text.length < 12) {
       setState(() => error = 'Use at least 12 characters.');
+      return;
+    }
+    if (password.text != passwordConfirmation.text) {
+      setState(() => error = 'Passwords do not match.');
       return;
     }
     setState(() {
@@ -734,6 +748,11 @@ class _ResetPasswordScreenState extends ConsumerState<ResetPasswordScreen> {
           controller: password,
           obscureText: true,
           decoration: const InputDecoration(labelText: 'New password'),
+        ),
+        TextField(
+          controller: passwordConfirmation,
+          obscureText: true,
+          decoration: const InputDecoration(labelText: 'Confirm new password'),
         ),
         if (error != null) Text(error!),
         const SizedBox(height: 20),

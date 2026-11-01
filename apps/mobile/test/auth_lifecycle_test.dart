@@ -185,6 +185,32 @@ void main() {
     },
   );
 
+  testWidgets('reset password requires matching confirmation', (tester) async {
+    var calls = 0;
+    await tester.pumpWidget(
+      app(
+        stubDio((_) {
+          calls++;
+          return <String, dynamic>{};
+        }),
+        home: const ResetPasswordScreen(initialToken: 'synthetic-token'),
+      ),
+    );
+    await tester.enterText(
+      find.widgetWithText(TextField, 'New password'),
+      'a-long-synthetic-password',
+    );
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Confirm new password'),
+      'a-different-synthetic-password',
+    );
+    await tester.tap(find.widgetWithText(FilledButton, 'Reset password'));
+    await tester.pump();
+
+    expect(find.text('Passwords do not match.'), findsOneWidget);
+    expect(calls, 0);
+  });
+
   test(
     'an expired access token refreshes once and retries the request',
     () async {
