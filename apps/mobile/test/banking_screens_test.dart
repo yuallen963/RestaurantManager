@@ -62,6 +62,11 @@ const lookups = ExpenseLookups(
 final selectedBankLocationProvider = StateProvider<RestaurantLocation>(
   (_) => downtown,
 );
+final fixtureDateRange = DateRangeState(
+  DatePreset.custom,
+  DateTime(2026, 10, 1),
+  DateTime(2026, 10, 31),
+);
 
 class FakeBankingRepository extends BankingRepository {
   FakeBankingRepository() : super(Dio());
@@ -264,6 +269,7 @@ Widget transactionsApp(
   List<BankTransactionData> items,
 ) => ProviderScope(
   overrides: [
+    dateRangeProvider.overrideWith((_) => fixtureDateRange),
     activeLocationProvider.overrideWithValue(downtown),
     availableLocationsProvider.overrideWithValue(const [downtown, lakeside]),
     bankingRepositoryProvider.overrideWithValue(repository),
@@ -520,6 +526,7 @@ void main() {
         overrides: [
           activeLocationProvider.overrideWithValue(downtown),
           bankingRepositoryProvider.overrideWithValue(repository),
+          dateRangeProvider.overrideWith((_) => fixtureDateRange),
           bankTransactionFilterProvider.overrideWith(
             (_) => BankTransactionFilter.matched,
           ),
@@ -708,6 +715,7 @@ void main() {
             (ref) => ref.watch(selectedBankLocationProvider),
           ),
           bankingRepositoryProvider.overrideWithValue(repository),
+          dateRangeProvider.overrideWith((_) => fixtureDateRange),
           bankTransactionFilterProvider.overrideWith(
             (_) => BankTransactionFilter.all,
           ),
