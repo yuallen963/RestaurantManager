@@ -750,6 +750,8 @@ model Invoice {
   bankTransactions       BankTransaction[]
   duplicateOf            Invoice?               @relation("InvoiceDuplicateLink", fields: [duplicateOfInvoiceId], references: [id], onDelete: Restrict)
   duplicateReferences    Invoice[]              @relation("InvoiceDuplicateLink")
+  duplicateDecisions     InvoiceDuplicateDecision[] @relation("DuplicateDecisionSubject")
+  duplicateCandidateFor  InvoiceDuplicateDecision[] @relation("DuplicateDecisionCandidate")
 
   @@unique([organizationId, restaurantLocationId, attachmentHash])
   @@unique([organizationId, restaurantLocationId, reviewedIdentityKey])
@@ -757,6 +759,22 @@ model Invoice {
   @@index([organizationId, restaurantLocationId])
   @@index([restaurantLocationId, invoiceDate])
   @@index([organizationId, restaurantLocationId, inboundMessageId], map: "Invoice_organizationId_restaurantLocationId_inboundMessageId_id")
+}
+
+model InvoiceDuplicateDecision {
+  id                 String @id @default(uuid())
+  invoiceId          String
+  candidateInvoiceId String
+  resolution         InvoiceDuplicateResolution
+  fingerprint        String
+  reviewerUserId     String
+  reason             String
+  decidedAt          DateTime @default(now())
+  invoice            Invoice @relation("DuplicateDecisionSubject", fields: [invoiceId], references: [id], onDelete: Cascade)
+  candidate          Invoice @relation("DuplicateDecisionCandidate", fields: [candidateInvoiceId], references: [id], onDelete: Restrict)
+
+  @@unique([invoiceId, candidateInvoiceId])
+  @@index([candidateInvoiceId])
 }
 
 model InvoiceLineItem {

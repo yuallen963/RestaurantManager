@@ -1116,7 +1116,7 @@ class _DuplicateReviewCard extends ConsumerWidget {
                   '${candidate['kind'] == 'DEFINITE' ? 'Same file' : 'Matching purchase'} · Invoice ${candidate['invoiceNumber'] ?? 'number missing'}',
                 ),
                 subtitle: Text(
-                  '${candidate['invoiceDate']?.toString().split('T').first ?? 'Date missing'} · ${candidate['currency'] ?? ''} ${candidate['total'] ?? ''} · ${candidate['reviewStatus']}',
+                  '${candidate['invoiceDate']?.toString().split('T').first ?? 'Date missing'} · ${candidate['currency'] ?? ''} ${candidate['total'] ?? ''} · ${candidate['reviewStatus']}${candidate['decision'] == 'CONFIRMED_DISTINCT' ? ' · Confirmed distinct' : ''}',
                 ),
                 trailing:
                     !readOnly &&
@@ -1153,7 +1153,7 @@ class _DuplicateReviewCard extends ConsumerWidget {
               ),
             if (data['resolution'] == 'CONFIRMED_DISTINCT')
               const Text(
-                'Confirmed distinct. Review can proceed if the invoice details still match this decision.',
+                'Confirm distinctness against every reviewed matching invoice before review can proceed.',
               ),
           ],
         ),

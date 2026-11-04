@@ -48,6 +48,9 @@ describe('Prisma migration history', () => {
     expect(sql).toContain('"reviewedIdentityKey"');
     expect(sql).toContain('CREATE UNIQUE INDEX');
     expect(sql).toContain('"Invoice_duplicateOfInvoiceId_fkey"');
+    expect(sql).toContain('CREATE TABLE "InvoiceDuplicateDecision"');
+    expect(sql).toContain('"InvoiceDuplicateDecision_invoiceId_candidateInvoiceId_key"');
+    expect(sql).toContain('"InvoiceDuplicateDecision_candidateInvoiceId_fkey"');
     expect(sql).not.toMatch(/\bUPDATE\s+"Invoice"|\bDELETE\s+FROM\s+"Invoice"/i);
   });
 

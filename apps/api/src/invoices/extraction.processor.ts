@@ -229,6 +229,7 @@ export class InvoiceExtractionProcessor {
         const current = await tx.invoice.findUnique({ where: { id: invoiceId }, select: { reviewStatus: true, extractionStatus: true, extractionStartedAt: true } });
         if (!current || current.reviewStatus === ReviewStatus.REVIEWED || (current.extractionStatus && current.extractionStatus !== ExtractionStatus.PROCESSING) || (current.extractionStartedAt && invoice.extractionStartedAt && current.extractionStartedAt.getTime() !== invoice.extractionStartedAt.getTime())) return;
         applied = true;
+        await tx.invoiceDuplicateDecision.deleteMany({ where: { invoiceId } });
         await tx.invoiceLineItem.deleteMany({ where: { invoiceId } });
         if (extracted.lineItems.length) await tx.invoiceLineItem.createMany({ data: extracted.lineItems.map((line, index) => {
           const parsedPackage = parsePackageSize(line.packSize);

@@ -19,6 +19,8 @@ function setup() {
       updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       delete: jest.fn().mockResolvedValue(invoice),
     },
+    invoiceDuplicateDecision: { findMany: jest.fn().mockResolvedValue([]), findFirst: jest.fn().mockResolvedValue(null),
+      findUnique: jest.fn().mockResolvedValue(null), deleteMany: jest.fn(), upsert: jest.fn() },
     vendor: { findFirst: jest.fn().mockResolvedValue(null), findMany: jest.fn().mockResolvedValue([]) },
     invoiceLineItem: {
       findFirst: jest.fn().mockResolvedValue(null),
@@ -69,11 +71,44 @@ describe('InvoicesService', () => {
       resolution: 'CONFIRMED_DISTINCT' as any, reason: 'Two original deliveries and signed receipts', expectedFingerprint: fingerprint });
     expect(access.requireMember).toHaveBeenCalledWith('user-a', 'org-a', ['OWNER', 'ADMIN']);
     expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({ action: 'invoice.duplicate_confirmed_distinct' }));
+    prisma.invoiceDuplicateDecision.findMany.mockResolvedValue([{ candidateInvoiceId: rescanned.id }]);
     prisma.invoice.findUnique.mockResolvedValue({ ...reviewable, duplicateResolution: 'CONFIRMED_DISTINCT',
       duplicateOfInvoiceId: rescanned.id, duplicateDecisionFingerprint: fingerprint });
     await service.review('user-a', reviewable.id, { markReviewed: true });
     expect(prisma.invoice.update.mock.calls.at(-1)[0].data.reviewedIdentityKey).not.toBe(invoiceIdentity(reviewable)!.claimKey);
     expect(prisma.invoice.update.mock.calls.at(-1)[0].data.reviewStatus).toBe('REVIEWED');
+  });
+
+  it.each([1, 2, 3, 6])('requires a decision against every reviewed match among %i invoices', async (count) => {
+    const { service, prisma, audit } = setup();
+    const candidates = Array.from({ length: count - 1 }, (_, index) => ({ ...rescanned,
+      id: `match-${index}`, attachmentHash: `scan-${index}` }));
+    let current = { ...reviewable };
+    const decisions: any[] = [];
+    prisma.invoice.findUnique.mockImplementation(() => Promise.resolve(current));
+    prisma.invoice.findMany.mockResolvedValue(candidates);
+    prisma.invoice.update.mockImplementation(({ data }: any) => {
+      current = { ...current, ...data };
+      return Promise.resolve(current);
+    });
+    prisma.invoiceDuplicateDecision.upsert.mockImplementation(({ create }: any) => { decisions.push(create); return Promise.resolve(create); });
+    prisma.invoiceDuplicateDecision.findMany.mockImplementation(({ where }: any) => Promise.resolve(decisions.filter((decision) =>
+      decision.fingerprint === where.fingerprint && (!where.resolution || decision.resolution === where.resolution))));
+    prisma.vendor.findFirst.mockResolvedValue({ id: 'vendor-a', organizationId: 'org-a' });
+    if (candidates.length) {
+      await expect(service.review('user-a', current.id, { markReviewed: true })).rejects.toThrow('Possible duplicate');
+      for (const candidate of candidates) {
+        await service.resolveDuplicate('user-a', current.id, { candidateInvoiceId: candidate.id,
+          resolution: 'CONFIRMED_DISTINCT' as any, reason: `Separate signed receipt for ${candidate.id}`,
+          expectedFingerprint: invoiceIdentity(current)!.fingerprint });
+        if (decisions.length < candidates.length)
+          await expect(service.review('user-a', current.id, { markReviewed: true })).rejects.toThrow('every reviewed candidate');
+      }
+    }
+    await service.review('user-a', current.id, { markReviewed: true });
+    expect(prisma.invoice.update.mock.calls.at(-1)[0].data.reviewStatus).toBe('REVIEWED');
+    expect(decisions).toHaveLength(candidates.length);
+    expect(audit.log.mock.calls.filter(([event]: any[]) => event.action === 'invoice.duplicate_confirmed_distinct')).toHaveLength(candidates.length);
   });
 
   it('rejects unauthorized or stale duplicate decisions', async () => {
@@ -84,6 +119,25 @@ describe('InvoicesService', () => {
       resolution: 'CONFIRMED_DISTINCT' as any, reason: 'Separate signed deliveries', expectedFingerprint: invoiceIdentity(reviewable)!.fingerprint })).rejects.toBeInstanceOf(ForbiddenException);
     await expect(service.resolveDuplicate('user-a', reviewable.id, { candidateInvoiceId: rescanned.id,
       resolution: 'CONFIRMED_DISTINCT' as any, reason: 'Separate signed deliveries', expectedFingerprint: 'stale' })).rejects.toThrow('details changed');
+  });
+
+  it('rejects replayed decisions and prevents a duplicate from being trusted', async () => {
+    const { service, prisma } = setup();
+    prisma.invoice.findUnique.mockResolvedValue(reviewable);
+    prisma.invoice.findMany.mockResolvedValue([rescanned]);
+    const fingerprint = invoiceIdentity(reviewable)!.fingerprint;
+    prisma.invoiceDuplicateDecision.findUnique.mockResolvedValue({ resolution: 'CONFIRMED_DISTINCT', fingerprint });
+    await expect(service.resolveDuplicate('user-a', reviewable.id, { candidateInvoiceId: rescanned.id,
+      resolution: 'CONFIRMED_DISTINCT' as any, reason: 'Separate signed deliveries', expectedFingerprint: fingerprint })).rejects.toThrow('already recorded');
+    prisma.invoiceDuplicateDecision.findUnique.mockResolvedValue(null);
+    await service.resolveDuplicate('user-a', reviewable.id, { candidateInvoiceId: rescanned.id,
+      resolution: 'DUPLICATE' as any, reason: 'Same invoice scanned twice', expectedFingerprint: fingerprint });
+    expect(prisma.invoiceDuplicateDecision.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      create: expect.objectContaining({ resolution: 'DUPLICATE', candidateInvoiceId: rescanned.id }) }));
+    expect(prisma.invoiceDuplicateDecision.deleteMany).toHaveBeenCalledWith({ where: { invoiceId: reviewable.id } });
+    prisma.invoice.findUnique.mockResolvedValue({ ...reviewable, duplicateResolution: 'DUPLICATE' });
+    prisma.vendor.findFirst.mockResolvedValue({ id: 'vendor-a', organizationId: 'org-a' });
+    await expect(service.review('user-a', reviewable.id, { markReviewed: true })).rejects.toThrow('marked as a duplicate');
   });
 
   it('translates a concurrent unique-claim race into a duplicate conflict', async () => {

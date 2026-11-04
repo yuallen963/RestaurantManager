@@ -174,7 +174,7 @@ describe('invoice extraction', () => {
   });
 
   it('persists invoice fields and replaces line items atomically', async () => {
-    const tx: any = { invoiceLineItem: { deleteMany: jest.fn(), createMany: jest.fn() }, invoice: { findUnique: jest.fn().mockResolvedValue({ reviewStatus: ReviewStatus.NOT_REVIEWED }), update: jest.fn() } };
+    const tx: any = { invoiceDuplicateDecision: { deleteMany: jest.fn() }, invoiceLineItem: { deleteMany: jest.fn(), createMany: jest.fn() }, invoice: { findUnique: jest.fn().mockResolvedValue({ reviewStatus: ReviewStatus.NOT_REVIEWED }), update: jest.fn() } };
     const prisma: any = { invoice: { findUnique: jest.fn().mockResolvedValue({ id: 'inv', organizationId: 'org', restaurantLocationId: 'loc', storageKey: 'key', fileType: 'application/pdf', originalFileName: 'invoice.pdf', reviewStatus: ReviewStatus.NOT_REVIEWED }) }, vendor: { findFirst: jest.fn().mockResolvedValue({ id: 'vendor' }) }, $transaction: jest.fn(async (callback) => callback(tx)) };
     const provider: any = { extract: jest.fn().mockResolvedValue({ data: extraction, provider: 'openai', model: 'gpt-4.1-mini', usage: { input_tokens: 10 } }), isConfigured: () => true };
     const processor = new InvoiceExtractionProcessor(prisma, { get: jest.fn().mockResolvedValue(Buffer.from('pdf')) } as any, provider, { log: jest.fn() } as any);
@@ -197,7 +197,7 @@ describe('invoice extraction', () => {
 
   it('aggregates multi-page line items into one invoice transaction', async () => {
     const multiPage = { ...extraction, lineItems: [extraction.lineItems[0], { ...extraction.lineItems[0], lineNumber: 2, sourcePage: 2, sourceText: '2 CASE 384920 FRY OIL 2/35 LB 50.00 100.00', rawDescription: 'FRY OIL 2/35 LB', normalizedName: 'Frying Oil', packSize: '2/35 LB' }] };
-    const tx: any = { invoiceLineItem: { deleteMany: jest.fn(), createMany: jest.fn() }, invoice: { findUnique: jest.fn().mockResolvedValue({ reviewStatus: ReviewStatus.NOT_REVIEWED }), update: jest.fn() } };
+    const tx: any = { invoiceDuplicateDecision: { deleteMany: jest.fn() }, invoiceLineItem: { deleteMany: jest.fn(), createMany: jest.fn() }, invoice: { findUnique: jest.fn().mockResolvedValue({ reviewStatus: ReviewStatus.NOT_REVIEWED }), update: jest.fn() } };
     const prisma: any = { invoice: { findUnique: jest.fn().mockResolvedValue({ id: 'inv', organizationId: 'org', restaurantLocationId: 'loc', storageKey: 'key', fileType: 'application/pdf', originalFileName: 'multi.pdf', reviewStatus: ReviewStatus.NOT_REVIEWED }) }, vendor: { findFirst: jest.fn() }, $transaction: (callback: (client: any) => unknown) => callback(tx) };
     const processor = new InvoiceExtractionProcessor(prisma, { get: jest.fn().mockResolvedValue(Buffer.from('pdf')) } as any, { extract: jest.fn().mockResolvedValue({ data: multiPage, provider: 'openai', model: 'gpt-4.1-mini', usage: null }) } as any, { log: jest.fn() } as any);
     await processor.process('inv', 'user');
@@ -208,7 +208,7 @@ describe('invoice extraction', () => {
   });
 
   it('discards a late provider result if the invoice was reviewed while processing', async () => {
-    const tx: any = { invoiceLineItem: { deleteMany: jest.fn(), createMany: jest.fn() }, invoice: { findUnique: jest.fn().mockResolvedValue({ reviewStatus: ReviewStatus.REVIEWED }), update: jest.fn() } };
+    const tx: any = { invoiceDuplicateDecision: { deleteMany: jest.fn() }, invoiceLineItem: { deleteMany: jest.fn(), createMany: jest.fn() }, invoice: { findUnique: jest.fn().mockResolvedValue({ reviewStatus: ReviewStatus.REVIEWED }), update: jest.fn() } };
     const audit: any = { log: jest.fn() };
     const prisma: any = { invoice: { findUnique: jest.fn().mockResolvedValue({ id: 'inv', organizationId: 'org', restaurantLocationId: 'loc', storageKey: 'key', fileType: 'application/pdf', originalFileName: 'invoice.pdf', reviewStatus: ReviewStatus.NOT_REVIEWED }) }, vendor: { findFirst: jest.fn() }, $transaction: (callback: (client: any) => unknown) => callback(tx) };
     await new InvoiceExtractionProcessor(prisma, { get: jest.fn().mockResolvedValue(Buffer.from('pdf')) } as any, { extract: jest.fn().mockResolvedValue({ data: extraction, provider: 'openai', model: 'gpt-4.1-mini', usage: null }) } as any, audit).process('inv', 'user');
@@ -233,7 +233,7 @@ describe('invoice extraction', () => {
   it('records reviewedBy and reviewedAt only after required fields are present', async () => {
     const first = { id: 'inv', organizationId: 'org', reviewStatus: ReviewStatus.NEEDS_REVIEW, vendorId: 'vendor', extractedVendorName: 'Sysco', invoiceDate: new Date('2026-10-04'), total: 106 };
     const reviewed = { ...first, reviewStatus: ReviewStatus.REVIEWED, reviewedByUserId: 'user' };
-    const prisma: any = { invoice: { findUnique: jest.fn().mockResolvedValue(first), update: jest.fn().mockResolvedValue(reviewed) }, invoiceLineItem: { findFirst: jest.fn().mockResolvedValue(null), findMany: jest.fn().mockResolvedValue([]), update: jest.fn() }, vendor: { findFirst: jest.fn().mockResolvedValue({ id: 'vendor', organizationId: 'org' }) } };
+    const prisma: any = { invoiceDuplicateDecision: { findMany: jest.fn().mockResolvedValue([]) }, invoice: { findUnique: jest.fn().mockResolvedValue(first), update: jest.fn().mockResolvedValue(reviewed) }, invoiceLineItem: { findFirst: jest.fn().mockResolvedValue(null), findMany: jest.fn().mockResolvedValue([]), update: jest.fn() }, vendor: { findFirst: jest.fn().mockResolvedValue({ id: 'vendor', organizationId: 'org' }) } };
     prisma.$transaction = jest.fn((callback: any) => callback(prisma));
     const audit: any = { log: jest.fn() };
     const service = new InvoicesService(prisma, { requireMember: jest.fn() } as any, audit, {} as any, {} as any);
