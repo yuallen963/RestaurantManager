@@ -463,6 +463,15 @@ class InvoiceRepository {
     );
   }
 
+  Future<Map<String, dynamic>> duplicateCandidates(String id) async {
+    final response = await dio.get('/invoices/$id/duplicate-candidates');
+    return Map<String, dynamic>.from(response.data as Map);
+  }
+
+  Future<void> resolveDuplicate(String id, Map<String, dynamic> data) async {
+    await dio.patch('/invoices/$id/duplicate-resolution', data: data);
+  }
+
   Future<InvoiceLineItem> updateLineItem(
     String invoiceId,
     String lineItemId,
@@ -491,6 +500,10 @@ final invoiceListProvider = FutureProvider<List<InvoiceRecord>>((ref) async {
 final invoiceDetailProvider = FutureProvider.family<InvoiceRecord, String>(
   (ref, id) => ref.watch(invoiceRepositoryProvider).detail(id),
 );
+final invoiceDuplicateCandidatesProvider =
+    FutureProvider.family<Map<String, dynamic>, String>(
+      (ref, id) => ref.watch(invoiceRepositoryProvider).duplicateCandidates(id),
+    );
 final invoiceLineItemsProvider =
     FutureProvider.family<List<InvoiceLineItem>, String>(
       (ref, id) => ref.watch(invoiceRepositoryProvider).lineItems(id),

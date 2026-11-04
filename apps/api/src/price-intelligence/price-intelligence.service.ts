@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createHash } from 'crypto';
-import { Prisma, ReviewStatus } from '@prisma/client';
+import { InvoiceDuplicateResolution, Prisma, ReviewStatus } from '@prisma/client';
 import { OrganizationAccessService } from '../organizations/organization-access.service';
 import { PrismaService } from '../prisma.service';
 import { PriceChangeDirection, PriceChangeSort, PriceHistoryQuery, PriceIntelligenceQuery } from './dto';
@@ -291,6 +291,7 @@ export class PriceIntelligenceService {
         ],
         invoice: {
           reviewStatus: ReviewStatus.REVIEWED,
+          duplicateResolution: { not: InvoiceDuplicateResolution.DUPLICATE },
           vendorId: { not: null },
           invoiceDate: { gte: startDate, lte: endDate },
         },

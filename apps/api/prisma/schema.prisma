@@ -158,6 +158,12 @@ enum ReviewStatus {
   REVIEWED
 }
 
+enum InvoiceDuplicateResolution {
+  UNRESOLVED
+  DUPLICATE
+  CONFIRMED_DISTINCT
+}
+
 enum InvoiceIngestionSource {
   MANUAL_UPLOAD
   EMAIL_FORWARD
@@ -713,6 +719,14 @@ model Invoice {
   inboundReceivedAt      DateTime?
   originalAttachmentName String?
   attachmentHash         String?
+  duplicateFingerprint   String?
+  reviewedIdentityKey    String?
+  duplicateResolution    InvoiceDuplicateResolution @default(UNRESOLVED)
+  duplicateOfInvoiceId   String?
+  duplicateResolvedByUserId String?
+  duplicateResolvedAt    DateTime?
+  duplicateResolutionReason String?
+  duplicateDecisionFingerprint String?
   createdByUserId        String
   extractionStatus       ExtractionStatus       @default(NOT_STARTED)
   extractionProvider     String?
@@ -734,8 +748,12 @@ model Invoice {
   lineItems              InvoiceLineItem[]
   vendor                 Vendor?                @relation(fields: [vendorId], references: [id], onDelete: SetNull)
   bankTransactions       BankTransaction[]
+  duplicateOf            Invoice?               @relation("InvoiceDuplicateLink", fields: [duplicateOfInvoiceId], references: [id], onDelete: Restrict)
+  duplicateReferences    Invoice[]              @relation("InvoiceDuplicateLink")
 
   @@unique([organizationId, restaurantLocationId, attachmentHash])
+  @@unique([organizationId, restaurantLocationId, reviewedIdentityKey])
+  @@index([organizationId, restaurantLocationId, duplicateFingerprint])
   @@index([organizationId, restaurantLocationId])
   @@index([restaurantLocationId, invoiceDate])
   @@index([organizationId, restaurantLocationId, inboundMessageId], map: "Invoice_organizationId_restaurantLocationId_inboundMessageId_id")

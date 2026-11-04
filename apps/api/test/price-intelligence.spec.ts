@@ -232,7 +232,7 @@ describe('PriceIntelligenceService', () => {
           { unitPrice: { not: null } },
           { extendedPrice: { not: null } },
         ],
-        invoice: expect.objectContaining({ reviewStatus: 'REVIEWED' }),
+        invoice: expect.objectContaining({ reviewStatus: 'REVIEWED', duplicateResolution: { not: 'DUPLICATE' } }),
       }),
     }));
   });

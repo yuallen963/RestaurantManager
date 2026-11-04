@@ -31,7 +31,7 @@ describe('Prisma migration history', () => {
   });
 
   it('keeps provenance, bank automation, and auth security as ordered forward migrations', () => {
-    expect(migrations.slice(-7)).toEqual([
+    expect(migrations.slice(-8)).toEqual([
       '20261012190000_invoice_field_provenance',
       '20261012230000_bank_rule_auto_confirmation',
       '20261013010000_auth_security_foundation',
@@ -39,7 +39,16 @@ describe('Prisma migration history', () => {
       '20261016190000_manual_revenue_type',
       '20261017190000_banking_financial_integrity',
       '20261022160000_private_beta_invitations',
+      '20261104010000_invoice_duplicate_resolution',
     ]);
+  });
+
+  it('adds duplicate claims without rewriting historical invoices', () => {
+    const sql = readFileSync(join(migrationsRoot, '20261104010000_invoice_duplicate_resolution', 'migration.sql'), 'utf8');
+    expect(sql).toContain('"reviewedIdentityKey"');
+    expect(sql).toContain('CREATE UNIQUE INDEX');
+    expect(sql).toContain('"Invoice_duplicateOfInvoiceId_fkey"');
+    expect(sql).not.toMatch(/\bUPDATE\s+"Invoice"|\bDELETE\s+FROM\s+"Invoice"/i);
   });
 
   it('enforces bank reconciliation links and one active payment per invoice', () => {

@@ -2,7 +2,7 @@ import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Query, Use
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-import { CompleteUploadDto, InvoiceListQuery, ReviewInvoiceDto, UpdateInvoiceDto, UpdateLineItemDto, UploadIntentDto } from './dto';
+import { CompleteUploadDto, InvoiceListQuery, ResolveInvoiceDuplicateDto, ReviewInvoiceDto, UpdateInvoiceDto, UpdateLineItemDto, UploadIntentDto } from './dto';
 import { InvoicesService } from './invoices.service';
 
 @ApiTags('invoices')
@@ -18,6 +18,8 @@ export class InvoicesController {
   @Get(':id/line-items') lineItems(@CurrentUser() u: { sub: string }, @Param('id') id: string) { return this.invoices.lineItems(u.sub, id); }
   @Patch(':invoiceId/line-items/:lineItemId') updateLineItem(@CurrentUser() u: { sub: string }, @Param('invoiceId') invoiceId: string, @Param('lineItemId') lineItemId: string, @Body() data: UpdateLineItemDto) { return this.invoices.updateLineItem(u.sub, invoiceId, lineItemId, data); }
   @Patch(':id/review') review(@CurrentUser() u: { sub: string }, @Param('id') id: string, @Body() data: ReviewInvoiceDto) { return this.invoices.review(u.sub, id, data); }
+  @Get(':id/duplicate-candidates') duplicateCandidates(@CurrentUser() u: { sub: string }, @Param('id') id: string) { return this.invoices.duplicateCandidates(u.sub, id); }
+  @Patch(':id/duplicate-resolution') resolveDuplicate(@CurrentUser() u: { sub: string }, @Param('id') id: string, @Body() data: ResolveInvoiceDuplicateDto) { return this.invoices.resolveDuplicate(u.sub, id, data); }
   @Get() list(@CurrentUser() u: { sub: string }, @Query() query: InvoiceListQuery) { return this.invoices.list(u.sub, query); }
   @Get(':id') detail(@CurrentUser() u: { sub: string }, @Param('id') id: string) { return this.invoices.detail(u.sub, id); }
   @Patch(':id') update(@CurrentUser() u: { sub: string }, @Param('id') id: string, @Body() data: UpdateInvoiceDto) { return this.invoices.update(u.sub, id, data); }

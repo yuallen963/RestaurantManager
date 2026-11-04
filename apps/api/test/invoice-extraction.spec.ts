@@ -239,7 +239,7 @@ describe('invoice extraction', () => {
     const service = new InvoicesService(prisma, { requireMember: jest.fn() } as any, audit, {} as any, {} as any);
     const result = await service.review('user', 'inv', { markReviewed: true });
     expect(result.reviewStatus).toBe(ReviewStatus.REVIEWED);
-    expect(prisma.invoice.update).toHaveBeenLastCalledWith({ where: { id: 'inv' }, data: expect.objectContaining({ reviewStatus: ReviewStatus.REVIEWED, reviewedAt: expect.any(Date), reviewedByUserId: 'user' }) });
+    expect(prisma.invoice.update).toHaveBeenLastCalledWith({ where: { id: 'inv', reviewStatus: { not: ReviewStatus.REVIEWED } }, data: expect.objectContaining({ reviewStatus: ReviewStatus.REVIEWED, reviewedAt: expect.any(Date), reviewedByUserId: 'user' }) });
     expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({ action: 'invoice.marked_reviewed' }));
   });
 

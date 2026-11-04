@@ -1079,6 +1079,160 @@ class _ReviewFieldTile extends StatelessWidget {
   );
 }
 
+class _DuplicateReviewCard extends ConsumerWidget {
+  const _DuplicateReviewCard({
+    required this.invoiceId,
+    required this.data,
+    required this.readOnly,
+  });
+  final String invoiceId;
+  final Map<String, dynamic> data;
+  final bool readOnly;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final candidates = (data['candidates'] as List? ?? const [])
+        .whereType<Map>()
+        .toList();
+    if (candidates.isEmpty) return const SizedBox.shrink();
+    return Card(
+      color: Theme.of(context).colorScheme.errorContainer,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Possible duplicate invoice',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Compare the original documents. A second copy of the same purchase must not enter price history.',
+            ),
+            for (final candidate in candidates)
+              ListTile(
+                title: Text(
+                  '${candidate['kind'] == 'DEFINITE' ? 'Same file' : 'Matching purchase'} · Invoice ${candidate['invoiceNumber'] ?? 'number missing'}',
+                ),
+                subtitle: Text(
+                  '${candidate['invoiceDate']?.toString().split('T').first ?? 'Date missing'} · ${candidate['currency'] ?? ''} ${candidate['total'] ?? ''} · ${candidate['reviewStatus']}',
+                ),
+                trailing:
+                    !readOnly &&
+                        data['canResolve'] == true &&
+                        candidate['reviewStatus'] == 'REVIEWED'
+                    ? Wrap(
+                        spacing: 8,
+                        children: [
+                          TextButton(
+                            onPressed: () => _decide(
+                              context,
+                              ref,
+                              candidate['id'].toString(),
+                              'DUPLICATE',
+                            ),
+                            child: const Text('Mark duplicate'),
+                          ),
+                          TextButton(
+                            onPressed: () => _decide(
+                              context,
+                              ref,
+                              candidate['id'].toString(),
+                              'CONFIRMED_DISTINCT',
+                            ),
+                            child: const Text('Confirm distinct'),
+                          ),
+                        ],
+                      )
+                    : null,
+              ),
+            if (data['resolution'] == 'DUPLICATE')
+              const Text(
+                'Marked duplicate. This invoice cannot be reviewed as a new purchase.',
+              ),
+            if (data['resolution'] == 'CONFIRMED_DISTINCT')
+              const Text(
+                'Confirmed distinct. Review can proceed if the invoice details still match this decision.',
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _decide(
+    BuildContext context,
+    WidgetRef ref,
+    String candidateId,
+    String resolution,
+  ) async {
+    var reason = '';
+    final explanation = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(
+          resolution == 'DUPLICATE'
+              ? 'Mark duplicate'
+              : 'Confirm distinct purchase',
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'Compare both original invoices and explain your decision. This decision is recorded for the account.',
+            ),
+            TextField(
+              onChanged: (value) => reason = value,
+              decoration: const InputDecoration(labelText: 'Reason'),
+              maxLines: 3,
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, reason),
+            child: const Text('Save decision'),
+          ),
+        ],
+      ),
+    );
+    if (explanation == null || !context.mounted) return;
+    try {
+      await ref.read(invoiceRepositoryProvider).resolveDuplicate(invoiceId, {
+        'candidateInvoiceId': candidateId,
+        'resolution': resolution,
+        'reason': explanation,
+        'expectedFingerprint': data['fingerprint'],
+      });
+      ref.invalidate(invoiceDuplicateCandidatesProvider(invoiceId));
+      ref.invalidate(invoiceDetailProvider(invoiceId));
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Duplicate decision saved')),
+        );
+      }
+    } on DioException catch (error) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              error.response?.data is Map
+                  ? error.response?.data['message']?.toString() ??
+                        'Unable to save decision'
+                  : 'Unable to save decision',
+            ),
+          ),
+        );
+      }
+    }
+  }
+}
+
 class InvoiceReviewScreen extends ConsumerWidget {
   const InvoiceReviewScreen({required this.invoiceId, super.key});
   final String invoiceId;
@@ -1087,6 +1241,7 @@ class InvoiceReviewScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final invoice = ref.watch(invoiceDetailProvider(invoiceId));
     final lineItems = ref.watch(invoiceLineItemsProvider(invoiceId));
+    final duplicates = ref.watch(invoiceDuplicateCandidatesProvider(invoiceId));
     final readOnly = ref.watch(demoModeProvider);
     return Scaffold(
       appBar: AppBar(title: const Text('Review Invoice')),
@@ -1144,6 +1299,14 @@ class InvoiceReviewScreen extends ConsumerWidget {
                   ],
                   const SizedBox(height: 16),
                   _ReconciliationWarning(reconciliation: data.reconciliation),
+                  if (duplicates.valueOrNull != null) ...[
+                    _DuplicateReviewCard(
+                      invoiceId: invoiceId,
+                      data: duplicates.valueOrNull!,
+                      readOnly: readOnly || data.reviewStatus == 'REVIEWED',
+                    ),
+                    const SizedBox(height: 12),
+                  ],
                   Card(
                     color: issueCount > 0
                         ? Theme.of(context).colorScheme.errorContainer
@@ -1408,7 +1571,9 @@ class InvoiceReviewScreen extends ConsumerWidget {
                         'Marking reviewed confirms that you checked the displayed values against the original invoice.',
                       ),
                     ),
-                  if (!readOnly && data.reviewStatus != 'REVIEWED')
+                  if (!readOnly &&
+                      data.reviewStatus != 'REVIEWED' &&
+                      duplicates.valueOrNull?['resolution'] != 'DUPLICATE')
                     FilledButton.icon(
                       onPressed: () => _markReviewed(context, ref, data),
                       icon: const Icon(Icons.check),

@@ -37,6 +37,7 @@ class FakeInvoiceRepository extends InvoiceRepository {
   final bool failExtraction;
   bool deleted = false;
   bool reviewed = false;
+  Map<String, dynamic>? duplicateDecision;
   Map<String, dynamic>? correctedLine;
   @override
   Future<InvoiceRecord> upload({
@@ -65,6 +66,19 @@ class FakeInvoiceRepository extends InvoiceRepository {
   Future<InvoiceRecord> review(String id, Map<String, dynamic> data) async {
     reviewed = data['markReviewed'] == true;
     return invoice;
+  }
+
+  @override
+  Future<Map<String, dynamic>> duplicateCandidates(String id) async => {
+    'fingerprint': null,
+    'resolution': 'UNRESOLVED',
+    'canResolve': false,
+    'candidates': <Map<String, dynamic>>[],
+  };
+
+  @override
+  Future<void> resolveDuplicate(String id, Map<String, dynamic> data) async {
+    duplicateDecision = data;
   }
 
   @override
@@ -457,6 +471,64 @@ void main() {
     await tester.pump();
     expect(repository.reviewed, isTrue);
   });
+
+  testWidgets(
+    'suspected duplicate explains evidence and records a distinct decision with a reason',
+    (tester) async {
+      final repository = FakeInvoiceRepository();
+      await tester.pumpWidget(
+        app([
+          invoiceRepositoryProvider.overrideWithValue(repository),
+          invoiceDetailProvider(
+            'invoice-a',
+          ).overrideWith((_) async => extractedInvoice),
+          invoiceLineItemsProvider(
+            'invoice-a',
+          ).overrideWith((_) async => [lineItem]),
+          invoiceDuplicateCandidatesProvider('invoice-a').overrideWith(
+            (_) async => {
+              'fingerprint': 'current-fingerprint',
+              'resolution': 'UNRESOLVED',
+              'canResolve': true,
+              'candidates': [
+                {
+                  'id': 'earlier-invoice',
+                  'kind': 'POSSIBLE',
+                  'invoiceNumber': '1001',
+                  'invoiceDate': '2026-10-04T00:00:00.000Z',
+                  'currency': 'USD',
+                  'total': '2842.16',
+                  'reviewStatus': 'REVIEWED',
+                },
+              ],
+            },
+          ),
+        ], const InvoiceReviewScreen(invoiceId: 'invoice-a')),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Possible duplicate invoice'), findsOneWidget);
+      await tester.tap(find.text('Confirm distinct'));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byType(TextField).last,
+        'Separate delivery with its own signed receipt',
+      );
+      await tester.tap(find.text('Save decision'));
+      await tester.pumpAndSettle();
+      expect(
+        repository.duplicateDecision,
+        containsPair('candidateInvoiceId', 'earlier-invoice'),
+      );
+      expect(
+        repository.duplicateDecision,
+        containsPair('resolution', 'CONFIRMED_DISTINCT'),
+      );
+      expect(
+        repository.duplicateDecision,
+        containsPair('expectedFingerprint', 'current-fingerprint'),
+      );
+    },
+  );
 
   testWidgets('review surfaces persisted reconciliation discrepancies', (
     tester,

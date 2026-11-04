@@ -78,7 +78,7 @@ describe('SavingsIntelligenceService scoping', () => {
     expect(prisma.invoiceLineItem.findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: expect.objectContaining({
         organizationId: 'org-a', restaurantLocationId: location.id,
-        invoice: expect.objectContaining({ reviewStatus: 'REVIEWED', vendorId: { in: ['vendor-a'] }, invoiceDate: { gte: expect.any(Date), lte: expect.any(Date) } }),
+        invoice: expect.objectContaining({ reviewStatus: 'REVIEWED', duplicateResolution: { not: 'DUPLICATE' }, vendorId: { in: ['vendor-a'] }, invoiceDate: { gte: expect.any(Date), lte: expect.any(Date) } }),
       }),
     }));
   });

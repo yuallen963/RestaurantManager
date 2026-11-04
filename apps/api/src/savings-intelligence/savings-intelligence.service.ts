@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { Prisma, ProductMatchStatus, ReviewStatus } from '@prisma/client';
+import { InvoiceDuplicateResolution, Prisma, ProductMatchStatus, ReviewStatus } from '@prisma/client';
 import { OrganizationAccessService } from '../organizations/organization-access.service';
 import { normalizePriceObservation, priceEligibilityReason, TrustedPriceObservation } from '../price-intelligence/price-intelligence.service';
 import { PrismaService } from '../prisma.service';
@@ -126,7 +126,7 @@ export class SavingsIntelligenceService {
     if (!groups.length) { const empty = calculateSavingsOpportunities([], query.lookbackDays, { minimumPercentageDifference: 5, minimumMonthlySavings: 25 }); return { ...empty, eligibility: { ...empty.eligibility, excludedObservations: {} as Record<string, number> } }; }
     const vendorIds = [...new Set(groups.flatMap((group) => group.members.map((member) => member.vendorId)))];
     const lines = await this.prisma.invoiceLineItem.findMany({
-      where: { organizationId: location.organizationId, restaurantLocationId: location.id, OR: [{ unitPrice: { not: null } }, { extendedPrice: { not: null } }], quantity: { not: null }, invoice: { reviewStatus: ReviewStatus.REVIEWED, vendorId: { in: vendorIds }, invoiceDate: { gte: start, lte: new Date() } } },
+      where: { organizationId: location.organizationId, restaurantLocationId: location.id, OR: [{ unitPrice: { not: null } }, { extendedPrice: { not: null } }], quantity: { not: null }, invoice: { reviewStatus: ReviewStatus.REVIEWED, duplicateResolution: { not: InvoiceDuplicateResolution.DUPLICATE }, vendorId: { in: vendorIds }, invoiceDate: { gte: start, lte: new Date() } } },
       include: { invoice: { select: { id: true, vendorId: true, invoiceDate: true, currency: true, fieldProvenance: true } } },
       orderBy: { invoice: { invoiceDate: 'desc' } },
       take: 1000,

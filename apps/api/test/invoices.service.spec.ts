@@ -1,5 +1,7 @@
 import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
 import { InvoicesService } from '../src/invoices/invoices.service';
+import { invoiceIdentity } from '../src/invoices/duplicate-identity';
+import { Prisma } from '@prisma/client';
 
 const location = { id: 'loc-a', organizationId: 'org-a' };
 const invoiceBytes = Buffer.from('%PDF-invoice bytes');
@@ -34,6 +36,103 @@ function setup() {
 }
 
 describe('InvoicesService', () => {
+  const reviewable = { ...invoice, vendorId: 'vendor-a', invoiceNumber: 'INV-101', invoiceDate: new Date('2026-10-14'),
+    currency: 'USD', subtotal: new Prisma.Decimal(100), tax: new Prisma.Decimal(0), otherFees: new Prisma.Decimal(0),
+    discount: new Prisma.Decimal(0), total: new Prisma.Decimal(100), updatedAt: new Date('2026-10-15'), duplicateResolution: 'UNRESOLVED' };
+  const rescanned = { ...reviewable, id: 'invoice-b', attachmentHash: 'different-bytes', reviewStatus: 'REVIEWED', reviewedIdentityKey: 'historical-key' };
+
+  it('reports rescanned candidates only within the authorized tenant and location', async () => {
+    const { service, prisma } = setup();
+    prisma.invoice.findUnique.mockResolvedValue(reviewable);
+    prisma.invoice.findMany.mockResolvedValue([rescanned]);
+    const result = await service.duplicateCandidates('user-a', reviewable.id);
+    expect(result.candidates).toEqual([expect.objectContaining({ id: rescanned.id, kind: 'POSSIBLE' })]);
+    expect(prisma.invoice.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ organizationId: 'org-a', restaurantLocationId: 'loc-a' }) }));
+  });
+
+  it('blocks a rescanned purchase until an owner or admin confirms distinctness', async () => {
+    const { service, prisma } = setup();
+    prisma.invoice.findUnique.mockResolvedValue(reviewable);
+    prisma.invoice.findMany.mockResolvedValue([rescanned]);
+    prisma.vendor.findFirst.mockResolvedValue({ id: 'vendor-a', organizationId: 'org-a' });
+    await expect(service.review('user-a', reviewable.id, { markReviewed: true })).rejects.toThrow('Possible duplicate');
+    expect(prisma.invoice.update).not.toHaveBeenCalled();
+  });
+
+  it('records and rechecks a distinct decision before claiming a separate reviewed identity', async () => {
+    const { service, prisma, access, audit } = setup();
+    prisma.invoice.findUnique.mockResolvedValue(reviewable);
+    prisma.invoice.findMany.mockResolvedValue([rescanned]);
+    prisma.vendor.findFirst.mockResolvedValue({ id: 'vendor-a', organizationId: 'org-a' });
+    const fingerprint = invoiceIdentity(reviewable)!.fingerprint;
+    await service.resolveDuplicate('user-a', reviewable.id, { candidateInvoiceId: rescanned.id,
+      resolution: 'CONFIRMED_DISTINCT' as any, reason: 'Two original deliveries and signed receipts', expectedFingerprint: fingerprint });
+    expect(access.requireMember).toHaveBeenCalledWith('user-a', 'org-a', ['OWNER', 'ADMIN']);
+    expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({ action: 'invoice.duplicate_confirmed_distinct' }));
+    prisma.invoice.findUnique.mockResolvedValue({ ...reviewable, duplicateResolution: 'CONFIRMED_DISTINCT',
+      duplicateOfInvoiceId: rescanned.id, duplicateDecisionFingerprint: fingerprint });
+    await service.review('user-a', reviewable.id, { markReviewed: true });
+    expect(prisma.invoice.update.mock.calls.at(-1)[0].data.reviewedIdentityKey).not.toBe(invoiceIdentity(reviewable)!.claimKey);
+    expect(prisma.invoice.update.mock.calls.at(-1)[0].data.reviewStatus).toBe('REVIEWED');
+  });
+
+  it('rejects unauthorized or stale duplicate decisions', async () => {
+    const { service, prisma, access } = setup();
+    prisma.invoice.findUnique.mockResolvedValue(reviewable);
+    access.requireMember.mockRejectedValueOnce(new ForbiddenException());
+    await expect(service.resolveDuplicate('viewer', reviewable.id, { candidateInvoiceId: rescanned.id,
+      resolution: 'CONFIRMED_DISTINCT' as any, reason: 'Separate signed deliveries', expectedFingerprint: invoiceIdentity(reviewable)!.fingerprint })).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(service.resolveDuplicate('user-a', reviewable.id, { candidateInvoiceId: rescanned.id,
+      resolution: 'CONFIRMED_DISTINCT' as any, reason: 'Separate signed deliveries', expectedFingerprint: 'stale' })).rejects.toThrow('details changed');
+  });
+
+  it('translates a concurrent unique-claim race into a duplicate conflict', async () => {
+    const { service, prisma } = setup();
+    prisma.invoice.findUnique.mockResolvedValue(reviewable);
+    prisma.invoice.findMany.mockResolvedValue([]);
+    prisma.vendor.findFirst.mockResolvedValue({ id: 'vendor-a', organizationId: 'org-a' });
+    prisma.invoice.update.mockRejectedValue(new Prisma.PrismaClientKnownRequestError('Unique reviewed identity', { code: 'P2002', clientVersion: '6.19.3' }));
+    await expect(service.review('user-a', reviewable.id, { markReviewed: true })).rejects.toThrow('claimed this purchase identity');
+  });
+
+  it('allows only one of two concurrent review attempts to claim the same purchase', async () => {
+    const { service, prisma } = setup();
+    prisma.invoice.findUnique.mockImplementation(({ where }: any) => Promise.resolve({ ...reviewable, id: where.id, attachmentHash: where.id }));
+    prisma.invoice.findMany.mockResolvedValue([]);
+    prisma.vendor.findFirst.mockResolvedValue({ id: 'vendor-a', organizationId: 'org-a' });
+    const claims = new Set<string>();
+    prisma.invoice.update.mockImplementation(({ where, data }: any) => {
+      if (claims.has(data.reviewedIdentityKey)) throw new Prisma.PrismaClientKnownRequestError('Unique reviewed identity', { code: 'P2002', clientVersion: '6.19.3' });
+      claims.add(data.reviewedIdentityKey);
+      return Promise.resolve({ ...reviewable, id: where.id, ...data });
+    });
+    const outcomes = await Promise.allSettled([
+      service.review('user-a', 'invoice-a', { markReviewed: true }),
+      service.review('user-a', 'invoice-b', { markReviewed: true }),
+    ]);
+    expect(outcomes.map((outcome) => outcome.status).sort()).toEqual(['fulfilled', 'rejected']);
+    expect(claims.size).toBe(1);
+  });
+
+  it('prevents invoices marked duplicate from becoming trusted', async () => {
+    const { service, prisma } = setup();
+    prisma.invoice.findUnique.mockResolvedValue({ ...reviewable, duplicateResolution: 'DUPLICATE' });
+    prisma.vendor.findFirst.mockResolvedValue({ id: 'vendor-a', organizationId: 'org-a' });
+    await expect(service.review('user-a', reviewable.id, { markReviewed: true })).rejects.toThrow('marked as a duplicate');
+  });
+
+  it('invalidates a distinct decision when an invoice identifier changes and locks reviewed identifiers', async () => {
+    const { service, prisma } = setup();
+    prisma.invoice.findUnique.mockResolvedValue({ ...reviewable, duplicateResolution: 'CONFIRMED_DISTINCT',
+      duplicateOfInvoiceId: rescanned.id, duplicateDecisionFingerprint: invoiceIdentity(reviewable)!.fingerprint });
+    await service.update('user-a', reviewable.id, { invoiceNumber: 'DIFFERENT' });
+    expect(prisma.invoice.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({
+      duplicateResolution: 'UNRESOLVED', duplicateOfInvoiceId: null, duplicateDecisionFingerprint: null,
+    }) }));
+    prisma.invoice.findUnique.mockResolvedValue({ ...reviewable, reviewStatus: 'REVIEWED' });
+    await expect(service.update('user-a', reviewable.id, { invoiceNumber: 'CHANGED' })).rejects.toThrow('Reviewed invoices cannot be edited');
+  });
+
   it('requires management roles for every invoice write path', async () => {
     const { service, access, prisma } = setup();
     access.requireMember.mockRejectedValue(new ForbiddenException());
@@ -58,7 +157,7 @@ describe('InvoicesService', () => {
 
   it('rejects a material total mismatch and preserves reviewed headers', async () => {
     const { service, prisma } = setup();
-    await expect(service.review('user-a', 'invoice-a', { markReviewed: true, vendorName: 'Vendor', invoiceDate: '2026-10-01', subtotal: 100, tax: 10, otherFees: 0, discount: 0, total: 100 } as any)).rejects.toThrow('subtotal plus tax');
+    await expect(service.review('user-a', 'invoice-a', { markReviewed: true, vendorName: 'Vendor', invoiceDate: '2026-10-01', subtotal: 100, tax: 10, otherFees: 0, discount: 0, total: 100 } as any)).rejects.toThrow('known charges reconcile');
     prisma.invoice.findUnique.mockResolvedValue({ ...invoice, reviewStatus: 'REVIEWED' });
     await expect(service.update('user-a', 'invoice-a', { total: 1 })).rejects.toThrow('Reviewed invoices cannot be edited');
     expect(prisma.invoice.update).not.toHaveBeenCalled();
@@ -144,6 +243,18 @@ describe('InvoicesService', () => {
     expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({ action: 'invoice.duplicate_skipped', entityId: 'existing-invoice' }));
   });
 
+  it('handles a concurrent identical-file unique conflict without a second trusted upload', async () => {
+    const { service, prisma, storage } = setup();
+    const existing = { ...invoice, id: 'concurrent-invoice' };
+    prisma.invoice.findFirst.mockResolvedValue(null);
+    prisma.invoice.update.mockRejectedValue(new Prisma.PrismaClientKnownRequestError('Unique attachment', { code: 'P2002', clientVersion: '6.19.3' }));
+    prisma.invoice.findUnique.mockImplementation(({ where }: any) => Promise.resolve(where.id ? invoice : existing));
+    const result = await service.complete('user-a', invoice.id, { etag: 'uploaded' });
+    expect(result.id).toBe(existing.id);
+    expect(storage.remove).toHaveBeenCalledWith(invoice.storageKey);
+    expect(prisma.invoice.delete).toHaveBeenCalledWith({ where: { id: invoice.id } });
+  });
+
   it('marks completion failed when the storage object is missing', async () => {
     const { service, prisma, storage, audit } = setup();
     storage.get.mockRejectedValue(new Error('NoSuchKey'));
@@ -200,7 +311,7 @@ describe('InvoicesService', () => {
     const { service, prisma } = setup();
     await service.update('user-a', 'invoice-a', { status: 'COMPLETED' as any });
     expect(prisma.invoice.update).toHaveBeenCalledWith({
-      where: { id: 'invoice-a' },
+      where: { id: 'invoice-a', reviewStatus: { not: 'REVIEWED' } },
       data: expect.objectContaining({ subtotal: undefined, tax: undefined, total: undefined, status: 'COMPLETED' }),
     });
   });
@@ -210,7 +321,7 @@ describe('InvoicesService', () => {
     prisma.invoice.update.mockResolvedValue({ ...invoice, status: 'COMPLETED', reviewStatus: 'REVIEWED' });
     await service.review('user-a', 'invoice-a', { markReviewed: true, vendorName: 'Vendor', invoiceDate: '2026-10-01', total: 100 } as any);
     expect(prisma.invoice.update).toHaveBeenLastCalledWith({
-      where: { id: 'invoice-a' },
+      where: { id: 'invoice-a', reviewStatus: { not: 'REVIEWED' } },
       data: expect.objectContaining({ status: 'COMPLETED', reviewStatus: 'REVIEWED' }),
     });
   });
@@ -219,7 +330,7 @@ describe('InvoicesService', () => {
     const { service, prisma } = setup();
     prisma.invoiceLineItem.findMany.mockResolvedValue([{ id: 'line-a', rawDescription: 'Chicken', fieldProvenance: { quantity: { kind: 'OBSERVED', verified: false }, unitPrice: { kind: 'MISSING', verified: false } } }]);
     prisma.invoice.update.mockResolvedValueOnce({ ...invoice, extractedVendorName: 'Vendor', invoiceDate: new Date('2026-10-01'), total: '100' });
-    await service.review('user-a', 'invoice-a', { markReviewed: true, vendorName: 'Vendor', invoiceDate: '2026-10-01', total: 100 } as any);
+    await service.review('user-a', 'invoice-a', { markReviewed: true, vendorName: 'Vendor', invoiceDate: '2026-10-01', subtotal: 100, total: 100 } as any);
     expect(prisma.invoiceLineItem.update).toHaveBeenCalledWith(expect.objectContaining({
       where: { id: 'line-a' },
       data: { fieldProvenance: expect.objectContaining({
