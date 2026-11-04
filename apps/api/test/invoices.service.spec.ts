@@ -34,6 +34,36 @@ function setup() {
 }
 
 describe('InvoicesService', () => {
+  it('requires management roles for every invoice write path', async () => {
+    const { service, access, prisma } = setup();
+    access.requireMember.mockRejectedValue(new ForbiddenException());
+    await expect(service.uploadIntent('viewer', { restaurantLocationId: 'loc-a', fileName: 'x.pdf', mimeType: 'application/pdf', fileSize: 10 })).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(service.complete('viewer', 'invoice-a', {} as any)).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(service.update('viewer', 'invoice-a', {})).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(service.startExtraction('viewer', 'invoice-a')).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(service.updateLineItem('viewer', 'invoice-a', 'line-a', {})).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(service.review('viewer', 'invoice-a', { markReviewed: true })).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(service.delete('viewer', 'invoice-a')).rejects.toBeInstanceOf(ForbiddenException);
+    expect(prisma.invoice.create).not.toHaveBeenCalled();
+    expect(prisma.invoice.delete).not.toHaveBeenCalled();
+    expect(access.requireMember).toHaveBeenCalledWith('viewer', 'org-a', ['OWNER', 'ADMIN', 'MANAGER']);
+  });
+
+  it('rejects a material subtotal mismatch before any invoice write', async () => {
+    const { service, prisma } = setup();
+    prisma.invoiceLineItem.findMany.mockResolvedValue([{ id: 'line-a', rawDescription: 'Rice', quantity: null, unitPrice: null, extendedPrice: new (require('@prisma/client').Prisma.Decimal)('90'), fieldProvenance: {} }]);
+    await expect(service.review('user-a', 'invoice-a', { markReviewed: true, vendorName: 'Vendor', invoiceDate: '2026-10-01', subtotal: 100, total: 100 } as any)).rejects.toThrow('line items sum to 90.00');
+    expect(prisma.invoice.update).not.toHaveBeenCalled();
+  });
+
+  it('rejects a material total mismatch and preserves reviewed headers', async () => {
+    const { service, prisma } = setup();
+    await expect(service.review('user-a', 'invoice-a', { markReviewed: true, vendorName: 'Vendor', invoiceDate: '2026-10-01', subtotal: 100, tax: 10, otherFees: 0, discount: 0, total: 100 } as any)).rejects.toThrow('subtotal plus tax');
+    prisma.invoice.findUnique.mockResolvedValue({ ...invoice, reviewStatus: 'REVIEWED' });
+    await expect(service.update('user-a', 'invoice-a', { total: 1 })).rejects.toThrow('Reviewed invoices cannot be edited');
+    expect(prisma.invoice.update).not.toHaveBeenCalled();
+  });
+
   it('creates a tenant-scoped upload intent and audits it', async () => {
     const { service, prisma, storage, audit } = setup();
     const result = await service.uploadIntent('user-a', { restaurantLocationId: 'loc-a', fileName: 'invoice.pdf', mimeType: 'application/pdf', fileSize: 100 });
@@ -177,10 +207,8 @@ describe('InvoicesService', () => {
 
   it('sets the terminal invoice status when approval marks an invoice reviewed', async () => {
     const { service, prisma } = setup();
-    prisma.invoice.update
-      .mockResolvedValueOnce({ ...invoice, extractedVendorName: 'Vendor', invoiceDate: new Date('2026-10-01'), total: '100' })
-      .mockResolvedValueOnce({ ...invoice, status: 'COMPLETED', reviewStatus: 'REVIEWED' });
-    await service.review('user-a', 'invoice-a', { markReviewed: true });
+    prisma.invoice.update.mockResolvedValue({ ...invoice, status: 'COMPLETED', reviewStatus: 'REVIEWED' });
+    await service.review('user-a', 'invoice-a', { markReviewed: true, vendorName: 'Vendor', invoiceDate: '2026-10-01', total: 100 } as any);
     expect(prisma.invoice.update).toHaveBeenLastCalledWith({
       where: { id: 'invoice-a' },
       data: expect.objectContaining({ status: 'COMPLETED', reviewStatus: 'REVIEWED' }),
@@ -191,7 +219,7 @@ describe('InvoicesService', () => {
     const { service, prisma } = setup();
     prisma.invoiceLineItem.findMany.mockResolvedValue([{ id: 'line-a', rawDescription: 'Chicken', fieldProvenance: { quantity: { kind: 'OBSERVED', verified: false }, unitPrice: { kind: 'MISSING', verified: false } } }]);
     prisma.invoice.update.mockResolvedValueOnce({ ...invoice, extractedVendorName: 'Vendor', invoiceDate: new Date('2026-10-01'), total: '100' });
-    await service.review('user-a', 'invoice-a', { markReviewed: true });
+    await service.review('user-a', 'invoice-a', { markReviewed: true, vendorName: 'Vendor', invoiceDate: '2026-10-01', total: 100 } as any);
     expect(prisma.invoiceLineItem.update).toHaveBeenCalledWith(expect.objectContaining({
       where: { id: 'line-a' },
       data: { fieldProvenance: expect.objectContaining({
@@ -232,7 +260,7 @@ describe('InvoicesService', () => {
   it('authorizes deletion, removes the row and storage object, and audits it', async () => {
     const { service, prisma, access, storage, audit } = setup();
     await service.delete('user-a', 'invoice-a');
-    expect(access.requireMember).toHaveBeenCalledWith('user-a', 'org-a');
+    expect(access.requireMember).toHaveBeenCalledWith('user-a', 'org-a', ['OWNER', 'ADMIN', 'MANAGER']);
     expect(prisma.invoice.delete).toHaveBeenCalledWith({ where: { id: 'invoice-a' } });
     expect(storage.remove).toHaveBeenCalledWith('org/file.pdf');
     expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({ action: 'invoice.deleted' }));

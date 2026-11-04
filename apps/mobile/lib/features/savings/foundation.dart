@@ -109,8 +109,10 @@ class SavingsData {
     required this.estimatedAnnualSavings,
     required this.items,
     required this.lookbackDays,
+    this.insufficientHistoryGroups = 0,
   });
   final int opportunityCount, lookbackDays;
+  final int insufficientHistoryGroups;
   final double estimatedMonthlySavings, estimatedAnnualSavings;
   final List<SavingsOpportunity> items;
   factory SavingsData.fromJson(Map<String, dynamic> json) {
@@ -127,6 +129,9 @@ class SavingsData {
           )
           .toList(),
       lookbackDays: json['lookbackDays'] as int,
+      insufficientHistoryGroups:
+          (json['eligibility'] as Map?)?['insufficientHistoryGroups'] as int? ??
+          0,
     );
   }
 }

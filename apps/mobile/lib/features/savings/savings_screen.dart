@@ -72,13 +72,17 @@ class _SavingsContent extends ConsumerWidget {
                 Expanded(
                   child: _Summary(
                     label: 'Estimated monthly',
-                    value: formatCurrency(data.estimatedMonthlySavings),
+                    value: data.items.isEmpty
+                        ? 'Unavailable'
+                        : formatCurrency(data.estimatedMonthlySavings),
                   ),
                 ),
                 Expanded(
                   child: _Summary(
                     label: 'Estimated annual',
-                    value: formatCurrency(data.estimatedAnnualSavings),
+                    value: data.items.isEmpty
+                        ? 'Unavailable'
+                        : formatCurrency(data.estimatedAnnualSavings),
                   ),
                 ),
               ],
@@ -86,12 +90,16 @@ class _SavingsContent extends ConsumerWidget {
           ),
         ),
         const SizedBox(height: 16),
+        if (data.insufficientHistoryGroups > 0)
+          Text(
+            '${data.insufficientHistoryGroups} confirmed product comparison(s) need at least three reviewed purchases across 28 days before savings can be estimated.',
+          ),
         if (data.items.isEmpty)
           const Padding(
             padding: EdgeInsets.only(top: 32),
             child: EmptyState(
               message:
-                  'No meaningful savings opportunities found from recent confirmed products.',
+                  'No reliable savings estimate yet. Compare confirmed products after at least three reviewed purchases spanning 28 days.',
             ),
           ),
         for (final item in data.items) _OpportunityCard(item: item),

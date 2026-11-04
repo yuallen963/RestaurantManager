@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable, NotAcceptableException, NotFoundException, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { ExtractionStatus, InvoiceIngestionSource, InvoiceStatus, Prisma } from '@prisma/client';
+import { ExtractionStatus, InvoiceIngestionSource, InvoiceStatus, OrganizationRole, Prisma } from '@prisma/client';
 import { createHash, createHmac, randomUUID, timingSafeEqual } from 'crypto';
 import { AuditService } from '../audit.service';
 import { OrganizationAccessService } from '../organizations/organization-access.service';
@@ -81,7 +81,7 @@ export class InboundEmailService {
   async address(userId: string, restaurantLocationId: string) {
     const location = await this.prisma.restaurantLocation.findUnique({ where: { id: restaurantLocationId } });
     if (!location) throw new NotFoundException('Location not found');
-    await this.access.requireMember(userId, location.organizationId);
+    await this.access.requireMember(userId, location.organizationId, [OrganizationRole.OWNER, OrganizationRole.ADMIN, OrganizationRole.MANAGER]);
     return { restaurantLocationId: location.id, address: `${this.prefix()}+${location.invoiceEmailToken}@${this.domain()}` };
   }
 

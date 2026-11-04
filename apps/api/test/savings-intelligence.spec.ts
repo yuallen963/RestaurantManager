@@ -3,53 +3,47 @@ import { calculateSavingsOpportunities, SavingsIntelligenceService, SavingsObser
 
 const now = new Date('2026-10-09T12:00:00.000Z');
 const observation = (overrides: Partial<SavingsObservation> = {}): SavingsObservation => ({
-  productGroupId: 'group-a', productName: 'Chicken Breast', vendorId: 'sysco', vendorName: 'Sysco', invoiceId: 'invoice-a', date: now,
-  unit: 'CASE', packSize: '40 lb', totalWeightPounds: 40, unitPrice: 106.5, quantity: 12, ...overrides,
+  productGroupId: 'group-a', productName: 'Chicken Breast', vendorId: 'sysco', vendorName: 'Sysco', invoiceId: 'invoice-a', lineItemId: 'line-a', date: now,
+  unit: 'lb', currency: 'USD', packSize: '40 lb', normalizedUnitPrice: 2.6625, normalizedQuantity: 40, ...overrides,
 });
 const thresholds = { minimumPercentageDifference: 5, minimumMonthlySavings: 25 };
+const history = () => [
+  observation(),
+  observation({ invoiceId: 'invoice-b', lineItemId: 'line-b', date: new Date('2026-09-01'), normalizedQuantity: 40 }),
+  observation({ vendorId: 'usf', vendorName: 'US Foods', invoiceId: 'invoice-c', lineItemId: 'line-c', date: new Date('2026-09-20'), normalizedUnitPrice: 2, normalizedQuantity: 40 }),
+];
 
 describe('savings calculations', () => {
-  it('uses the most recent purchase as current and the lowest recent alternative', () => {
-    const result = calculateSavingsOpportunities([
-      observation(),
-      observation({ vendorId: 'usf', vendorName: 'US Foods', invoiceId: 'invoice-b', date: new Date('2026-10-01'), unitPrice: 94.2 }),
-      observation({ vendorId: 'gfs', vendorName: 'GFS', invoiceId: 'invoice-c', date: new Date('2026-09-28'), unitPrice: 98 }),
-    ], 90, thresholds).items[0];
-    expect(result.currentVendor).toMatchObject({ name: 'Sysco', unitPrice: 106.5 });
-    expect(result.lowerCostVendor).toMatchObject({ name: 'US Foods', unitPrice: 94.2 });
+  it('uses normalized price and historical normalized volume', () => {
+    const result = calculateSavingsOpportunities(history(), 90, thresholds).items[0];
+    expect(result.currentVendor.unitPrice).toBe(2.66);
+    expect(result.lowerCostVendor.unitPrice).toBe(2);
+    expect(result.typicalMonthlyQuantity).toBeCloseTo(91.139, 2);
+    expect(result.estimatedMonthlySavings).toBeGreaterThan(60);
+    expect(result.estimatedAnnualSavings).toBeCloseTo(result.estimatedMonthlySavings * 12, 0);
   });
 
-  it('calculates monthly volume and monthly/annual savings', () => {
-    const result = calculateSavingsOpportunities([
-      observation({ quantity: 12 }),
-      observation({ invoiceId: 'invoice-old', date: new Date('2026-09-01'), quantity: 12 }),
-      observation({ vendorId: 'usf', vendorName: 'US Foods', invoiceId: 'invoice-b', date: new Date('2026-10-01'), unitPrice: 94.2, quantity: 12 }),
-    ], 90, thresholds).items[0];
-    expect(result.typicalMonthlyQuantity).toBe(12);
-    expect(result.absoluteDifference).toBe(12.3);
-    expect(result.estimatedMonthlySavings).toBe(147.6);
-    expect(result.estimatedAnnualSavings).toBe(1771.2);
+  it('withholds projections for fewer than three observations or less than 28 days', () => {
+    const tooFew = calculateSavingsOpportunities(history().slice(0, 2), 90, thresholds);
+    expect(tooFew.items).toEqual([]);
+    const tooShort = calculateSavingsOpportunities(history().map((row, index) => ({ ...row, date: new Date(`2026-10-0${3 - index}`) })), 90, thresholds);
+    expect(tooShort.items).toEqual([]);
+    expect(tooShort.eligibility.insufficientHistoryGroups).toBe(1);
   });
 
-  it('excludes incompatible purchasing bases', () => {
-    expect(calculateSavingsOpportunities([observation(), observation({ vendorId: 'usf', unit: 'LB', totalWeightPounds: 1, unitPrice: 2 })], 90, thresholds).items).toEqual([]);
+  it('excludes incompatible units and currencies', () => {
+    const rows = history().map((row) => row.vendorId === 'usf' ? { ...row, unit: 'gallon' as const } : row);
+    expect(calculateSavingsOpportunities(rows, 90, thresholds).items).toEqual([]);
+    expect(calculateSavingsOpportunities(history().map((row) => row.vendorId === 'usf' ? { ...row, currency: 'EUR' as any } : row), 90, thresholds).items).toEqual([]);
   });
 
-  it('suppresses opportunities below percentage or monthly thresholds', () => {
-    expect(calculateSavingsOpportunities([observation(), observation({ vendorId: 'usf', unitPrice: 103 })], 90, thresholds).items).toEqual([]);
-    expect(calculateSavingsOpportunities([observation({ quantity: .1 }), observation({ vendorId: 'usf', unitPrice: 90, quantity: .1 })], 90, thresholds).items).toEqual([]);
+  it('deduplicates repeated group members for the same line', () => {
+    expect(calculateSavingsOpportunities([...history(), ...history()], 90, thresholds).items[0].evidence).toHaveLength(3);
   });
 
-  it('excludes a group when the latest purchase is already cheapest', () => {
-    expect(calculateSavingsOpportunities([observation({ unitPrice: 90 }), observation({ vendorId: 'usf', date: new Date('2026-10-01'), unitPrice: 94.2 })], 90, thresholds).items).toEqual([]);
-  });
-
-  it('sorts deterministically by monthly savings then percentage and recency', () => {
-    const result = calculateSavingsOpportunities([
-      observation({ productGroupId: 'group-b', productName: 'Oil', unitPrice: 120 }), observation({ productGroupId: 'group-b', vendorId: 'usf', unitPrice: 90, date: new Date('2026-10-01') }),
-      observation(), observation({ vendorId: 'usf', unitPrice: 94.2, date: new Date('2026-10-01') }),
-    ], 90, thresholds);
-    expect(result.items.map((item) => item.productGroupId)).toEqual(['group-b', 'group-a']);
+  it('rejects implausible one-off volume as a reliable projection', () => {
+    const rows = history(); rows[0].normalizedQuantity = 1000;
+    expect(calculateSavingsOpportunities(rows, 90, thresholds).items).toEqual([]);
   });
 });
 
@@ -87,6 +81,20 @@ describe('SavingsIntelligenceService scoping', () => {
         invoice: expect.objectContaining({ reviewStatus: 'REVIEWED', vendorId: { in: ['vendor-a'] }, invoiceDate: { gte: expect.any(Date), lte: expect.any(Date) } }),
       }),
     }));
+  });
+
+  it('excludes unverified package evidence and never matches names alone', async () => {
+    const { service, prisma } = setup();
+    const verified = { kind: 'OBSERVED', verified: true };
+    prisma.productGroup.findMany.mockResolvedValue([{ id: 'group-a', displayName: 'Rice', members: [{ vendorId: 'vendor-a', vendor: { id: 'vendor-a', name: 'Vendor A' }, invoiceLineItem: { id: 'exemplar', sku: 'RICE-25', rawDescription: 'Rice', fieldProvenance: { sku: verified }, productAttributes: null } }] }]);
+    const base = { organizationId: 'org-a', restaurantLocationId: location.id, lineNumber: 1, rawDescription: 'Rice', normalizedName: 'Rice', quantity: 1, unit: 'CASE', packSize: '25 lb', totalPackageQuantity: 25, measurementUnit: 'LB', unitPrice: 25, extendedPrice: 25, productAttributes: null, invoice: { id: 'invoice-a', vendorId: 'vendor-a', invoiceDate: now, currency: 'USD', fieldProvenance: { currency: verified } } };
+    prisma.invoiceLineItem.findMany.mockResolvedValue([
+      { ...base, id: 'unverified', sku: 'RICE-25', fieldProvenance: { sku: verified, quantity: verified, extendedPrice: verified } },
+      { ...base, id: 'name-only', sku: 'OTHER', fieldProvenance: { sku: verified, quantity: verified, extendedPrice: verified, packSize: verified } },
+    ]);
+    const result = await service.get('user-a', { restaurantLocationId: location.id, lookbackDays: 90 });
+    expect(result.items).toEqual([]);
+    expect(result.eligibility.excludedObservations).toEqual({ UNVERIFIED_PACKAGE: 1 });
   });
 
   it('rejects cross-tenant access before reading groups', async () => {

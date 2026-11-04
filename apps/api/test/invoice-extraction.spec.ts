@@ -233,7 +233,7 @@ describe('invoice extraction', () => {
   it('records reviewedBy and reviewedAt only after required fields are present', async () => {
     const first = { id: 'inv', organizationId: 'org', reviewStatus: ReviewStatus.NEEDS_REVIEW, vendorId: 'vendor', extractedVendorName: 'Sysco', invoiceDate: new Date('2026-10-04'), total: 106 };
     const reviewed = { ...first, reviewStatus: ReviewStatus.REVIEWED, reviewedByUserId: 'user' };
-    const prisma: any = { invoice: { findUnique: jest.fn().mockResolvedValue(first), update: jest.fn().mockResolvedValueOnce(first).mockResolvedValueOnce(reviewed) }, invoiceLineItem: { findFirst: jest.fn().mockResolvedValue(null), findMany: jest.fn().mockResolvedValue([]), update: jest.fn() }, vendor: { findFirst: jest.fn().mockResolvedValue({ id: 'vendor', organizationId: 'org' }) } };
+    const prisma: any = { invoice: { findUnique: jest.fn().mockResolvedValue(first), update: jest.fn().mockResolvedValue(reviewed) }, invoiceLineItem: { findFirst: jest.fn().mockResolvedValue(null), findMany: jest.fn().mockResolvedValue([]), update: jest.fn() }, vendor: { findFirst: jest.fn().mockResolvedValue({ id: 'vendor', organizationId: 'org' }) } };
     prisma.$transaction = jest.fn((callback: any) => callback(prisma));
     const audit: any = { log: jest.fn() };
     const service = new InvoicesService(prisma, { requireMember: jest.fn() } as any, audit, {} as any, {} as any);

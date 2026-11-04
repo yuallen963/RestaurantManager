@@ -138,7 +138,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(
       find.text(
-        'No meaningful savings opportunities found from recent confirmed products.',
+        'No reliable savings estimate yet. Compare confirmed products after at least three reviewed purchases spanning 28 days.',
       ),
       findsOneWidget,
     );
@@ -192,7 +192,7 @@ void main() {
     expect(repository.calls, containsAllInOrder(['downtown', 'lakeside']));
     expect(
       find.text(
-        'No meaningful savings opportunities found from recent confirmed products.',
+        'No reliable savings estimate yet. Compare confirmed products after at least three reviewed purchases spanning 28 days.',
       ),
       findsOneWidget,
     );
